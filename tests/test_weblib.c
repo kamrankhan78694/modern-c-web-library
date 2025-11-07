@@ -254,6 +254,124 @@ void test_server_create(void) {
     PASS();
 }
 
+/* Test rate limiter creation */
+void test_rate_limiter_create(void) {
+    TEST("rate_limiter_create");
+    
+    rate_limiter_t *limiter = rate_limiter_create(10, 60);
+    ASSERT(limiter != NULL);
+    
+    rate_limiter_destroy(limiter);
+    
+    PASS();
+}
+
+/* Test rate limiter check - allow requests */
+void test_rate_limiter_check_allow(void) {
+    TEST("rate_limiter_check (allow)");
+    
+    rate_limiter_t *limiter = rate_limiter_create(3, 60);
+    ASSERT(limiter != NULL);
+    
+    /* First 3 requests should be allowed */
+    ASSERT(rate_limiter_check(limiter, "192.168.1.1") == true);
+    ASSERT(rate_limiter_check(limiter, "192.168.1.1") == true);
+    ASSERT(rate_limiter_check(limiter, "192.168.1.1") == true);
+    
+    rate_limiter_destroy(limiter);
+    
+    PASS();
+}
+
+/* Test rate limiter check - rate limit exceeded */
+void test_rate_limiter_check_deny(void) {
+    TEST("rate_limiter_check (deny)");
+    
+    rate_limiter_t *limiter = rate_limiter_create(3, 60);
+    ASSERT(limiter != NULL);
+    
+    /* First 3 requests allowed */
+    ASSERT(rate_limiter_check(limiter, "192.168.1.2") == true);
+    ASSERT(rate_limiter_check(limiter, "192.168.1.2") == true);
+    ASSERT(rate_limiter_check(limiter, "192.168.1.2") == true);
+    
+    /* 4th request should be denied */
+    ASSERT(rate_limiter_check(limiter, "192.168.1.2") == false);
+    
+    rate_limiter_destroy(limiter);
+    
+    PASS();
+}
+
+/* Test rate limiter get remaining */
+void test_rate_limiter_get_remaining(void) {
+    TEST("rate_limiter_get_remaining");
+    
+    rate_limiter_t *limiter = rate_limiter_create(5, 60);
+    ASSERT(limiter != NULL);
+    
+    /* Check initial remaining */
+    size_t remaining = rate_limiter_get_remaining(limiter, "192.168.1.3");
+    ASSERT(remaining == 5);
+    
+    /* Make 2 requests */
+    rate_limiter_check(limiter, "192.168.1.3");
+    rate_limiter_check(limiter, "192.168.1.3");
+    
+    /* Check remaining after 2 requests */
+    remaining = rate_limiter_get_remaining(limiter, "192.168.1.3");
+    ASSERT(remaining == 3);
+    
+    rate_limiter_destroy(limiter);
+    
+    PASS();
+}
+
+/* Test rate limiter reset client */
+void test_rate_limiter_reset_client(void) {
+    TEST("rate_limiter_reset_client");
+    
+    rate_limiter_t *limiter = rate_limiter_create(2, 60);
+    ASSERT(limiter != NULL);
+    
+    /* Use up limit */
+    rate_limiter_check(limiter, "192.168.1.4");
+    rate_limiter_check(limiter, "192.168.1.4");
+    ASSERT(rate_limiter_check(limiter, "192.168.1.4") == false);
+    
+    /* Reset client */
+    rate_limiter_reset_client(limiter, "192.168.1.4");
+    
+    /* Should be allowed again */
+    ASSERT(rate_limiter_check(limiter, "192.168.1.4") == true);
+    
+    rate_limiter_destroy(limiter);
+    
+    PASS();
+}
+
+/* Test rate limiter multiple clients */
+void test_rate_limiter_multiple_clients(void) {
+    TEST("rate_limiter (multiple clients)");
+    
+    rate_limiter_t *limiter = rate_limiter_create(2, 60);
+    ASSERT(limiter != NULL);
+    
+    /* Client 1 uses limit */
+    ASSERT(rate_limiter_check(limiter, "192.168.1.5") == true);
+    ASSERT(rate_limiter_check(limiter, "192.168.1.5") == true);
+    ASSERT(rate_limiter_check(limiter, "192.168.1.5") == false);
+    
+    /* Client 2 should have separate limit */
+    ASSERT(rate_limiter_check(limiter, "192.168.1.6") == true);
+    ASSERT(rate_limiter_check(limiter, "192.168.1.6") == true);
+    ASSERT(rate_limiter_check(limiter, "192.168.1.6") == false);
+    
+    rate_limiter_destroy(limiter);
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -278,6 +396,14 @@ int main(void) {
     
     /* HTTP server tests */
     test_server_create();
+    
+    /* Rate limiter tests */
+    test_rate_limiter_create();
+    test_rate_limiter_check_allow();
+    test_rate_limiter_check_deny();
+    test_rate_limiter_get_remaining();
+    test_rate_limiter_reset_client();
+    test_rate_limiter_multiple_clients();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

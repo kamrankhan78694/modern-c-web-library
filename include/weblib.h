@@ -31,6 +31,7 @@ typedef enum {
     HTTP_FORBIDDEN = 403,
     HTTP_NOT_FOUND = 404,
     HTTP_METHOD_NOT_ALLOWED = 405,
+    HTTP_TOO_MANY_REQUESTS = 429,
     HTTP_INTERNAL_ERROR = 500,
     HTTP_NOT_IMPLEMENTED = 501,
     HTTP_BAD_GATEWAY = 502,
@@ -45,6 +46,7 @@ typedef struct router router_t;
 typedef struct route route_t;
 typedef struct middleware middleware_t;
 typedef struct json_value json_value_t;
+typedef struct rate_limiter rate_limiter_t;
 
 /* HTTP Request structure */
 struct http_request {
@@ -53,6 +55,7 @@ struct http_request {
     char *query_string;
     char *body;
     size_t body_length;
+    char *client_ip;  /* Client IP address */
     void *headers;  /* Hash map of headers */
     void *params;   /* Route parameters */
     void *user_data; /* For middleware context */
@@ -277,6 +280,58 @@ char *json_stringify(json_value_t *value);
  * @param value JSON value
  */
 void json_value_free(json_value_t *value);
+
+/* ===== Rate Limiter API ===== */
+
+/**
+ * Create a new rate limiter
+ * @param max_requests Maximum number of requests allowed
+ * @param window_seconds Time window in seconds
+ * @return Pointer to rate limiter instance or NULL on failure
+ */
+rate_limiter_t *rate_limiter_create(size_t max_requests, size_t window_seconds);
+
+/**
+ * Check if a client is allowed to make a request
+ * @param limiter Rate limiter instance
+ * @param client_ip Client IP address
+ * @return true if request is allowed, false if rate limited
+ */
+bool rate_limiter_check(rate_limiter_t *limiter, const char *client_ip);
+
+/**
+ * Get remaining requests for a client
+ * @param limiter Rate limiter instance
+ * @param client_ip Client IP address
+ * @return Number of remaining requests in current window
+ */
+size_t rate_limiter_get_remaining(rate_limiter_t *limiter, const char *client_ip);
+
+/**
+ * Reset rate limiting for a specific client
+ * @param limiter Rate limiter instance
+ * @param client_ip Client IP address
+ */
+void rate_limiter_reset_client(rate_limiter_t *limiter, const char *client_ip);
+
+/**
+ * Cleanup expired entries from rate limiter
+ * @param limiter Rate limiter instance
+ */
+void rate_limiter_cleanup(rate_limiter_t *limiter);
+
+/**
+ * Destroy rate limiter and free resources
+ * @param limiter Rate limiter instance
+ */
+void rate_limiter_destroy(rate_limiter_t *limiter);
+
+/**
+ * Create a rate limiting middleware
+ * @param limiter Rate limiter instance
+ * @return Middleware function
+ */
+middleware_fn_t rate_limiter_middleware(rate_limiter_t *limiter);
 
 #ifdef __cplusplus
 }
