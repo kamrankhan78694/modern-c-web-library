@@ -193,8 +193,12 @@ void session_set(session_t *session, const char *key, const char *value) {
     while (current) {
         if (strcmp(current->key, key) == 0) {
             /* Update existing value */
+            char *new_value = strdup(value);
+            if (!new_value) {
+                return; /* Keep old value if allocation fails */
+            }
             free(current->value);
-            current->value = strdup(value);
+            current->value = new_value;
             return;
         }
         current = current->next;
@@ -207,7 +211,18 @@ void session_set(session_t *session, const char *key, const char *value) {
     }
     
     entry->key = strdup(key);
+    if (!entry->key) {
+        free(entry);
+        return;
+    }
+    
     entry->value = strdup(value);
+    if (!entry->value) {
+        free(entry->key);
+        free(entry);
+        return;
+    }
+    
     entry->next = session->data;
     session->data = entry;
 }
