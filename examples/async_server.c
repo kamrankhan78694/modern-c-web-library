@@ -51,17 +51,16 @@ void handle_info(http_request_t *req, http_response_t *res) {
     json_object_set(json, "io_mode", json_string_create("async"));
     json_object_set(json, "event_loop", json_string_create("enabled"));
     
-#ifdef __linux__
-    #ifdef USE_EPOLL
-    json_object_set(json, "backend", json_string_create("epoll"));
+    /* Event loop backend is platform-dependent and auto-selected */
+    #ifdef __linux__
+    json_object_set(json, "platform", json_string_create("Linux"));
+    #elif defined(__APPLE__)
+    json_object_set(json, "platform", json_string_create("macOS"));
+    #elif defined(__FreeBSD__)
+    json_object_set(json, "platform", json_string_create("FreeBSD"));
     #else
-    json_object_set(json, "backend", json_string_create("poll"));
+    json_object_set(json, "platform", json_string_create("Other"));
     #endif
-#elif defined(__APPLE__) || defined(__FreeBSD__)
-    json_object_set(json, "backend", json_string_create("kqueue"));
-#else
-    json_object_set(json, "backend", json_string_create("poll"));
-#endif
     
     http_response_send_json(res, HTTP_OK, json);
     json_value_free(json);
@@ -154,17 +153,15 @@ int main(int argc, char *argv[]) {
     printf("\n");
     printf("Starting async HTTP server on port %d...\n", port);
     printf("\n");
-    printf("Event Loop Backend: ");
+    printf("Platform: ");
 #ifdef __linux__
-    #ifdef USE_EPOLL
-    printf("epoll (Linux)\n");
-    #else
-    printf("poll (fallback)\n");
-    #endif
-#elif defined(__APPLE__) || defined(__FreeBSD__)
-    printf("kqueue (BSD/macOS)\n");
+    printf("Linux (using epoll or poll)\n");
+#elif defined(__APPLE__)
+    printf("macOS (using kqueue)\n");
+#elif defined(__FreeBSD__)
+    printf("FreeBSD (using kqueue)\n");
 #else
-    printf("poll (fallback)\n");
+    printf("Other (using poll)\n");
 #endif
     printf("\n");
     printf("Available endpoints:\n");
