@@ -3,10 +3,33 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 /* Test counter */
 static int tests_run = 0;
 static int tests_passed = 0;
+
+/* Get temporary directory path (cross-platform) */
+static const char* get_temp_dir(void) {
+#ifdef _WIN32
+    static char temp_path[260];
+    DWORD result = GetTempPath(260, temp_path);
+    if (result > 0 && result < 260) {
+        return temp_path;
+    }
+    return ".";
+#else
+    const char *temp = getenv("TMPDIR");
+    if (temp) return temp;
+    temp = getenv("TMP");
+    if (temp) return temp;
+    temp = getenv("TEMP");
+    if (temp) return temp;
+    return "/tmp";
+#endif
+}
 
 /* Dummy handler for testing */
 static void dummy_handler(http_request_t *req, http_response_t *res) {
@@ -254,6 +277,103 @@ void test_server_create(void) {
     PASS();
 }
 
+/* Test static file response - file exists */
+void test_static_file_response(void) {
+    TEST("http_response_send_file");
+    
+    /* Create a temporary test file */
+    char test_path[512];
+    snprintf(test_path, sizeof(test_path), "%s/test_static.txt", get_temp_dir());
+    
+    FILE *test_file = fopen(test_path, "w");
+    ASSERT(test_file != NULL);
+    fprintf(test_file, "Test content");
+    fclose(test_file);
+    
+    /* Create response and send file */
+    http_response_t res = {0};
+    int result = http_response_send_file(&res, test_path);
+    
+    ASSERT(result == 0);
+    ASSERT(res.status == HTTP_OK);
+    ASSERT(res.body != NULL);
+    ASSERT(res.body_length == 12); /* "Test content" */
+    ASSERT(strncmp(res.body, "Test content", 12) == 0);
+    
+    /* Cleanup */
+    free(res.body);
+    free(res.content_type);
+    remove(test_path);
+    
+    PASS();
+}
+
+/* Test static file response - file not found */
+void test_static_file_not_found(void) {
+    TEST("http_response_send_file (not found)");
+    
+    char test_path[512];
+    snprintf(test_path, sizeof(test_path), "%s/nonexistent_file.txt", get_temp_dir());
+    
+    http_response_t res = {0};
+    int result = http_response_send_file(&res, test_path);
+    
+    ASSERT(result == -1);
+    ASSERT(res.status == HTTP_NOT_FOUND);
+    ASSERT(res.body != NULL); /* Error message is set */
+    
+    /* Cleanup */
+    free(res.body);
+    free(res.content_type);
+    
+    PASS();
+}
+
+/* Test static file handler middleware */
+void test_static_file_handler(void) {
+    TEST("static_file_handler");
+    
+    /* Create test directory and file paths */
+    char test_dir[512];
+    char test_file_path[512];
+    snprintf(test_dir, sizeof(test_dir), "%s/test_public", get_temp_dir());
+    snprintf(test_file_path, sizeof(test_file_path), "%s/test.html", test_dir);
+    
+    /* Create a temporary test directory and file using C standard library */
+    #ifdef _WIN32
+        _mkdir(test_dir);
+    #else
+        mkdir(test_dir, 0755);
+    #endif
+    
+    FILE *test_file = fopen(test_file_path, "w");
+    ASSERT(test_file != NULL);
+    fprintf(test_file, "<html>Test</html>");
+    fclose(test_file);
+    
+    /* Create request and response */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/test.html";
+    
+    http_response_t res = {0};
+    
+    /* Call static file handler */
+    bool continue_processing = static_file_handler(&req, &res, test_dir);
+    
+    ASSERT(continue_processing == false); /* File was served, stop processing */
+    ASSERT(res.status == HTTP_OK);
+    ASSERT(res.body != NULL);
+    
+    /* Cleanup */
+    free(res.body);
+    free(res.content_type);
+    remove(test_file_path);
+    rmdir(test_dir);
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -278,6 +398,11 @@ int main(void) {
     
     /* HTTP server tests */
     test_server_create();
+    
+    /* Static file serving tests */
+    test_static_file_response();
+    test_static_file_not_found();
+    test_static_file_handler();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

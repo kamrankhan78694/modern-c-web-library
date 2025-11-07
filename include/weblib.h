@@ -64,6 +64,7 @@ struct http_response {
     char *body;
     size_t body_length;
     void *headers;  /* Hash map of headers */
+    char *content_type; /* Content-Type header (for minimal implementation) */
     bool sent;
 };
 
@@ -212,6 +213,26 @@ void http_response_send_text(http_response_t *res, http_status_t status, const c
  * @param json JSON value to send
  */
 void http_response_send_json(http_response_t *res, http_status_t status, json_value_t *json);
+
+/**
+ * Send file response
+ * @param res Response object
+ * @param filepath Path to file to send
+ * @return 0 on success, -1 on failure
+ */
+int http_response_send_file(http_response_t *res, const char *filepath);
+
+/* ===== Static File Serving ===== */
+
+/**
+ * Serve static files from a directory
+ * This is a convenience middleware that serves files from the specified directory
+ * @param req Request object
+ * @param res Response object
+ * @param root_dir Root directory to serve files from
+ * @return true to continue to next handler, false if file was served
+ */
+bool static_file_handler(http_request_t *req, http_response_t *res, const char *root_dir);
 
 /* ===== JSON API ===== */
 
