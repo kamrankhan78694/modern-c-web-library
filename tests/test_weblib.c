@@ -254,6 +254,197 @@ void test_server_create(void) {
     PASS();
 }
 
+/* Test session store creation */
+void test_session_store_create(void) {
+    TEST("session_store_create");
+    
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    
+    session_store_destroy(store);
+    
+    PASS();
+}
+
+/* Test session creation */
+void test_session_create(void) {
+    TEST("session_create");
+    
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    
+    char *session_id = session_create(store, 3600);
+    ASSERT(session_id != NULL);
+    ASSERT(strlen(session_id) > 0);
+    
+    free(session_id);
+    session_store_destroy(store);
+    
+    PASS();
+}
+
+/* Test session get */
+void test_session_get(void) {
+    TEST("session_get");
+    
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    
+    char *session_id = session_create(store, 3600);
+    ASSERT(session_id != NULL);
+    
+    session_t *session = session_get(store, session_id);
+    ASSERT(session != NULL);
+    ASSERT(strcmp(session_get_id(session), session_id) == 0);
+    
+    free(session_id);
+    session_store_destroy(store);
+    
+    PASS();
+}
+
+/* Test session data set/get */
+void test_session_data(void) {
+    TEST("session_set/get_data");
+    
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    
+    char *session_id = session_create(store, 3600);
+    ASSERT(session_id != NULL);
+    
+    session_t *session = session_get(store, session_id);
+    ASSERT(session != NULL);
+    
+    /* Set session data */
+    session_set(session, "user_id", "12345");
+    session_set(session, "username", "testuser");
+    
+    /* Get session data */
+    const char *user_id = session_get_data(session, "user_id");
+    ASSERT(user_id != NULL);
+    ASSERT(strcmp(user_id, "12345") == 0);
+    
+    const char *username = session_get_data(session, "username");
+    ASSERT(username != NULL);
+    ASSERT(strcmp(username, "testuser") == 0);
+    
+    /* Get non-existent data */
+    const char *missing = session_get_data(session, "missing_key");
+    ASSERT(missing == NULL);
+    
+    free(session_id);
+    session_store_destroy(store);
+    
+    PASS();
+}
+
+/* Test session data update */
+void test_session_data_update(void) {
+    TEST("session_set (update)");
+    
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    
+    char *session_id = session_create(store, 3600);
+    session_t *session = session_get(store, session_id);
+    ASSERT(session != NULL);
+    
+    /* Set initial value */
+    session_set(session, "counter", "1");
+    const char *val1 = session_get_data(session, "counter");
+    ASSERT(strcmp(val1, "1") == 0);
+    
+    /* Update value */
+    session_set(session, "counter", "2");
+    const char *val2 = session_get_data(session, "counter");
+    ASSERT(strcmp(val2, "2") == 0);
+    
+    free(session_id);
+    session_store_destroy(store);
+    
+    PASS();
+}
+
+/* Test session data removal */
+void test_session_data_remove(void) {
+    TEST("session_remove_data");
+    
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    
+    char *session_id = session_create(store, 3600);
+    session_t *session = session_get(store, session_id);
+    ASSERT(session != NULL);
+    
+    /* Set and then remove data */
+    session_set(session, "temp_data", "temporary");
+    const char *val = session_get_data(session, "temp_data");
+    ASSERT(val != NULL);
+    
+    session_remove_data(session, "temp_data");
+    const char *removed = session_get_data(session, "temp_data");
+    ASSERT(removed == NULL);
+    
+    free(session_id);
+    session_store_destroy(store);
+    
+    PASS();
+}
+
+/* Test session destruction */
+void test_session_destroy(void) {
+    TEST("session_destroy");
+    
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    
+    char *session_id = session_create(store, 3600);
+    ASSERT(session_id != NULL);
+    
+    /* Verify session exists */
+    session_t *session = session_get(store, session_id);
+    ASSERT(session != NULL);
+    
+    /* Destroy session */
+    session_destroy(store, session_id);
+    
+    /* Verify session is gone */
+    session_t *destroyed = session_get(store, session_id);
+    ASSERT(destroyed == NULL);
+    
+    free(session_id);
+    session_store_destroy(store);
+    
+    PASS();
+}
+
+/* Test session expiration */
+void test_session_expiration(void) {
+    TEST("session_is_expired");
+    
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    
+    /* Create session with 0 max_age (session cookie - never expires by time) */
+    char *session_id1 = session_create(store, 0);
+    session_t *session1 = session_get(store, session_id1);
+    ASSERT(session1 != NULL);
+    ASSERT(session_is_expired(session1) == false);
+    
+    /* Create session with positive max_age */
+    char *session_id2 = session_create(store, 3600);
+    session_t *session2 = session_get(store, session_id2);
+    ASSERT(session2 != NULL);
+    ASSERT(session_is_expired(session2) == false);
+    
+    free(session_id1);
+    free(session_id2);
+    session_store_destroy(store);
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -278,6 +469,16 @@ int main(void) {
     
     /* HTTP server tests */
     test_server_create();
+    
+    /* Session tests */
+    test_session_store_create();
+    test_session_create();
+    test_session_get();
+    test_session_data();
+    test_session_data_update();
+    test_session_data_remove();
+    test_session_destroy();
+    test_session_expiration();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
