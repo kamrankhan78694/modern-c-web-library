@@ -65,6 +65,51 @@ void handle_post_data(http_request_t *req, http_response_t *res) {
     }
 }
 
+void handle_form_submit(http_request_t *req, http_response_t *res) {
+    /* Handle URL-encoded form data */
+    const char *username = http_request_get_form_field(req, "username");
+    const char *email = http_request_get_form_field(req, "email");
+    const char *message = http_request_get_form_field(req, "message");
+    
+    json_value_t *json = json_object_create();
+    json_object_set(json, "status", json_string_create("success"));
+    json_object_set(json, "username", json_string_create(username ? username : "not provided"));
+    json_object_set(json, "email", json_string_create(email ? email : "not provided"));
+    json_object_set(json, "message", json_string_create(message ? message : "not provided"));
+    
+    http_response_send_json(res, HTTP_OK, json);
+    json_value_free(json);
+}
+
+void handle_file_upload(http_request_t *req, http_response_t *res) {
+    /* Handle multipart file upload */
+    const char *description = http_request_get_form_field(req, "description");
+    
+    const char *filename = NULL;
+    const char *content_type = NULL;
+    size_t file_size = 0;
+    const char *file_data = http_request_get_file(req, "file", &filename, &content_type, &file_size);
+    
+    json_value_t *json = json_object_create();
+    
+    if (file_data) {
+        json_object_set(json, "status", json_string_create("success"));
+        json_object_set(json, "filename", json_string_create(filename ? filename : "unknown"));
+        json_object_set(json, "content_type", json_string_create(content_type ? content_type : "unknown"));
+        json_object_set(json, "size", json_number_create((double)file_size));
+        json_object_set(json, "description", json_string_create(description ? description : "none"));
+        
+        http_response_send_json(res, HTTP_OK, json);
+    } else {
+        json_object_set(json, "error", json_string_create("No file uploaded"));
+        json_object_set(json, "status", json_string_create("error"));
+        
+        http_response_send_json(res, HTTP_BAD_REQUEST, json);
+    }
+    
+    json_value_free(json);
+}
+
 void handle_not_found(http_request_t *req, http_response_t *res) {
     (void)req;
     
@@ -148,6 +193,8 @@ int main(int argc, char *argv[]) {
     router_add_route(router, HTTP_GET, "/api/json", handle_json);
     router_add_route(router, HTTP_GET, "/users/:id", handle_user);
     router_add_route(router, HTTP_POST, "/api/data", handle_post_data);
+    router_add_route(router, HTTP_POST, "/api/form", handle_form_submit);
+    router_add_route(router, HTTP_POST, "/api/upload", handle_file_upload);
     router_add_route(router, HTTP_GET, "/404", handle_not_found);
     
     /* Set router on server */
@@ -161,6 +208,8 @@ int main(int argc, char *argv[]) {
     printf("  GET  /api/json      - JSON response example\n");
     printf("  GET  /users/:id     - User info with route parameters\n");
     printf("  POST /api/data      - Echo posted data\n");
+    printf("  POST /api/form      - Handle URL-encoded form data\n");
+    printf("  POST /api/upload    - Handle multipart file upload\n");
     printf("\nPress Ctrl+C to stop the server.\n\n");
     
     if (http_server_listen(g_server, port) < 0) {
