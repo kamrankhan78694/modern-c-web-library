@@ -242,6 +242,114 @@ void test_json_parse_object(void) {
     PASS();
 }
 
+/* Test template context creation */
+void test_template_context_create(void) {
+    TEST("template_context_create");
+    
+    template_context_t *ctx = template_context_create();
+    ASSERT(ctx != NULL);
+    
+    template_context_destroy(ctx);
+    
+    PASS();
+}
+
+/* Test template context set/get */
+void test_template_context_operations(void) {
+    TEST("template_context set/get");
+    
+    template_context_t *ctx = template_context_create();
+    ASSERT(ctx != NULL);
+    
+    /* Set variables */
+    template_context_set(ctx, "name", "John Doe");
+    template_context_set(ctx, "title", "Developer");
+    template_context_set(ctx, "company", "Tech Corp");
+    
+    /* Get variables */
+    const char *name = template_context_get(ctx, "name");
+    ASSERT(name != NULL);
+    ASSERT(strcmp(name, "John Doe") == 0);
+    
+    const char *title = template_context_get(ctx, "title");
+    ASSERT(title != NULL);
+    ASSERT(strcmp(title, "Developer") == 0);
+    
+    const char *company = template_context_get(ctx, "company");
+    ASSERT(company != NULL);
+    ASSERT(strcmp(company, "Tech Corp") == 0);
+    
+    /* Get non-existent variable */
+    const char *missing = template_context_get(ctx, "nonexistent");
+    ASSERT(missing == NULL);
+    
+    template_context_destroy(ctx);
+    
+    PASS();
+}
+
+/* Test template rendering */
+void test_template_render(void) {
+    TEST("template_render");
+    
+    template_context_t *ctx = template_context_create();
+    ASSERT(ctx != NULL);
+    
+    template_context_set(ctx, "name", "Alice");
+    template_context_set(ctx, "role", "Engineer");
+    
+    const char *template = "Hello, {{ name }}! You are a {{ role }}.";
+    char *result = template_render(template, ctx);
+    
+    ASSERT(result != NULL);
+    ASSERT(strcmp(result, "Hello, Alice! You are a Engineer.") == 0);
+    
+    free(result);
+    template_context_destroy(ctx);
+    
+    PASS();
+}
+
+/* Test template rendering with missing variables */
+void test_template_render_missing_vars(void) {
+    TEST("template_render (missing vars)");
+    
+    template_context_t *ctx = template_context_create();
+    ASSERT(ctx != NULL);
+    
+    template_context_set(ctx, "name", "Bob");
+    
+    const char *template = "Hello, {{ name }}! Your email is {{ email }}.";
+    char *result = template_render(template, ctx);
+    
+    ASSERT(result != NULL);
+    ASSERT(strcmp(result, "Hello, Bob! Your email is .") == 0);
+    
+    free(result);
+    template_context_destroy(ctx);
+    
+    PASS();
+}
+
+/* Test template rendering with no variables */
+void test_template_render_no_vars(void) {
+    TEST("template_render (no vars)");
+    
+    template_context_t *ctx = template_context_create();
+    ASSERT(ctx != NULL);
+    
+    const char *template = "This is a simple template with no variables.";
+    char *result = template_render(template, ctx);
+    
+    ASSERT(result != NULL);
+    ASSERT(strcmp(result, "This is a simple template with no variables.") == 0);
+    
+    free(result);
+    template_context_destroy(ctx);
+    
+    PASS();
+}
+
 /* Test server creation */
 void test_server_create(void) {
     TEST("http_server_create");
@@ -275,6 +383,13 @@ int main(void) {
     test_json_parse_bool();
     test_json_parse_null();
     test_json_parse_object();
+    
+    /* Template engine tests */
+    test_template_context_create();
+    test_template_context_operations();
+    test_template_render();
+    test_template_render_missing_vars();
+    test_template_render_no_vars();
     
     /* HTTP server tests */
     test_server_create();

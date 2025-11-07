@@ -47,6 +47,22 @@ The example server will start on port 8080 (or your specified port) with the fol
 - `GET /users/:id` - User info with route parameters
 - `POST /api/data` - Echo posted data
 
+### Running the Template Engine Demo
+
+```bash
+# From build directory
+./examples/template_demo
+
+# Or specify a custom port
+./examples/template_demo 3000
+```
+
+The template demo showcases the template engine with dynamic HTML pages:
+
+- `GET /` - Home page with template variables
+- `GET /user` - User profile page with template rendering
+- `GET /about` - About page demonstrating template usage
+
 ## Usage
 
 ### Basic HTTP Server
@@ -115,6 +131,42 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 router_use_middleware(router, logging_middleware);
 ```
 
+### Template Engine
+
+```c
+void handle_page(http_request_t *req, http_response_t *res) {
+    // Create template context
+    template_context_t *ctx = template_context_create();
+    
+    // Set variables
+    template_context_set(ctx, "username", "Alice");
+    template_context_set(ctx, "role", "Developer");
+    
+    // Define template with {{ variable }} syntax
+    const char *template = 
+        "<html><body>"
+        "<h1>Welcome, {{ username }}!</h1>"
+        "<p>Role: {{ role }}</p>"
+        "</body></html>";
+    
+    // Render and send
+    http_response_send_template(res, HTTP_OK, template, ctx);
+    
+    // Cleanup
+    template_context_destroy(ctx);
+}
+```
+
+You can also load templates from files:
+
+```c
+char *template_str = template_load_file("templates/page.html");
+if (template_str) {
+    http_response_send_template(res, HTTP_OK, template_str, ctx);
+    free(template_str);
+}
+```
+
 ## API Reference
 
 ### HTTP Server
@@ -140,6 +192,16 @@ router_use_middleware(router, logging_middleware);
 - `char *json_stringify(json_value_t *value)` - Convert JSON to string
 - `void json_value_free(json_value_t *value)` - Free JSON value
 
+### Template Engine
+
+- `template_context_t *template_context_create(void)` - Create a new template context
+- `void template_context_set(template_context_t *ctx, const char *key, const char *value)` - Set template variable
+- `const char *template_context_get(template_context_t *ctx, const char *key)` - Get template variable
+- `void template_context_destroy(template_context_t *ctx)` - Destroy template context
+- `char *template_render(const char *template_str, template_context_t *ctx)` - Render template with variables
+- `char *template_load_file(const char *filename)` - Load template from file
+- `void http_response_send_template(http_response_t *res, http_status_t status, const char *template_str, template_context_t *ctx)` - Send rendered template as HTTP response
+
 ## Project Structure
 
 ```
@@ -149,9 +211,11 @@ modern-c-web-library/
 ├── src/
 │   ├── http_server.c      # HTTP server implementation
 │   ├── router.c           # Router implementation
-│   └── json.c             # JSON parser/serializer
+│   ├── json.c             # JSON parser/serializer
+│   └── template.c         # Template engine implementation
 ├── examples/
-│   └── simple_server.c    # Example HTTP server
+│   ├── simple_server.c    # Example HTTP server
+│   └── template_demo.c    # Template engine demo
 ├── tests/
 │   └── test_weblib.c      # Unit tests
 ├── CMakeLists.txt         # Main CMake configuration
@@ -220,7 +284,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Request body parsing (form data, multipart)
 - [ ] Cookie handling
 - [ ] Session management
-- [ ] Template engine
+- [x] Template engine
 - [ ] Database connection pooling
 - [ ] Rate limiting
 - [ ] Static file serving

@@ -45,6 +45,7 @@ typedef struct router router_t;
 typedef struct route route_t;
 typedef struct middleware middleware_t;
 typedef struct json_value json_value_t;
+typedef struct template_context template_context_t;
 
 /* HTTP Request structure */
 struct http_request {
@@ -277,6 +278,62 @@ char *json_stringify(json_value_t *value);
  * @param value JSON value
  */
 void json_value_free(json_value_t *value);
+
+/* ===== Template Engine API ===== */
+
+/**
+ * Create a new template context for variable storage
+ * @return Pointer to template context or NULL on failure
+ */
+template_context_t *template_context_create(void);
+
+/**
+ * Set a variable in the template context
+ * @param ctx Template context
+ * @param key Variable name
+ * @param value Variable value
+ */
+void template_context_set(template_context_t *ctx, const char *key, const char *value);
+
+/**
+ * Get a variable from the template context
+ * @param ctx Template context
+ * @param key Variable name
+ * @return Variable value or NULL if not found
+ */
+const char *template_context_get(template_context_t *ctx, const char *key);
+
+/**
+ * Destroy template context and free resources
+ * @param ctx Template context
+ */
+void template_context_destroy(template_context_t *ctx);
+
+/**
+ * Render a template string with variables from context
+ * Variables in template are specified as {{ variable_name }}
+ * @param template_str Template string with variable placeholders
+ * @param ctx Template context with variables
+ * @return Rendered string (must be freed by caller) or NULL on error
+ */
+char *template_render(const char *template_str, template_context_t *ctx);
+
+/**
+ * Load template from file
+ * @param filename Path to template file
+ * @return Template string (must be freed by caller) or NULL on error
+ */
+char *template_load_file(const char *filename);
+
+/**
+ * Send HTTP response with rendered template
+ * @param res Response object
+ * @param status HTTP status code
+ * @param template_str Template string
+ * @param ctx Template context with variables
+ */
+void http_response_send_template(http_response_t *res, http_status_t status, 
+                                  const char *template_str, template_context_t *ctx);
 
 #ifdef __cplusplus
 }
