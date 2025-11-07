@@ -8,6 +8,7 @@ A modern AI-assisted C library for building efficient, scalable, and feature-ric
 - **Routing**: Flexible routing with support for route parameters (e.g., `/users/:id`)
 - **Middleware**: Chain middleware functions for request processing
 - **JSON Support**: Built-in JSON parser and serializer
+- **WebSocket Support**: Full-duplex communication with WebSocket protocol
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design
 
@@ -46,6 +47,26 @@ The example server will start on port 8080 (or your specified port) with the fol
 - `GET /api/json` - JSON response example
 - `GET /users/:id` - User info with route parameters
 - `POST /api/data` - Echo posted data
+
+### Running the WebSocket Server
+
+```bash
+# From build directory
+./examples/websocket_server
+
+# Or specify a custom port
+./examples/websocket_server 9001
+```
+
+The WebSocket server will start on port 9001 (or your specified port) and echo back any messages sent to it.
+
+You can test it using a WebSocket client or browser console:
+
+```javascript
+const ws = new WebSocket('ws://localhost:9001');
+ws.onmessage = (event) => console.log('Received:', event.data);
+ws.onopen = () => ws.send('Hello, WebSocket!');
+```
 
 ## Usage
 
@@ -115,6 +136,47 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 router_use_middleware(router, logging_middleware);
 ```
 
+### WebSocket Server
+
+```c
+#include "weblib.h"
+#include <stdio.h>
+
+void websocket_handler(websocket_conn_t *conn, ws_event_t event, 
+                      const uint8_t *data, size_t length) {
+    switch (event) {
+        case WS_EVENT_OPEN:
+            printf("Client connected\n");
+            websocket_send_text(conn, "Welcome!");
+            break;
+            
+        case WS_EVENT_MESSAGE:
+            printf("Received: %s\n", (const char *)data);
+            // Echo message back
+            websocket_send_text(conn, (const char *)data);
+            break;
+            
+        case WS_EVENT_CLOSE:
+            printf("Client disconnected\n");
+            break;
+            
+        default:
+            break;
+    }
+}
+
+int main(void) {
+    websocket_server_t *server = websocket_server_create();
+    websocket_server_set_handler(server, websocket_handler);
+    websocket_server_listen(server, 9001);
+    
+    // Server runs in background thread...
+    
+    websocket_server_destroy(server);
+    return 0;
+}
+```
+
 ## API Reference
 
 ### HTTP Server
@@ -140,6 +202,17 @@ router_use_middleware(router, logging_middleware);
 - `char *json_stringify(json_value_t *value)` - Convert JSON to string
 - `void json_value_free(json_value_t *value)` - Free JSON value
 
+### WebSocket
+
+- `websocket_server_t *websocket_server_create(void)` - Create a new WebSocket server
+- `void websocket_server_set_handler(websocket_server_t *server, websocket_handler_t handler)` - Set event handler
+- `int websocket_server_listen(websocket_server_t *server, uint16_t port)` - Start listening on port
+- `void websocket_server_stop(websocket_server_t *server)` - Stop the server
+- `void websocket_server_destroy(websocket_server_t *server)` - Destroy server and free resources
+- `int websocket_send_text(websocket_conn_t *conn, const char *message)` - Send text message to client
+- `int websocket_send_binary(websocket_conn_t *conn, const uint8_t *data, size_t length)` - Send binary message
+- `void websocket_close(websocket_conn_t *conn)` - Close WebSocket connection
+
 ## Project Structure
 
 ```
@@ -149,9 +222,11 @@ modern-c-web-library/
 ├── src/
 │   ├── http_server.c      # HTTP server implementation
 │   ├── router.c           # Router implementation
-│   └── json.c             # JSON parser/serializer
+│   ├── json.c             # JSON parser/serializer
+│   └── websocket.c        # WebSocket implementation
 ├── examples/
-│   └── simple_server.c    # Example HTTP server
+│   ├── simple_server.c    # Example HTTP server
+│   └── websocket_server.c # Example WebSocket server
 ├── tests/
 │   └── test_weblib.c      # Unit tests
 ├── CMakeLists.txt         # Main CMake configuration
@@ -203,6 +278,7 @@ make test
 - C11 compatible compiler (GCC, Clang, MSVC)
 - CMake 3.10 or higher
 - POSIX threads (Linux/macOS) or Windows threads
+- OpenSSL library (for WebSocket support)
 
 ## License
 
@@ -215,8 +291,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Roadmap
 
 - [ ] Full async I/O support with event loops
-- [ ] WebSocket support
-- [ ] SSL/TLS support
+- [x] WebSocket support
+- [ ] SSL/TLS support (for secure WebSockets - WSS)
 - [ ] Request body parsing (form data, multipart)
 - [ ] Cookie handling
 - [ ] Session management

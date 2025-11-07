@@ -25,6 +25,13 @@ elseif(APPLE)
     set(PLATFORM_LIBS pthread)
 endif()
 
+# Find OpenSSL
+find_package(OpenSSL REQUIRED)
+if(OPENSSL_FOUND)
+    include_directories(${OPENSSL_INCLUDE_DIR})
+    set(PLATFORM_LIBS ${PLATFORM_LIBS} ${OPENSSL_LIBRARIES})
+endif()
+
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
@@ -33,6 +40,7 @@ set(WEBLIB_SOURCES
     src/http_server.c
     src/router.c
     src/json.c
+    src/websocket.c
 )
 
 # Create static library
