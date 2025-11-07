@@ -17,10 +17,12 @@ struct db_pool {
 };
 
 /* Default generic connection functions (no-op implementations) */
+static char dummy_handle = 1;
+
 static void *generic_connect(const char *connection_string) {
     (void)connection_string;
-    /* Generic placeholder - returns a dummy non-NULL handle */
-    return (void *)0x1;
+    /* Generic placeholder - returns a dummy handle address */
+    return (void *)&dummy_handle;
 }
 
 static int generic_disconnect(void *db_handle) {
@@ -402,8 +404,12 @@ int db_connection_execute(db_connection_t *conn, const char *query) {
         return -1;
     }
     
-    /* This would need the pool reference to get the execute function */
-    /* For now, return success as a placeholder */
+    /* Note: This is a simplified implementation.
+     * For full functionality, the pool reference would be needed to access
+     * the execute callback from the pool configuration.
+     * Users should use db_connection_get_handle() to get the database handle
+     * and call their database-specific execute function directly.
+     */
     (void)query;
     return 0;
 }
