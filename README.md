@@ -8,6 +8,7 @@ A modern AI-assisted C library for building efficient, scalable, and feature-ric
 - **Routing**: Flexible routing with support for route parameters (e.g., `/users/:id`)
 - **Middleware**: Chain middleware functions for request processing
 - **JSON Support**: Built-in JSON parser and serializer
+- **Static File Serving**: Serve static files with MIME type detection and security
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design
 
@@ -37,9 +38,12 @@ make test
 
 # Or specify a custom port
 ./examples/simple_server 3000
+
+# Static file server example
+./examples/static_server 8080
 ```
 
-The example server will start on port 8080 (or your specified port) with the following endpoints:
+The simple server will start on port 8080 (or your specified port) with the following endpoints:
 
 - `GET /` - Welcome message
 - `GET /hello` - Hello World
@@ -115,6 +119,42 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 router_use_middleware(router, logging_middleware);
 ```
 
+### Static File Serving
+
+```c
+#include "weblib.h"
+
+// Use as middleware to serve files from a directory
+bool static_files_middleware(http_request_t *req, http_response_t *res) {
+    return static_file_handler(req, res, "./public");
+}
+
+int main(void) {
+    http_server_t *server = http_server_create();
+    router_t *router = router_create();
+    
+    // Add static file middleware (checks for files first)
+    router_use_middleware(router, static_files_middleware);
+    
+    // Add API routes (processed if file not found)
+    router_add_route(router, HTTP_GET, "/api/data", handle_api);
+    
+    http_server_set_router(server, router);
+    http_server_listen(server, 8080);
+    
+    router_destroy(router);
+    http_server_destroy(server);
+    return 0;
+}
+```
+
+Features:
+- Automatic MIME type detection based on file extension
+- Support for HTML, CSS, JS, images, fonts, and more
+- Directory traversal protection for security
+- Automatic `index.html` serving for directories
+- Returns `false` to stop middleware chain when file is served
+
 ## API Reference
 
 ### HTTP Server
@@ -140,6 +180,11 @@ router_use_middleware(router, logging_middleware);
 - `char *json_stringify(json_value_t *value)` - Convert JSON to string
 - `void json_value_free(json_value_t *value)` - Free JSON value
 
+### Static Files
+
+- `int http_response_send_file(http_response_t *res, const char *filepath)` - Send a file as response
+- `bool static_file_handler(http_request_t *req, http_response_t *res, const char *root_dir)` - Middleware for serving static files
+
 ## Project Structure
 
 ```
@@ -149,9 +194,15 @@ modern-c-web-library/
 ├── src/
 │   ├── http_server.c      # HTTP server implementation
 │   ├── router.c           # Router implementation
-│   └── json.c             # JSON parser/serializer
+│   ├── json.c             # JSON parser/serializer
+│   └── static_files.c     # Static file serving
 ├── examples/
-│   └── simple_server.c    # Example HTTP server
+│   ├── simple_server.c    # Example HTTP server
+│   ├── static_server.c    # Static file server example
+│   └── public/            # Static files for examples
+│       ├── index.html
+│       ├── styles.css
+│       └── script.js
 ├── tests/
 │   └── test_weblib.c      # Unit tests
 ├── CMakeLists.txt         # Main CMake configuration
@@ -223,7 +274,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Template engine
 - [ ] Database connection pooling
 - [ ] Rate limiting
-- [ ] Static file serving
+- [x] Static file serving
 
 ## Author
 

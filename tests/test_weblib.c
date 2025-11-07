@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <unistd.h>
 
 /* Test counter */
 static int tests_run = 0;
@@ -254,6 +255,82 @@ void test_server_create(void) {
     PASS();
 }
 
+/* Test static file response - file exists */
+void test_static_file_response(void) {
+    TEST("http_response_send_file");
+    
+    /* Create a temporary test file */
+    FILE *test_file = fopen("/tmp/test_static.txt", "w");
+    ASSERT(test_file != NULL);
+    fprintf(test_file, "Test content");
+    fclose(test_file);
+    
+    /* Create response and send file */
+    http_response_t res = {0};
+    int result = http_response_send_file(&res, "/tmp/test_static.txt");
+    
+    ASSERT(result == 0);
+    ASSERT(res.status == HTTP_OK);
+    ASSERT(res.body != NULL);
+    ASSERT(res.body_length == 12); /* "Test content" */
+    ASSERT(strncmp(res.body, "Test content", 12) == 0);
+    
+    /* Cleanup */
+    free(res.body);
+    remove("/tmp/test_static.txt");
+    
+    PASS();
+}
+
+/* Test static file response - file not found */
+void test_static_file_not_found(void) {
+    TEST("http_response_send_file (not found)");
+    
+    http_response_t res = {0};
+    int result = http_response_send_file(&res, "/tmp/nonexistent_file.txt");
+    
+    ASSERT(result == -1);
+    ASSERT(res.status == HTTP_NOT_FOUND);
+    
+    /* Cleanup */
+    free(res.body);
+    
+    PASS();
+}
+
+/* Test static file handler middleware */
+void test_static_file_handler(void) {
+    TEST("static_file_handler");
+    
+    /* Create a temporary test directory and file */
+    system("mkdir -p /tmp/test_public");
+    FILE *test_file = fopen("/tmp/test_public/test.html", "w");
+    ASSERT(test_file != NULL);
+    fprintf(test_file, "<html>Test</html>");
+    fclose(test_file);
+    
+    /* Create request and response */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/test.html";
+    
+    http_response_t res = {0};
+    
+    /* Call static file handler */
+    bool continue_processing = static_file_handler(&req, &res, "/tmp/test_public");
+    
+    ASSERT(continue_processing == false); /* File was served, stop processing */
+    ASSERT(res.status == HTTP_OK);
+    ASSERT(res.body != NULL);
+    
+    /* Cleanup */
+    free(res.body);
+    remove("/tmp/test_public/test.html");
+    rmdir("/tmp/test_public");
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -278,6 +355,11 @@ int main(void) {
     
     /* HTTP server tests */
     test_server_create();
+    
+    /* Static file serving tests */
+    test_static_file_response();
+    test_static_file_not_found();
+    test_static_file_handler();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
