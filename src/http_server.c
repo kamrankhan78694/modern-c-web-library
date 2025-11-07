@@ -224,6 +224,7 @@ static void *handle_connection(void *arg) {
                 free_request(req);
             }
         }
+    }
     
     close(conn->client_fd);
     free(conn);
