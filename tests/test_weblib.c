@@ -254,6 +254,63 @@ void test_server_create(void) {
     PASS();
 }
 
+/* Test SSL library initialization */
+void test_ssl_library_init(void) {
+    TEST("ssl_library_init/cleanup");
+    
+    /* These functions should not crash */
+    ssl_library_init();
+    ssl_library_cleanup();
+    
+    PASS();
+}
+
+/* Test SSL context creation failure (invalid config) */
+void test_ssl_context_create_invalid(void) {
+    TEST("ssl_context_create (invalid config)");
+    
+    ssl_library_init();
+    
+    /* Test with NULL config */
+    ssl_context_t *ctx = ssl_context_create(NULL);
+    ASSERT(ctx == NULL);
+    
+    /* Test with missing cert file */
+    ssl_config_t config = {
+        .cert_file = NULL,
+        .key_file = "test.key",
+        .ca_file = NULL,
+        .verify_peer = false,
+        .min_tls_version = 0
+    };
+    ctx = ssl_context_create(&config);
+    ASSERT(ctx == NULL);
+    
+    ssl_library_cleanup();
+    
+    PASS();
+}
+
+/* Test SSL server enable/disable */
+void test_server_ssl_enable(void) {
+    TEST("http_server_enable_ssl (config check)");
+    
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    
+    /* Initially SSL should be disabled */
+    ASSERT(http_server_is_ssl_enabled(server) == false);
+    
+    /* Cannot enable SSL with invalid config */
+    int result = http_server_enable_ssl(server, NULL);
+    ASSERT(result < 0);
+    ASSERT(http_server_is_ssl_enabled(server) == false);
+    
+    http_server_destroy(server);
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -278,6 +335,11 @@ int main(void) {
     
     /* HTTP server tests */
     test_server_create();
+    
+    /* SSL/TLS tests */
+    test_ssl_library_init();
+    test_ssl_context_create_invalid();
+    test_server_ssl_enable();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

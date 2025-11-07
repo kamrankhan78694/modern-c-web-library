@@ -12,17 +12,24 @@ else()
     add_compile_options(-Wall -Wextra -pedantic)
 endif()
 
+# Find OpenSSL
+find_package(OpenSSL REQUIRED)
+if(OPENSSL_FOUND)
+    message(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
+    include_directories(${OPENSSL_INCLUDE_DIR})
+endif()
+
 # Platform-specific settings
 if(WIN32)
     # Windows-specific settings
     add_definitions(-D_WIN32_WINNT=0x0600)
-    set(PLATFORM_LIBS ws2_32)
+    set(PLATFORM_LIBS ws2_32 ${OPENSSL_LIBRARIES})
 elseif(UNIX AND NOT APPLE)
     # Linux-specific settings
-    set(PLATFORM_LIBS pthread)
+    set(PLATFORM_LIBS pthread ${OPENSSL_LIBRARIES})
 elseif(APPLE)
     # macOS-specific settings
-    set(PLATFORM_LIBS pthread)
+    set(PLATFORM_LIBS pthread ${OPENSSL_LIBRARIES})
 endif()
 
 # Include directories
@@ -33,6 +40,7 @@ set(WEBLIB_SOURCES
     src/http_server.c
     src/router.c
     src/json.c
+    src/ssl_context.c
 )
 
 # Create static library
