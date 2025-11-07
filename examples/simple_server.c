@@ -51,6 +51,44 @@ void handle_user(http_request_t *req, http_response_t *res) {
     json_value_free(json);
 }
 
+void handle_set_cookie(http_request_t *req, http_response_t *res) {
+    (void)req;
+    
+    /* Create a session cookie */
+    http_cookie_t *session_cookie = http_cookie_create("session_id", "abc123xyz789");
+    http_cookie_set_path(session_cookie, "/");
+    http_cookie_set_max_age(session_cookie, 3600); /* 1 hour */
+    http_cookie_set_http_only(session_cookie, true);
+    http_cookie_set_same_site(session_cookie, "Lax");
+    http_response_set_cookie(res, session_cookie);
+    
+    /* Create a user preference cookie */
+    http_cookie_t *pref_cookie = http_cookie_create("theme", "dark");
+    http_cookie_set_path(pref_cookie, "/");
+    http_cookie_set_max_age(pref_cookie, 86400 * 30); /* 30 days */
+    http_response_set_cookie(res, pref_cookie);
+    
+    json_value_t *json = json_object_create();
+    json_object_set(json, "message", json_string_create("Cookies set successfully"));
+    json_object_set(json, "cookies_set", json_number_create(2));
+    
+    http_response_send_json(res, HTTP_OK, json);
+    json_value_free(json);
+}
+
+void handle_get_cookie(http_request_t *req, http_response_t *res) {
+    const char *session_id = http_request_get_cookie(req, "session_id");
+    const char *theme = http_request_get_cookie(req, "theme");
+    
+    json_value_t *json = json_object_create();
+    json_object_set(json, "session_id", json_string_create(session_id ? session_id : "not set"));
+    json_object_set(json, "theme", json_string_create(theme ? theme : "not set"));
+    json_object_set(json, "has_session", json_bool_create(session_id != NULL));
+    
+    http_response_send_json(res, HTTP_OK, json);
+    json_value_free(json);
+}
+
 void handle_post_data(http_request_t *req, http_response_t *res) {
     /* Echo back received data */
     if (req->body && req->body_length > 0) {
@@ -149,6 +187,8 @@ int main(int argc, char *argv[]) {
     router_add_route(router, HTTP_GET, "/users/:id", handle_user);
     router_add_route(router, HTTP_POST, "/api/data", handle_post_data);
     router_add_route(router, HTTP_GET, "/404", handle_not_found);
+    router_add_route(router, HTTP_GET, "/set-cookie", handle_set_cookie);
+    router_add_route(router, HTTP_GET, "/get-cookie", handle_get_cookie);
     
     /* Set router on server */
     http_server_set_router(g_server, router);
@@ -161,6 +201,8 @@ int main(int argc, char *argv[]) {
     printf("  GET  /api/json      - JSON response example\n");
     printf("  GET  /users/:id     - User info with route parameters\n");
     printf("  POST /api/data      - Echo posted data\n");
+    printf("  GET  /set-cookie    - Set example cookies\n");
+    printf("  GET  /get-cookie    - Read cookies from request\n");
     printf("\nPress Ctrl+C to stop the server.\n\n");
     
     if (http_server_listen(g_server, port) < 0) {

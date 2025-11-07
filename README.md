@@ -8,6 +8,7 @@ A modern AI-assisted C library for building efficient, scalable, and feature-ric
 - **Routing**: Flexible routing with support for route parameters (e.g., `/users/:id`)
 - **Middleware**: Chain middleware functions for request processing
 - **JSON Support**: Built-in JSON parser and serializer
+- **Cookie Handling**: Full HTTP cookie support with parsing and Set-Cookie headers
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design
 
@@ -46,6 +47,8 @@ The example server will start on port 8080 (or your specified port) with the fol
 - `GET /api/json` - JSON response example
 - `GET /users/:id` - User info with route parameters
 - `POST /api/data` - Echo posted data
+- `GET /set-cookie` - Set example cookies
+- `GET /get-cookie` - Read cookies from request
 
 ## Usage
 
@@ -115,6 +118,34 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 router_use_middleware(router, logging_middleware);
 ```
 
+### Cookie Handling
+
+```c
+// Set cookies in response
+void handle_login(http_request_t *req, http_response_t *res) {
+    http_cookie_t *session = http_cookie_create("session_id", "abc123");
+    http_cookie_set_path(session, "/");
+    http_cookie_set_max_age(session, 3600); // 1 hour
+    http_cookie_set_http_only(session, true);
+    http_cookie_set_secure(session, true);
+    http_cookie_set_same_site(session, "Lax");
+    
+    http_response_set_cookie(res, session);
+    http_response_send_text(res, HTTP_OK, "Logged in");
+}
+
+// Read cookies from request
+void handle_profile(http_request_t *req, http_response_t *res) {
+    const char *session_id = http_request_get_cookie(req, "session_id");
+    if (session_id) {
+        // User is authenticated
+        http_response_send_text(res, HTTP_OK, "Profile data");
+    } else {
+        http_response_send_text(res, HTTP_UNAUTHORIZED, "Not authenticated");
+    }
+}
+```
+
 ## API Reference
 
 ### HTTP Server
@@ -140,6 +171,19 @@ router_use_middleware(router, logging_middleware);
 - `char *json_stringify(json_value_t *value)` - Convert JSON to string
 - `void json_value_free(json_value_t *value)` - Free JSON value
 
+### Cookies
+
+- `http_cookie_t *http_cookie_create(const char *name, const char *value)` - Create a cookie
+- `int http_cookie_set_domain(http_cookie_t *cookie, const char *domain)` - Set cookie domain
+- `int http_cookie_set_path(http_cookie_t *cookie, const char *path)` - Set cookie path
+- `void http_cookie_set_max_age(http_cookie_t *cookie, int max_age)` - Set cookie max age
+- `void http_cookie_set_http_only(http_cookie_t *cookie, bool http_only)` - Set HttpOnly flag
+- `void http_cookie_set_secure(http_cookie_t *cookie, bool secure)` - Set Secure flag
+- `int http_cookie_set_same_site(http_cookie_t *cookie, const char *same_site)` - Set SameSite attribute
+- `const char *http_request_get_cookie(http_request_t *req, const char *name)` - Get cookie from request
+- `void http_response_set_cookie(http_response_t *res, http_cookie_t *cookie)` - Set cookie in response
+- `void http_cookie_free(http_cookie_t *cookie)` - Free cookie
+
 ## Project Structure
 
 ```
@@ -149,7 +193,8 @@ modern-c-web-library/
 ├── src/
 │   ├── http_server.c      # HTTP server implementation
 │   ├── router.c           # Router implementation
-│   └── json.c             # JSON parser/serializer
+│   ├── json.c             # JSON parser/serializer
+│   └── cookie.c           # Cookie handling
 ├── examples/
 │   └── simple_server.c    # Example HTTP server
 ├── tests/
@@ -218,7 +263,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] WebSocket support
 - [ ] SSL/TLS support
 - [ ] Request body parsing (form data, multipart)
-- [ ] Cookie handling
+- [x] Cookie handling
 - [ ] Session management
 - [ ] Template engine
 - [ ] Database connection pooling
