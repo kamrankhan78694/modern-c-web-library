@@ -8,6 +8,7 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "ssl_context.h"
 
 /* HTTP Methods */
 typedef enum {
@@ -129,6 +130,21 @@ void http_server_destroy(http_server_t *server);
  * @param router Router instance
  */
 void http_server_set_router(http_server_t *server, router_t *router);
+
+/**
+ * Enable SSL/TLS for the server
+ * @param server Server instance
+ * @param config SSL configuration
+ * @return 0 on success, -1 on failure
+ */
+int http_server_enable_ssl(http_server_t *server, const ssl_config_t *config);
+
+/**
+ * Check if server is using SSL/TLS
+ * @param server Server instance
+ * @return true if SSL is enabled, false otherwise
+ */
+bool http_server_is_ssl_enabled(http_server_t *server);
 
 /* ===== Router API ===== */
 

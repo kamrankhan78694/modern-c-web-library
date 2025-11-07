@@ -75,3 +75,10 @@ _codeql_detected_source_root
 *.swp
 *.swo
 *~
+
+# SSL/TLS certificates (generated)
+certs/
+*.crt
+*.key
+*.pem
+*.csr

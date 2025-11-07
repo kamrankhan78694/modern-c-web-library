@@ -4,10 +4,11 @@ A modern AI-assisted C library for building efficient, scalable, and feature-ric
 
 ## Features
 
-- **HTTP Server**: Multi-threaded HTTP server with async I/O
+- **HTTP/HTTPS Server**: Multi-threaded HTTP server with async I/O and SSL/TLS support
 - **Routing**: Flexible routing with support for route parameters (e.g., `/users/:id`)
 - **Middleware**: Chain middleware functions for request processing
 - **JSON Support**: Built-in JSON parser and serializer
+- **SSL/TLS Support**: Secure HTTPS connections using OpenSSL
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design
 
@@ -31,6 +32,7 @@ make test
 
 ### Running the Example Server
 
+**HTTP Server:**
 ```bash
 # From build directory
 ./examples/simple_server
@@ -39,13 +41,29 @@ make test
 ./examples/simple_server 3000
 ```
 
-The example server will start on port 8080 (or your specified port) with the following endpoints:
+**HTTPS Server (with SSL/TLS):**
+```bash
+# First, generate test certificates
+cd examples
+./generate_cert.sh
+cd ../build
+
+# Run the HTTPS server
+./examples/ssl_server
+
+# Or specify custom port and certificate
+./examples/ssl_server 8443 ../examples/certs/server.crt ../examples/certs/server.key
+```
+
+The HTTP example server will start on port 8080 (or your specified port) with the following endpoints:
 
 - `GET /` - Welcome message
 - `GET /hello` - Hello World
 - `GET /api/json` - JSON response example
 - `GET /users/:id` - User info with route parameters
 - `POST /api/data` - Echo posted data
+
+The HTTPS server will start on port 8443 with secure endpoints demonstrating SSL/TLS encryption.
 
 ## Usage
 
@@ -115,6 +133,70 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 router_use_middleware(router, logging_middleware);
 ```
 
+### SSL/TLS (HTTPS)
+
+```c
+#include "weblib.h"
+
+int main(void) {
+    // Create server
+    http_server_t *server = http_server_create();
+    
+    // Configure SSL
+    ssl_config_t ssl_config = {
+        .cert_file = "path/to/server.crt",
+        .key_file = "path/to/server.key",
+        .ca_file = NULL,              // Optional: for client verification
+        .verify_peer = false,         // Set to true for mutual TLS
+        .min_tls_version = 0          // 0 = use OpenSSL defaults
+    };
+    
+    // Enable SSL/TLS
+    if (http_server_enable_ssl(server, &ssl_config) < 0) {
+        fprintf(stderr, "Failed to enable SSL\n");
+        return 1;
+    }
+    
+    // Create router and add routes
+    router_t *router = router_create();
+    router_add_route(router, HTTP_GET, "/", handle_root);
+    
+    // Set router and start HTTPS server
+    http_server_set_router(server, router);
+    http_server_listen(server, 8443);  // HTTPS typically uses port 443 or 8443
+    
+    // Cleanup
+    router_destroy(router);
+    http_server_destroy(server);
+    ssl_library_cleanup();
+    
+    return 0;
+}
+```
+
+**Generating Test Certificates:**
+
+For development and testing, you can generate self-signed certificates:
+
+```bash
+# Use the provided script
+./examples/generate_cert.sh
+
+# Or manually with OpenSSL
+openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt \
+    -days 365 -nodes -subj "/C=US/ST=State/L=City/O=Org/CN=localhost"
+```
+
+**Testing HTTPS Endpoints:**
+
+```bash
+# Using curl (skip certificate verification for self-signed certs)
+curl -k https://localhost:8443/
+
+# Using curl with verbose output
+curl -kv https://localhost:8443/api/data
+```
+
 ## API Reference
 
 ### HTTP Server
@@ -123,6 +205,8 @@ router_use_middleware(router, logging_middleware);
 - `int http_server_listen(http_server_t *server, uint16_t port)` - Start listening on port
 - `void http_server_stop(http_server_t *server)` - Stop the server
 - `void http_server_destroy(http_server_t *server)` - Destroy server and free resources
+- `int http_server_enable_ssl(http_server_t *server, const ssl_config_t *config)` - Enable SSL/TLS
+- `bool http_server_is_ssl_enabled(http_server_t *server)` - Check if SSL is enabled
 
 ### Router
 
@@ -149,15 +233,37 @@ modern-c-web-library/
 ├── src/
 │   ├── http_server.c      # HTTP server implementation
 │   ├── router.c           # Router implementation
-│   └── json.c             # JSON parser/serializer
+│   ├── json.c             # JSON parser/serializer
+│   └── ssl_context.c      # SSL/TLS implementation
 ├── examples/
-│   └── simple_server.c    # Example HTTP server
+│   ├── simple_server.c    # Example HTTP server
+│   ├── ssl_server.c       # Example HTTPS server
+│   └── generate_cert.sh   # Script to generate test certificates
 ├── tests/
 │   └── test_weblib.c      # Unit tests
 ├── CMakeLists.txt         # Main CMake configuration
 ├── README.md              # This file
 ├── LICENSE                # MIT License
 └── .gitignore             # Git ignore rules
+```
+
+### SSL/TLS API
+
+- `void ssl_library_init(void)` - Initialize OpenSSL library (call once at startup)
+- `void ssl_library_cleanup(void)` - Cleanup OpenSSL library (call once at shutdown)
+- `ssl_context_t *ssl_context_create(const ssl_config_t *config)` - Create SSL context
+- `void ssl_context_destroy(ssl_context_t *ctx)` - Destroy SSL context
+- `const char *ssl_get_error_string(void)` - Get last SSL error string
+
+**SSL Configuration Structure:**
+```c
+typedef struct {
+    const char *cert_file;      // Path to certificate file (PEM format)
+    const char *key_file;       // Path to private key file (PEM format)
+    const char *ca_file;        // Optional: CA cert for client verification
+    bool verify_peer;           // Whether to verify client certificates
+    int min_tls_version;        // Minimum TLS version (0 for defaults)
+} ssl_config_t;
 ```
 
 ## Building on Different Platforms
@@ -203,6 +309,7 @@ make test
 - C11 compatible compiler (GCC, Clang, MSVC)
 - CMake 3.10 or higher
 - POSIX threads (Linux/macOS) or Windows threads
+- OpenSSL 1.1.0 or higher (for SSL/TLS support)
 
 ## License
 
@@ -216,7 +323,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 - [ ] Full async I/O support with event loops
 - [ ] WebSocket support
-- [ ] SSL/TLS support
+- [x] SSL/TLS support
 - [ ] Request body parsing (form data, multipart)
 - [ ] Cookie handling
 - [ ] Session management

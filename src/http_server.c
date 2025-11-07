@@ -18,12 +18,15 @@ struct http_server {
     router_t *router;
     bool running;
     pthread_t accept_thread;
+    ssl_context_t *ssl_ctx;  /* SSL context for HTTPS */
+    bool ssl_enabled;
 };
 
 /* Connection handler data */
 typedef struct {
     int client_fd;
     http_server_t *server;
+    void *ssl;  /* SSL connection handle */
 } connection_t;
 
 /* Forward declarations */
@@ -31,6 +34,7 @@ static void *accept_connections(void *arg);
 static void *handle_connection(void *arg);
 static http_request_t *parse_request(const char *buffer);
 static void send_response(int client_fd, http_response_t *res);
+static void send_ssl_response(void *ssl, http_response_t *res);
 static void free_request(http_request_t *req);
 static void free_response(http_response_t *res);
 
@@ -44,6 +48,8 @@ http_server_t *http_server_create(void) {
     server->socket_fd = -1;
     server->running = false;
     server->router = NULL;
+    server->ssl_ctx = NULL;
+    server->ssl_enabled = false;
     
     return server;
 }
@@ -99,7 +105,7 @@ int http_server_listen(http_server_t *server, uint16_t port) {
         return -1;
     }
     
-    printf("HTTP server listening on port %d\n", port);
+    printf("%s server listening on port %d\n", server->ssl_enabled ? "HTTPS" : "HTTP", port);
     
     return 0;
 }
@@ -132,6 +138,10 @@ void http_server_destroy(http_server_t *server) {
         http_server_stop(server);
     }
     
+    if (server->ssl_ctx) {
+        ssl_context_destroy(server->ssl_ctx);
+    }
+    
     free(server);
 }
 
@@ -140,6 +150,40 @@ void http_server_set_router(http_server_t *server, router_t *router) {
     if (server) {
         server->router = router;
     }
+}
+
+/* Enable SSL */
+int http_server_enable_ssl(http_server_t *server, const ssl_config_t *config) {
+    if (!server || !config) {
+        return -1;
+    }
+    
+    if (server->running) {
+        fprintf(stderr, "Cannot enable SSL on a running server\n");
+        return -1;
+    }
+    
+    /* Initialize SSL library if not already done */
+    static bool ssl_initialized = false;
+    if (!ssl_initialized) {
+        ssl_library_init();
+        ssl_initialized = true;
+    }
+    
+    /* Create SSL context */
+    server->ssl_ctx = ssl_context_create(config);
+    if (!server->ssl_ctx) {
+        fprintf(stderr, "Failed to create SSL context\n");
+        return -1;
+    }
+    
+    server->ssl_enabled = true;
+    return 0;
+}
+
+/* Check if SSL is enabled */
+bool http_server_is_ssl_enabled(http_server_t *server) {
+    return server ? server->ssl_enabled : false;
 }
 
 /* Accept connections thread */
@@ -163,10 +207,26 @@ static void *accept_connections(void *arg) {
         if (conn) {
             conn->client_fd = client_fd;
             conn->server = server;
+            conn->ssl = NULL;
+            
+            /* If SSL is enabled, perform SSL handshake */
+            if (server->ssl_enabled && server->ssl_ctx) {
+                conn->ssl = ssl_accept(server->ssl_ctx, client_fd);
+                if (!conn->ssl) {
+                    fprintf(stderr, "SSL handshake failed\n");
+                    close(client_fd);
+                    free(conn);
+                    continue;
+                }
+            }
             
             pthread_t thread;
             if (pthread_create(&thread, NULL, handle_connection, conn) != 0) {
                 perror("pthread_create for connection failed");
+                if (conn->ssl) {
+                    ssl_shutdown(conn->ssl);
+                    ssl_free(conn->ssl);
+                }
                 close(client_fd);
                 free(conn);
             } else {
@@ -184,9 +244,15 @@ static void *accept_connections(void *arg) {
 static void *handle_connection(void *arg) {
     connection_t *conn = (connection_t *)arg;
     char buffer[BUFFER_SIZE];
+    ssize_t bytes_read;
     
-    /* Read request */
-    ssize_t bytes_read = recv(conn->client_fd, buffer, BUFFER_SIZE - 1, 0);
+    /* Read request - use SSL or regular socket based on connection type */
+    if (conn->ssl) {
+        bytes_read = ssl_read(conn->ssl, buffer, BUFFER_SIZE - 1);
+    } else {
+        bytes_read = recv(conn->client_fd, buffer, BUFFER_SIZE - 1, 0);
+    }
+    
     if (bytes_read > 0) {
         buffer[bytes_read] = '\0';
         
@@ -196,7 +262,11 @@ static void *handle_connection(void *arg) {
             http_response_t *res = (http_response_t *)calloc(1, sizeof(http_response_t));
             if (res) {
                 http_response_send_text(res, 413, "Payload Too Large");
-                send_response(conn->client_fd, res);
+                if (conn->ssl) {
+                    send_ssl_response(conn->ssl, res);
+                } else {
+                    send_response(conn->client_fd, res);
+                }
                 free_response(res);
             }
         } else {
@@ -217,13 +287,23 @@ static void *handle_connection(void *arg) {
                     }
                     
                     /* Send response */
-                    send_response(conn->client_fd, res);
+                    if (conn->ssl) {
+                        send_ssl_response(conn->ssl, res);
+                    } else {
+                        send_response(conn->client_fd, res);
+                    }
                     free_response(res);
                 }
                 
                 free_request(req);
             }
         }
+    }
+    
+    /* Clean up SSL connection if present */
+    if (conn->ssl) {
+        ssl_shutdown(conn->ssl);
+        ssl_free(conn->ssl);
     }
     
     close(conn->client_fd);
@@ -329,6 +409,50 @@ static void send_response(int client_fd, http_response_t *res) {
     
     if (res->body && res->body_length > 0) {
         send(client_fd, res->body, res->body_length, 0);
+    }
+    
+    res->sent = true;
+}
+
+/* Send HTTP response over SSL */
+static void send_ssl_response(void *ssl, http_response_t *res) {
+    if (!res || res->sent || !ssl) {
+        return;
+    }
+    
+    /* Get status text based on status code */
+    const char *status_text = "OK";
+    switch (res->status) {
+        case HTTP_OK: status_text = "OK"; break;
+        case HTTP_CREATED: status_text = "Created"; break;
+        case HTTP_ACCEPTED: status_text = "Accepted"; break;
+        case HTTP_NO_CONTENT: status_text = "No Content"; break;
+        case HTTP_BAD_REQUEST: status_text = "Bad Request"; break;
+        case HTTP_UNAUTHORIZED: status_text = "Unauthorized"; break;
+        case HTTP_FORBIDDEN: status_text = "Forbidden"; break;
+        case HTTP_NOT_FOUND: status_text = "Not Found"; break;
+        case HTTP_METHOD_NOT_ALLOWED: status_text = "Method Not Allowed"; break;
+        case HTTP_INTERNAL_ERROR: status_text = "Internal Server Error"; break;
+        case HTTP_NOT_IMPLEMENTED: status_text = "Not Implemented"; break;
+        case HTTP_BAD_GATEWAY: status_text = "Bad Gateway"; break;
+        case HTTP_SERVICE_UNAVAILABLE: status_text = "Service Unavailable"; break;
+        default: status_text = "OK"; break;
+    }
+    
+    char header[BUFFER_SIZE];
+    int header_len = snprintf(header, BUFFER_SIZE,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Length: %zu\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        res->status,
+        status_text,
+        res->body_length);
+    
+    ssl_write(ssl, header, header_len);
+    
+    if (res->body && res->body_length > 0) {
+        ssl_write(ssl, res->body, res->body_length);
     }
     
     res->sent = true;
