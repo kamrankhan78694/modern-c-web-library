@@ -55,6 +55,7 @@ struct http_request {
     size_t body_length;
     void *headers;  /* Hash map of headers */
     void *params;   /* Route parameters */
+    void *form_data; /* Parsed form data (URL-encoded or multipart) */
     void *user_data; /* For middleware context */
 };
 
@@ -212,6 +213,45 @@ void http_response_send_text(http_response_t *res, http_status_t status, const c
  * @param json JSON value to send
  */
 void http_response_send_json(http_response_t *res, http_status_t status, json_value_t *json);
+
+/* ===== Form Data API ===== */
+
+/**
+ * Get form field value from request body
+ * Supports both URL-encoded (application/x-www-form-urlencoded) 
+ * and multipart (multipart/form-data) form data
+ * @param req Request object
+ * @param key Field name
+ * @return Field value or NULL if not found
+ */
+const char *http_request_get_form_field(http_request_t *req, const char *key);
+
+/**
+ * Get uploaded file data from multipart request
+ * @param req Request object
+ * @param field_name Form field name for the file
+ * @param filename Pointer to receive the uploaded filename (can be NULL)
+ * @param content_type Pointer to receive the file content type (can be NULL)
+ * @param size Pointer to receive the file size
+ * @return File data or NULL if not found (caller should NOT free this)
+ */
+const char *http_request_get_file(http_request_t *req, const char *field_name, 
+                                   const char **filename, const char **content_type, 
+                                   size_t *size);
+
+/**
+ * Parse request body based on Content-Type (internal use)
+ * @param req Request object
+ * @param content_type Content-Type header value
+ * @return Parsed form data or NULL
+ */
+void *http_request_parse_body(http_request_t *req, const char *content_type);
+
+/**
+ * Free parsed form data (internal use)
+ * @param req Request object
+ */
+void http_request_free_form_data(http_request_t *req);
 
 /* ===== JSON API ===== */
 
