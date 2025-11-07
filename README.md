@@ -8,6 +8,7 @@ A modern AI-assisted C library for building efficient, scalable, and feature-ric
 - **Routing**: Flexible routing with support for route parameters (e.g., `/users/:id`)
 - **Middleware**: Chain middleware functions for request processing
 - **JSON Support**: Built-in JSON parser and serializer
+- **Database Connection Pooling**: Thread-safe connection pool for managing database connections
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design
 
@@ -46,6 +47,15 @@ The example server will start on port 8080 (or your specified port) with the fol
 - `GET /api/json` - JSON response example
 - `GET /users/:id` - User info with route parameters
 - `POST /api/data` - Echo posted data
+
+### Running the Database Pool Example
+
+```bash
+# From build directory
+./examples/db_pool_example
+```
+
+This example demonstrates thread-safe database connection pooling with multiple workers.
 
 ## Usage
 
@@ -115,6 +125,40 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 router_use_middleware(router, logging_middleware);
 ```
 
+### Database Connection Pooling
+
+```c
+#include "db_pool.h"
+
+// Create pool configuration
+db_pool_config_t config = db_pool_config_default(DB_TYPE_GENERIC, "db://localhost/myapp");
+config.min_connections = 2;
+config.max_connections = 10;
+
+// Create connection pool
+db_pool_t *pool = db_pool_create(&config);
+
+// Acquire a connection
+db_connection_t *conn = db_pool_acquire(pool);
+if (conn) {
+    // Use the connection
+    void *db_handle = db_connection_get_handle(conn);
+    // ... perform database operations ...
+    
+    // Release connection back to pool
+    db_pool_release(pool, conn);
+}
+
+// Get pool statistics
+db_pool_stats_t stats;
+db_pool_get_stats(pool, &stats);
+printf("Active connections: %zu\n", stats.active_connections);
+
+// Cleanup
+db_pool_destroy(pool);
+free(config.connection_string);
+```
+
 ## API Reference
 
 ### HTTP Server
@@ -140,20 +184,36 @@ router_use_middleware(router, logging_middleware);
 - `char *json_stringify(json_value_t *value)` - Convert JSON to string
 - `void json_value_free(json_value_t *value)` - Free JSON value
 
+### Database Connection Pool
+
+- `db_pool_t *db_pool_create(const db_pool_config_t *config)` - Create a new connection pool
+- `db_connection_t *db_pool_acquire(db_pool_t *pool)` - Acquire a connection from the pool
+- `int db_pool_release(db_pool_t *pool, db_connection_t *conn)` - Release a connection back to the pool
+- `int db_pool_get_stats(db_pool_t *pool, db_pool_stats_t *stats)` - Get pool statistics
+- `int db_pool_close_idle(db_pool_t *pool)` - Close all idle connections
+- `void db_pool_destroy(db_pool_t *pool)` - Destroy the pool and close all connections
+- `void *db_connection_get_handle(db_connection_t *conn)` - Get the underlying database handle
+- `bool db_connection_is_valid(db_connection_t *conn)` - Check if connection is valid
+- `db_pool_config_t db_pool_config_default(db_type_t db_type, const char *connection_string)` - Create default configuration
+
 ## Project Structure
 
 ```
 modern-c-web-library/
 ├── include/
-│   └── weblib.h           # Public API header
+│   ├── weblib.h           # Public API header
+│   └── db_pool.h          # Database connection pool header
 ├── src/
 │   ├── http_server.c      # HTTP server implementation
 │   ├── router.c           # Router implementation
-│   └── json.c             # JSON parser/serializer
+│   ├── json.c             # JSON parser/serializer
+│   └── db_pool.c          # Database connection pool
 ├── examples/
-│   └── simple_server.c    # Example HTTP server
+│   ├── simple_server.c    # Example HTTP server
+│   └── db_pool_example.c  # Database pool example
 ├── tests/
-│   └── test_weblib.c      # Unit tests
+│   ├── test_weblib.c      # Unit tests
+│   └── test_db_pool.c     # Database pool tests
 ├── CMakeLists.txt         # Main CMake configuration
 ├── README.md              # This file
 ├── LICENSE                # MIT License
@@ -196,6 +256,7 @@ make test
 
 # Or run tests directly
 ./tests/test_weblib
+./tests/test_db_pool
 ```
 
 ## Requirements
@@ -221,7 +282,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Cookie handling
 - [ ] Session management
 - [ ] Template engine
-- [ ] Database connection pooling
+- [x] Database connection pooling
 - [ ] Rate limiting
 - [ ] Static file serving
 

@@ -33,6 +33,7 @@ set(WEBLIB_SOURCES
     src/http_server.c
     src/router.c
     src/json.c
+    src/db_pool.c
 )
 
 # Create static library
@@ -63,7 +64,7 @@ install(TARGETS weblib weblib_shared
     ARCHIVE DESTINATION lib
 )
 
-install(FILES include/weblib.h DESTINATION include)
+install(FILES include/weblib.h include/db_pool.h DESTINATION include)
 
 # Package configuration
 set(CPACK_PACKAGE_NAME "modern-c-web-library")
