@@ -4,6 +4,8 @@
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 /* Test counter */
 static int tests_run = 0;
@@ -277,6 +279,7 @@ void test_static_file_response(void) {
     
     /* Cleanup */
     free(res.body);
+    free(res.content_type);
     remove("/tmp/test_static.txt");
     
     PASS();
@@ -291,9 +294,11 @@ void test_static_file_not_found(void) {
     
     ASSERT(result == -1);
     ASSERT(res.status == HTTP_NOT_FOUND);
+    ASSERT(res.body != NULL); /* Error message is set */
     
     /* Cleanup */
     free(res.body);
+    free(res.content_type);
     
     PASS();
 }
@@ -302,8 +307,13 @@ void test_static_file_not_found(void) {
 void test_static_file_handler(void) {
     TEST("static_file_handler");
     
-    /* Create a temporary test directory and file */
-    system("mkdir -p /tmp/test_public");
+    /* Create a temporary test directory and file using C standard library */
+    #ifdef _WIN32
+        _mkdir("/tmp/test_public");
+    #else
+        mkdir("/tmp/test_public", 0755);
+    #endif
+    
     FILE *test_file = fopen("/tmp/test_public/test.html", "w");
     ASSERT(test_file != NULL);
     fprintf(test_file, "<html>Test</html>");
@@ -325,6 +335,7 @@ void test_static_file_handler(void) {
     
     /* Cleanup */
     free(res.body);
+    free(res.content_type);
     remove("/tmp/test_public/test.html");
     rmdir("/tmp/test_public");
     

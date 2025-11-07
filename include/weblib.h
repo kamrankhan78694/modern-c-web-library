@@ -64,6 +64,7 @@ struct http_response {
     char *body;
     size_t body_length;
     void *headers;  /* Hash map of headers */
+    char *content_type; /* Content-Type header (for minimal implementation) */
     bool sent;
 };
 
@@ -232,13 +233,6 @@ int http_response_send_file(http_response_t *res, const char *filepath);
  * @return true to continue to next handler, false if file was served
  */
 bool static_file_handler(http_request_t *req, http_response_t *res, const char *root_dir);
-
-/**
- * Create a static file serving route handler for a specific directory
- * @param root_dir Root directory to serve files from
- * @return Route handler function
- */
-route_handler_t create_static_file_handler(const char *root_dir);
 
 /* ===== JSON API ===== */
 

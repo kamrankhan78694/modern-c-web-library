@@ -316,14 +316,29 @@ static void send_response(int client_fd, http_response_t *res) {
     }
     
     char header[BUFFER_SIZE];
-    int header_len = snprintf(header, BUFFER_SIZE,
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Length: %zu\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        res->status,
-        status_text,
-        res->body_length);
+    int header_len;
+    
+    if (res->content_type) {
+        header_len = snprintf(header, BUFFER_SIZE,
+            "HTTP/1.1 %d %s\r\n"
+            "Content-Type: %s\r\n"
+            "Content-Length: %zu\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            res->status,
+            status_text,
+            res->content_type,
+            res->body_length);
+    } else {
+        header_len = snprintf(header, BUFFER_SIZE,
+            "HTTP/1.1 %d %s\r\n"
+            "Content-Length: %zu\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            res->status,
+            status_text,
+            res->body_length);
+    }
     
     send(client_fd, header, header_len, 0);
     
@@ -353,6 +368,7 @@ static void free_response(http_response_t *res) {
     }
     
     free(res->body);
+    free(res->content_type);
     free(res);
 }
 
@@ -372,10 +388,16 @@ void http_response_send_text(http_response_t *res, http_status_t status, const c
 }
 
 void http_response_set_header(http_response_t *res, const char *key, const char *value) {
-    /* TODO: Implement header storage */
-    (void)res;
-    (void)key;
-    (void)value;
+    if (!res || !key || !value) {
+        return;
+    }
+    
+    /* For now, only handle Content-Type header */
+    if (strcmp(key, "Content-Type") == 0) {
+        free(res->content_type);
+        res->content_type = strdup(value);
+    }
+    /* TODO: Implement full header storage */
 }
 
 const char *http_request_get_header(http_request_t *req, const char *key) {
