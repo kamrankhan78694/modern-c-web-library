@@ -298,11 +298,11 @@ void test_template_render(void) {
     template_context_set(ctx, "name", "Alice");
     template_context_set(ctx, "role", "Engineer");
     
-    const char *template = "Hello, {{ name }}! You are a {{ role }}.";
+    const char *template = "Hello, {{ name }}! You are an {{ role }}.";
     char *result = template_render(template, ctx);
     
     ASSERT(result != NULL);
-    ASSERT(strcmp(result, "Hello, Alice! You are a Engineer.") == 0);
+    ASSERT(strcmp(result, "Hello, Alice! You are an Engineer.") == 0);
     
     free(result);
     template_context_destroy(ctx);
