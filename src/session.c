@@ -3,9 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdint.h>
 
 #define MAX_SESSIONS 1024
-#define MAX_SESSION_DATA 64
 #define SESSION_ID_LENGTH 32
 #define SESSION_COOKIE_NAME "MCWL_SESSION"
 
@@ -39,15 +39,21 @@ static void generate_session_id(char *buffer, size_t length) {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz";
     
-    /* Initialize random seed on first call */
+    /* Initialize random seed on first call with better entropy */
     static bool seeded = false;
     if (!seeded) {
-        srand((unsigned int)time(NULL));
+        /* Combine multiple sources for better randomness */
+        unsigned int seed = (unsigned int)time(NULL);
+        seed ^= (unsigned int)clock();
+        seed ^= (unsigned int)(uintptr_t)buffer; /* Use stack address for additional entropy */
+        srand(seed);
         seeded = true;
     }
     
     for (size_t i = 0; i < length; i++) {
-        buffer[i] = charset[rand() % (sizeof(charset) - 1)];
+        /* Use multiple rand() calls to increase randomness */
+        int index = (rand() ^ (rand() << 15)) % (sizeof(charset) - 1);
+        buffer[i] = charset[index];
     }
     buffer[length] = '\0';
 }
@@ -327,12 +333,27 @@ static char *extract_session_id_from_cookies(const char *cookie_header) {
     char search_pattern[64];
     snprintf(search_pattern, sizeof(search_pattern), "%s=", SESSION_COOKIE_NAME);
     
-    const char *start = strstr(cookie_header, search_pattern);
-    if (!start) {
+    const char *start = cookie_header;
+    const char *found = NULL;
+    
+    /* Search for the cookie name, ensuring it's at the start or after "; " */
+    while ((found = strstr(start, search_pattern)) != NULL) {
+        /* Check if this is at the beginning or preceded by "; " */
+        if (found == cookie_header || (found > cookie_header + 1 && 
+            found[-1] == ' ' && found[-2] == ';')) {
+            /* Valid match found */
+            break;
+        }
+        /* Continue searching after this false match */
+        start = found + 1;
+        found = NULL;
+    }
+    
+    if (!found) {
         return NULL;
     }
     
-    start += strlen(search_pattern);
+    start = found + strlen(search_pattern);
     
     /* Find end of cookie value (semicolon or end of string) */
     const char *end = strchr(start, ';');
