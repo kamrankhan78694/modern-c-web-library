@@ -254,6 +254,18 @@ void test_server_create(void) {
     PASS();
 }
 
+/* Test WebSocket server creation */
+void test_websocket_server_create(void) {
+    TEST("websocket_server_create");
+    
+    websocket_server_t *server = websocket_server_create();
+    ASSERT(server != NULL);
+    
+    websocket_server_destroy(server);
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -278,6 +290,9 @@ int main(void) {
     
     /* HTTP server tests */
     test_server_create();
+    
+    /* WebSocket tests */
+    test_websocket_server_create();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

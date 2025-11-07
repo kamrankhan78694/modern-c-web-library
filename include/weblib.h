@@ -45,6 +45,8 @@ typedef struct router router_t;
 typedef struct route route_t;
 typedef struct middleware middleware_t;
 typedef struct json_value json_value_t;
+typedef struct websocket_server websocket_server_t;
+typedef struct websocket_conn websocket_conn_t;
 
 /* HTTP Request structure */
 struct http_request {
@@ -277,6 +279,106 @@ char *json_stringify(json_value_t *value);
  * @param value JSON value
  */
 void json_value_free(json_value_t *value);
+
+/* ===== WebSocket API ===== */
+
+/**
+ * WebSocket event types
+ */
+typedef enum {
+    WS_EVENT_OPEN,      /* Connection opened */
+    WS_EVENT_MESSAGE,   /* Text message received */
+    WS_EVENT_BINARY,    /* Binary message received */
+    WS_EVENT_CLOSE,     /* Connection closed */
+    WS_EVENT_ERROR      /* Error occurred */
+} ws_event_t;
+
+/**
+ * WebSocket event handler callback
+ * @param conn WebSocket connection
+ * @param event Event type
+ * @param data Event data (message payload for MESSAGE/BINARY events)
+ * @param length Data length
+ */
+typedef void (*websocket_handler_t)(websocket_conn_t *conn, ws_event_t event, 
+                                    const uint8_t *data, size_t length);
+
+/**
+ * Create a new WebSocket server
+ * @return Pointer to WebSocket server instance or NULL on failure
+ */
+websocket_server_t *websocket_server_create(void);
+
+/**
+ * Set WebSocket event handler
+ * @param server WebSocket server instance
+ * @param handler Event handler function
+ */
+void websocket_server_set_handler(websocket_server_t *server, websocket_handler_t handler);
+
+/**
+ * Set user data for WebSocket server (accessible in handler)
+ * @param server WebSocket server instance
+ * @param user_data Pointer to user data
+ */
+void websocket_server_set_user_data(websocket_server_t *server, void *user_data);
+
+/**
+ * Start the WebSocket server on specified port
+ * @param server WebSocket server instance
+ * @param port Port number to listen on
+ * @return 0 on success, -1 on failure
+ */
+int websocket_server_listen(websocket_server_t *server, uint16_t port);
+
+/**
+ * Stop the WebSocket server
+ * @param server WebSocket server instance
+ */
+void websocket_server_stop(websocket_server_t *server);
+
+/**
+ * Destroy the WebSocket server and free resources
+ * @param server WebSocket server instance
+ */
+void websocket_server_destroy(websocket_server_t *server);
+
+/**
+ * Send text message to WebSocket client
+ * @param conn WebSocket connection
+ * @param message Text message to send
+ * @return 0 on success, -1 on failure
+ */
+int websocket_send_text(websocket_conn_t *conn, const char *message);
+
+/**
+ * Send binary message to WebSocket client
+ * @param conn WebSocket connection
+ * @param data Binary data to send
+ * @param length Data length
+ * @return 0 on success, -1 on failure
+ */
+int websocket_send_binary(websocket_conn_t *conn, const uint8_t *data, size_t length);
+
+/**
+ * Close WebSocket connection
+ * @param conn WebSocket connection
+ */
+void websocket_close(websocket_conn_t *conn);
+
+/**
+ * Get user data from WebSocket connection
+ * @param conn WebSocket connection
+ * @return Pointer to user data or NULL
+ */
+void *websocket_get_user_data(websocket_conn_t *conn);
+
+/**
+ * Set user data for WebSocket connection
+ * @param conn WebSocket connection
+ * @param user_data Pointer to user data
+ */
+void websocket_set_user_data(websocket_conn_t *conn, void *user_data);
 
 #ifdef __cplusplus
 }
