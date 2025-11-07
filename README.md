@@ -8,6 +8,7 @@ A modern AI-assisted C library for building efficient, scalable, and feature-ric
 - **Routing**: Flexible routing with support for route parameters (e.g., `/users/:id`)
 - **Middleware**: Chain middleware functions for request processing
 - **JSON Support**: Built-in JSON parser and serializer
+- **Session Management**: Cookie-based session management with data storage and expiration
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design
 
@@ -46,6 +47,10 @@ The example server will start on port 8080 (or your specified port) with the fol
 - `GET /api/json` - JSON response example
 - `GET /users/:id` - User info with route parameters
 - `POST /api/data` - Echo posted data
+- `POST /session/login` - Create a session and login
+- `GET /session/info` - Get current session information
+- `POST /session/logout` - Logout and destroy session
+- `GET /session/visits` - Track visit count with sessions
 
 ## Usage
 
@@ -115,6 +120,61 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 router_use_middleware(router, logging_middleware);
 ```
 
+### Session Management
+
+```c
+#include "weblib.h"
+
+// Create session store
+session_store_t *store = session_store_create();
+
+// Handler to login and create session
+void handle_login(http_request_t *req, http_response_t *res) {
+    // Create new session with 1 hour expiry
+    char *session_id = session_create(store, 3600);
+    
+    // Get session and store user data
+    session_t *session = session_get(store, session_id);
+    session_set(session, "user_id", "123");
+    session_set(session, "username", "john_doe");
+    
+    // Set session cookie in response
+    session_set_cookie(res, session_id, 3600, "/");
+    
+    http_response_send_text(res, HTTP_OK, "Logged in!");
+    free(session_id);
+}
+
+// Handler to access protected route
+void handle_protected(http_request_t *req, http_response_t *res) {
+    // Get session from request cookie
+    session_t *session = session_from_request(store, req);
+    
+    if (!session) {
+        http_response_send_text(res, HTTP_UNAUTHORIZED, "Please login");
+        return;
+    }
+    
+    // Access session data
+    const char *username = session_get_data(session, "username");
+    // ... use username
+}
+
+// Handler to logout
+void handle_logout(http_request_t *req, http_response_t *res) {
+    session_t *session = session_from_request(store, req);
+    if (session) {
+        const char *session_id = session_get_id(session);
+        session_destroy(store, session_id);
+        session_set_cookie(res, session_id, -1, "/"); // Delete cookie
+    }
+    http_response_send_text(res, HTTP_OK, "Logged out!");
+}
+
+// Don't forget to cleanup
+session_store_destroy(store);
+```
+
 ## API Reference
 
 ### HTTP Server
@@ -140,6 +200,22 @@ router_use_middleware(router, logging_middleware);
 - `char *json_stringify(json_value_t *value)` - Convert JSON to string
 - `void json_value_free(json_value_t *value)` - Free JSON value
 
+### Session Management
+
+- `session_store_t *session_store_create(void)` - Create session store
+- `void session_store_destroy(session_store_t *store)` - Destroy session store
+- `char *session_create(session_store_t *store, int max_age)` - Create new session (returns session ID)
+- `session_t *session_get(session_store_t *store, const char *session_id)` - Get session by ID
+- `void session_destroy(session_store_t *store, const char *session_id)` - Destroy session
+- `void session_set(session_t *session, const char *key, const char *value)` - Set session data
+- `const char *session_get_data(session_t *session, const char *key)` - Get session data
+- `void session_remove_data(session_t *session, const char *key)` - Remove session data
+- `const char *session_get_id(session_t *session)` - Get session ID
+- `bool session_is_expired(session_t *session)` - Check if session is expired
+- `int session_cleanup_expired(session_store_t *store)` - Clean up expired sessions
+- `session_t *session_from_request(session_store_t *store, http_request_t *req)` - Get session from request cookie
+- `void session_set_cookie(http_response_t *res, const char *session_id, int max_age, const char *path)` - Set session cookie
+
 ## Project Structure
 
 ```
@@ -149,9 +225,10 @@ modern-c-web-library/
 ├── src/
 │   ├── http_server.c      # HTTP server implementation
 │   ├── router.c           # Router implementation
-│   └── json.c             # JSON parser/serializer
+│   ├── json.c             # JSON parser/serializer
+│   └── session.c          # Session management
 ├── examples/
-│   └── simple_server.c    # Example HTTP server
+│   └── simple_server.c    # Example HTTP server with sessions
 ├── tests/
 │   └── test_weblib.c      # Unit tests
 ├── CMakeLists.txt         # Main CMake configuration
@@ -219,7 +296,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] SSL/TLS support
 - [ ] Request body parsing (form data, multipart)
 - [ ] Cookie handling
-- [ ] Session management
+- [x] Session management
 - [ ] Template engine
 - [ ] Database connection pooling
 - [ ] Rate limiting

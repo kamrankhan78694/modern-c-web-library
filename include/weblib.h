@@ -45,6 +45,8 @@ typedef struct router router_t;
 typedef struct route route_t;
 typedef struct middleware middleware_t;
 typedef struct json_value json_value_t;
+typedef struct session session_t;
+typedef struct session_store session_store_t;
 
 /* HTTP Request structure */
 struct http_request {
@@ -55,6 +57,7 @@ struct http_request {
     size_t body_length;
     void *headers;  /* Hash map of headers */
     void *params;   /* Route parameters */
+    session_t *session; /* Session associated with request */
     void *user_data; /* For middleware context */
 };
 
@@ -277,6 +280,106 @@ char *json_stringify(json_value_t *value);
  * @param value JSON value
  */
 void json_value_free(json_value_t *value);
+
+/* ===== Session Management API ===== */
+
+/**
+ * Create a session store
+ * @return Pointer to session store instance or NULL on failure
+ */
+session_store_t *session_store_create(void);
+
+/**
+ * Destroy session store and free all sessions
+ * @param store Session store instance
+ */
+void session_store_destroy(session_store_t *store);
+
+/**
+ * Create a new session
+ * @param store Session store instance
+ * @param max_age Maximum age of session in seconds (0 for session cookie)
+ * @return Session ID or NULL on failure (caller must free)
+ */
+char *session_create(session_store_t *store, int max_age);
+
+/**
+ * Get session by ID
+ * @param store Session store instance
+ * @param session_id Session ID
+ * @return Session instance or NULL if not found/expired
+ */
+session_t *session_get(session_store_t *store, const char *session_id);
+
+/**
+ * Destroy a session
+ * @param store Session store instance
+ * @param session_id Session ID
+ */
+void session_destroy(session_store_t *store, const char *session_id);
+
+/**
+ * Set session data
+ * @param session Session instance
+ * @param key Data key
+ * @param value Data value (will be copied)
+ */
+void session_set(session_t *session, const char *key, const char *value);
+
+/**
+ * Get session data
+ * @param session Session instance
+ * @param key Data key
+ * @return Data value or NULL if not found
+ */
+const char *session_get_data(session_t *session, const char *key);
+
+/**
+ * Remove session data
+ * @param session Session instance
+ * @param key Data key
+ */
+void session_remove_data(session_t *session, const char *key);
+
+/**
+ * Get session ID
+ * @param session Session instance
+ * @return Session ID
+ */
+const char *session_get_id(session_t *session);
+
+/**
+ * Check if session is expired
+ * @param session Session instance
+ * @return true if expired, false otherwise
+ */
+bool session_is_expired(session_t *session);
+
+/**
+ * Clean up expired sessions from the store
+ * @param store Session store instance
+ * @return Number of sessions cleaned up
+ */
+int session_cleanup_expired(session_store_t *store);
+
+/**
+ * Get session from request (via cookie)
+ * Helper function that extracts session ID from cookie and retrieves session
+ * @param store Session store instance
+ * @param req Request object
+ * @return Session instance or NULL if not found
+ */
+session_t *session_from_request(session_store_t *store, http_request_t *req);
+
+/**
+ * Set session cookie in response
+ * Helper function that sets the session cookie in response headers
+ * @param res Response object
+ * @param session_id Session ID
+ * @param max_age Maximum age in seconds (0 for session cookie, -1 to delete)
+ * @param path Cookie path (NULL for default "/")
+ */
+void session_set_cookie(http_response_t *res, const char *session_id, int max_age, const char *path);
 
 #ifdef __cplusplus
 }
