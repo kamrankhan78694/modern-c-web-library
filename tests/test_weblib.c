@@ -11,6 +11,26 @@
 static int tests_run = 0;
 static int tests_passed = 0;
 
+/* Get temporary directory path (cross-platform) */
+static const char* get_temp_dir(void) {
+#ifdef _WIN32
+    static char temp_path[260];
+    DWORD result = GetTempPath(260, temp_path);
+    if (result > 0 && result < 260) {
+        return temp_path;
+    }
+    return ".";
+#else
+    const char *temp = getenv("TMPDIR");
+    if (temp) return temp;
+    temp = getenv("TMP");
+    if (temp) return temp;
+    temp = getenv("TEMP");
+    if (temp) return temp;
+    return "/tmp";
+#endif
+}
+
 /* Dummy handler for testing */
 static void dummy_handler(http_request_t *req, http_response_t *res) {
     (void)req;
@@ -262,14 +282,17 @@ void test_static_file_response(void) {
     TEST("http_response_send_file");
     
     /* Create a temporary test file */
-    FILE *test_file = fopen("/tmp/test_static.txt", "w");
+    char test_path[512];
+    snprintf(test_path, sizeof(test_path), "%s/test_static.txt", get_temp_dir());
+    
+    FILE *test_file = fopen(test_path, "w");
     ASSERT(test_file != NULL);
     fprintf(test_file, "Test content");
     fclose(test_file);
     
     /* Create response and send file */
     http_response_t res = {0};
-    int result = http_response_send_file(&res, "/tmp/test_static.txt");
+    int result = http_response_send_file(&res, test_path);
     
     ASSERT(result == 0);
     ASSERT(res.status == HTTP_OK);
@@ -280,7 +303,7 @@ void test_static_file_response(void) {
     /* Cleanup */
     free(res.body);
     free(res.content_type);
-    remove("/tmp/test_static.txt");
+    remove(test_path);
     
     PASS();
 }
@@ -289,8 +312,11 @@ void test_static_file_response(void) {
 void test_static_file_not_found(void) {
     TEST("http_response_send_file (not found)");
     
+    char test_path[512];
+    snprintf(test_path, sizeof(test_path), "%s/nonexistent_file.txt", get_temp_dir());
+    
     http_response_t res = {0};
-    int result = http_response_send_file(&res, "/tmp/nonexistent_file.txt");
+    int result = http_response_send_file(&res, test_path);
     
     ASSERT(result == -1);
     ASSERT(res.status == HTTP_NOT_FOUND);
@@ -307,14 +333,20 @@ void test_static_file_not_found(void) {
 void test_static_file_handler(void) {
     TEST("static_file_handler");
     
+    /* Create test directory and file paths */
+    char test_dir[512];
+    char test_file_path[512];
+    snprintf(test_dir, sizeof(test_dir), "%s/test_public", get_temp_dir());
+    snprintf(test_file_path, sizeof(test_file_path), "%s/test.html", test_dir);
+    
     /* Create a temporary test directory and file using C standard library */
     #ifdef _WIN32
-        _mkdir("/tmp/test_public");
+        _mkdir(test_dir);
     #else
-        mkdir("/tmp/test_public", 0755);
+        mkdir(test_dir, 0755);
     #endif
     
-    FILE *test_file = fopen("/tmp/test_public/test.html", "w");
+    FILE *test_file = fopen(test_file_path, "w");
     ASSERT(test_file != NULL);
     fprintf(test_file, "<html>Test</html>");
     fclose(test_file);
@@ -327,7 +359,7 @@ void test_static_file_handler(void) {
     http_response_t res = {0};
     
     /* Call static file handler */
-    bool continue_processing = static_file_handler(&req, &res, "/tmp/test_public");
+    bool continue_processing = static_file_handler(&req, &res, test_dir);
     
     ASSERT(continue_processing == false); /* File was served, stop processing */
     ASSERT(res.status == HTTP_OK);
@@ -336,8 +368,8 @@ void test_static_file_handler(void) {
     /* Cleanup */
     free(res.body);
     free(res.content_type);
-    remove("/tmp/test_public/test.html");
-    rmdir("/tmp/test_public");
+    remove(test_file_path);
+    rmdir(test_dir);
     
     PASS();
 }

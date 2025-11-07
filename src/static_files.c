@@ -177,13 +177,26 @@ bool static_file_handler(http_request_t *req, http_response_t *res, const char *
         return true;
     }
     
+    /* Check path length to prevent overflow */
+    size_t root_len = strlen(root_dir);
+    size_t path_len = strlen(req->path);
+    if (root_len + path_len + 20 > PATH_MAX) { /* +20 for /index.html and null */
+        return true; /* Path too long, skip */
+    }
+    
     /* Build file path */
     char filepath[PATH_MAX];
-    snprintf(filepath, PATH_MAX, "%s%s", root_dir, req->path);
+    int written = snprintf(filepath, PATH_MAX, "%s%s", root_dir, req->path);
+    if (written < 0 || written >= PATH_MAX) {
+        return true; /* Path truncated, skip */
+    }
     
     /* If path ends with /, try index.html */
-    if (req->path[strlen(req->path) - 1] == '/') {
-        strncat(filepath, "index.html", PATH_MAX - strlen(filepath) - 1);
+    if (req->path[path_len - 1] == '/') {
+        written = snprintf(filepath, PATH_MAX, "%s%sindex.html", root_dir, req->path);
+        if (written < 0 || written >= PATH_MAX) {
+            return true; /* Path truncated, skip */
+        }
     }
     
     /* Check if file exists */
@@ -196,9 +209,14 @@ bool static_file_handler(http_request_t *req, http_response_t *res, const char *
     if (S_ISDIR(st.st_mode)) {
         /* Try index.html in directory */
         char index_path[PATH_MAX];
-        snprintf(index_path, PATH_MAX, "%s/index.html", filepath);
+        written = snprintf(index_path, PATH_MAX, "%s/index.html", filepath);
+        if (written < 0 || written >= PATH_MAX) {
+            return true; /* Path truncated, skip */
+        }
+        
         if (stat(index_path, &st) == 0 && S_ISREG(st.st_mode)) {
-            strncpy(filepath, index_path, PATH_MAX);
+            strncpy(filepath, index_path, PATH_MAX - 1);
+            filepath[PATH_MAX - 1] = '\0';
         } else {
             return true; /* Directory without index.html, continue */
         }
