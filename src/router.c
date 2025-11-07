@@ -53,6 +53,10 @@ int router_add_route(router_t *router, http_method_t method, const char *path, r
     route_t *route = &router->routes[router->route_count];
     route->method = method;
     route->path = strdup(path);
+    if (!route->path) {
+        fprintf(stderr, "Failed to allocate memory for route path\n");
+        return -1;
+    }
     route->handler = handler;
     route->has_params = (strchr(path, ':') != NULL);
     

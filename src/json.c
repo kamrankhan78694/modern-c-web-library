@@ -64,6 +64,10 @@ void json_object_set(json_value_t *obj, const char *key, json_value_t *value) {
     }
     
     entry->key = strdup(key);
+    if (!entry->key) {
+        free(entry);
+        return;
+    }
     entry->value = value;
     entry->next = (json_object_entry_t *)obj->data.object_val;
     obj->data.object_val = entry;
@@ -99,6 +103,10 @@ json_value_t *json_string_create(const char *str) {
     
     value->type = JSON_STRING;
     value->data.string_val = strdup(str);
+    if (!value->data.string_val) {
+        free(value);
+        return NULL;
+    }
     
     return value;
 }
@@ -407,10 +415,11 @@ static void stringify_value(json_value_t *value, char **output, size_t *capacity
     /* Ensure capacity */
     while (*length + 256 > *capacity) {
         *capacity *= 2;
-        *output = (char *)realloc(*output, *capacity);
-        if (!*output) {
+        char *new_output = (char *)realloc(*output, *capacity);
+        if (!new_output) {
             return;
         }
+        *output = new_output;
     }
     
     switch (value->type) {
@@ -426,9 +435,46 @@ static void stringify_value(json_value_t *value, char **output, size_t *capacity
             *length += sprintf(*output + *length, "%g", value->data.number_val);
             break;
             
-        case JSON_STRING:
-            *length += sprintf(*output + *length, "\"%s\"", value->data.string_val);
+        case JSON_STRING: {
+            /* Simple escaping for JSON strings */
+            *length += sprintf(*output + *length, "\"");
+            const char *str = value->data.string_val;
+            while (*str) {
+                /* Ensure enough space for escaped character */
+                if (*length + 10 > *capacity) {
+                    *capacity *= 2;
+                    char *new_output = (char *)realloc(*output, *capacity);
+                    if (!new_output) {
+                        return;
+                    }
+                    *output = new_output;
+                }
+                
+                switch (*str) {
+                    case '"':
+                        *length += sprintf(*output + *length, "\\\"");
+                        break;
+                    case '\\':
+                        *length += sprintf(*output + *length, "\\\\");
+                        break;
+                    case '\n':
+                        *length += sprintf(*output + *length, "\\n");
+                        break;
+                    case '\r':
+                        *length += sprintf(*output + *length, "\\r");
+                        break;
+                    case '\t':
+                        *length += sprintf(*output + *length, "\\t");
+                        break;
+                    default:
+                        (*output)[(*length)++] = *str;
+                        break;
+                }
+                str++;
+            }
+            *length += sprintf(*output + *length, "\"");
             break;
+        }
             
         case JSON_OBJECT: {
             *length += sprintf(*output + *length, "{");
