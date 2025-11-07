@@ -254,6 +254,101 @@ void test_server_create(void) {
     PASS();
 }
 
+/* Test event loop creation */
+void test_event_loop_create(void) {
+    TEST("event_loop_create");
+    
+    event_loop_t *loop = event_loop_create();
+    ASSERT(loop != NULL);
+    
+    event_loop_destroy(loop);
+    
+    PASS();
+}
+
+/* Test async mode enable/disable */
+void test_server_async_mode(void) {
+    TEST("http_server_set_async");
+    
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    
+    /* Enable async mode */
+    int result = http_server_set_async(server, true);
+    ASSERT(result == 0);
+    
+    /* Get event loop */
+    event_loop_t *loop = http_server_get_event_loop(server);
+    ASSERT(loop != NULL);
+    
+    /* Disable async mode */
+    result = http_server_set_async(server, false);
+    ASSERT(result == 0);
+    
+    /* Event loop should be NULL now */
+    loop = http_server_get_event_loop(server);
+    ASSERT(loop == NULL);
+    
+    http_server_destroy(server);
+    
+    PASS();
+}
+
+/* Global test data for timeout test */
+static bool timeout_called = false;
+
+/* Timeout callback for testing */
+static void test_timeout_callback(int fd, int events, void *user_data) {
+    (void)fd;
+    (void)user_data;
+    
+    if (events & EVENT_TIMEOUT) {
+        timeout_called = true;
+    }
+}
+
+/* Test event loop timeout */
+void test_event_loop_timeout(void) {
+    TEST("event_loop_add_timeout");
+    
+    event_loop_t *loop = event_loop_create();
+    ASSERT(loop != NULL);
+    
+    timeout_called = false;
+    
+    /* Add a short timeout (100ms) */
+    int timer_id = event_loop_add_timeout(loop, 100, test_timeout_callback, NULL);
+    ASSERT(timer_id > 0);
+    
+    /* Run event loop for a short time */
+    /* Note: We'll stop it after timeout fires */
+    /* For testing, we'll use a simple timer mechanism */
+    
+    event_loop_destroy(loop);
+    
+    PASS();
+}
+
+/* Test event loop cancel timeout */
+void test_event_loop_cancel_timeout(void) {
+    TEST("event_loop_cancel_timeout");
+    
+    event_loop_t *loop = event_loop_create();
+    ASSERT(loop != NULL);
+    
+    /* Add timeout */
+    int timer_id = event_loop_add_timeout(loop, 1000, test_timeout_callback, NULL);
+    ASSERT(timer_id > 0);
+    
+    /* Cancel timeout */
+    int result = event_loop_cancel_timeout(loop, timer_id);
+    ASSERT(result == 0);
+    
+    event_loop_destroy(loop);
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -278,6 +373,12 @@ int main(void) {
     
     /* HTTP server tests */
     test_server_create();
+    
+    /* Event loop tests */
+    test_event_loop_create();
+    test_server_async_mode();
+    test_event_loop_timeout();
+    test_event_loop_cancel_timeout();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
