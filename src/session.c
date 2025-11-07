@@ -124,8 +124,28 @@ char *session_create(session_store_t *store, int max_age) {
         return NULL;
     }
     
-    /* Generate unique session ID */
-    generate_session_id(session->session_id, SESSION_ID_LENGTH);
+    /* Generate unique session ID with collision check */
+    int max_attempts = 10;
+    bool unique = false;
+    
+    for (int attempt = 0; attempt < max_attempts && !unique; attempt++) {
+        generate_session_id(session->session_id, SESSION_ID_LENGTH);
+        
+        /* Check for uniqueness */
+        unique = true;
+        for (size_t i = 0; i < MAX_SESSIONS; i++) {
+            if (store->sessions[i].in_use && &store->sessions[i] != session &&
+                strcmp(store->sessions[i].session_id, session->session_id) == 0) {
+                unique = false;
+                break;
+            }
+        }
+    }
+    
+    if (!unique) {
+        fprintf(stderr, "Failed to generate unique session ID after %d attempts\n", max_attempts);
+        return NULL;
+    }
     
     /* Set session metadata */
     session->created_at = time(NULL);
