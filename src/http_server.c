@@ -285,7 +285,41 @@ static http_request_t *parse_request(const char *buffer) {
         return NULL;
     }
     
-    /* TODO: Parse headers and body */
+    /* Parse headers for Cookie header */
+    const char *header_start = strstr(buffer, "\r\n");
+    if (header_start) {
+        header_start += 2; /* Skip first \r\n */
+        
+        /* Look for Cookie header */
+        const char *cookie_header = strstr(header_start, "Cookie:");
+        if (!cookie_header) {
+            cookie_header = strstr(header_start, "cookie:");
+        }
+        
+        if (cookie_header) {
+            /* Skip "Cookie: " */
+            cookie_header = strchr(cookie_header, ':');
+            if (cookie_header) {
+                cookie_header++; /* Skip ':' */
+                while (*cookie_header == ' ') cookie_header++; /* Skip spaces */
+                
+                /* Find end of header line */
+                const char *header_end = strstr(cookie_header, "\r\n");
+                if (header_end) {
+                    size_t header_len = header_end - cookie_header;
+                    char *cookie_value = (char *)malloc(header_len + 1);
+                    if (cookie_value) {
+                        strncpy(cookie_value, cookie_header, header_len);
+                        cookie_value[header_len] = '\0';
+                        
+                        /* Parse cookies */
+                        http_request_parse_cookies(req, cookie_value);
+                        free(cookie_value);
+                    }
+                }
+            }
+        }
+    }
     
     return req;
 }
@@ -319,11 +353,27 @@ static void send_response(int client_fd, http_response_t *res) {
     int header_len = snprintf(header, BUFFER_SIZE,
         "HTTP/1.1 %d %s\r\n"
         "Content-Length: %zu\r\n"
-        "Connection: close\r\n"
-        "\r\n",
+        "Connection: close\r\n",
         res->status,
         status_text,
         res->body_length);
+    
+    /* Add Set-Cookie headers */
+    if (res->cookies) {
+        http_cookie_t *cookie = res->cookies;
+        while (cookie && header_len < BUFFER_SIZE - 100) {
+            char *cookie_header = http_cookie_to_set_cookie_header(cookie);
+            if (cookie_header) {
+                header_len += snprintf(header + header_len, BUFFER_SIZE - header_len,
+                    "Set-Cookie: %s\r\n", cookie_header);
+                free(cookie_header);
+            }
+            cookie = cookie->next;
+        }
+    }
+    
+    /* End headers */
+    header_len += snprintf(header + header_len, BUFFER_SIZE - header_len, "\r\n");
     
     send(client_fd, header, header_len, 0);
     
@@ -343,6 +393,12 @@ static void free_request(http_request_t *req) {
     free(req->path);
     free(req->query_string);
     free(req->body);
+    
+    /* Free cookies */
+    if (req->cookies) {
+        http_cookie_free(req->cookies);
+    }
+    
     free(req);
 }
 
@@ -353,6 +409,12 @@ static void free_response(http_response_t *res) {
     }
     
     free(res->body);
+    
+    /* Free cookies */
+    if (res->cookies) {
+        http_cookie_free(res->cookies);
+    }
+    
     free(res);
 }
 

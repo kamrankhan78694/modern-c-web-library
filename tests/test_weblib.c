@@ -254,6 +254,144 @@ void test_server_create(void) {
     PASS();
 }
 
+/* Test cookie creation */
+void test_cookie_create(void) {
+    TEST("http_cookie_create");
+    
+    http_cookie_t *cookie = http_cookie_create("session_id", "abc123");
+    ASSERT(cookie != NULL);
+    ASSERT(strcmp(cookie->name, "session_id") == 0);
+    ASSERT(strcmp(cookie->value, "abc123") == 0);
+    ASSERT(cookie->max_age == -1);
+    ASSERT(cookie->http_only == false);
+    ASSERT(cookie->secure == false);
+    
+    http_cookie_free(cookie);
+    
+    PASS();
+}
+
+/* Test cookie attributes */
+void test_cookie_attributes(void) {
+    TEST("http_cookie_set_attributes");
+    
+    http_cookie_t *cookie = http_cookie_create("test", "value");
+    ASSERT(cookie != NULL);
+    
+    http_cookie_set_domain(cookie, "example.com");
+    ASSERT(cookie->domain != NULL);
+    ASSERT(strcmp(cookie->domain, "example.com") == 0);
+    
+    http_cookie_set_path(cookie, "/api");
+    ASSERT(cookie->path != NULL);
+    ASSERT(strcmp(cookie->path, "/api") == 0);
+    
+    http_cookie_set_max_age(cookie, 3600);
+    ASSERT(cookie->max_age == 3600);
+    
+    http_cookie_set_http_only(cookie, true);
+    ASSERT(cookie->http_only == true);
+    
+    http_cookie_set_secure(cookie, true);
+    ASSERT(cookie->secure == true);
+    
+    http_cookie_set_same_site(cookie, "Strict");
+    ASSERT(cookie->same_site != NULL);
+    ASSERT(strcmp(cookie->same_site, "Strict") == 0);
+    
+    http_cookie_free(cookie);
+    
+    PASS();
+}
+
+/* Test cookie parsing */
+void test_cookie_parsing(void) {
+    TEST("http_request_parse_cookies");
+    
+    http_request_t req = {0};
+    http_request_parse_cookies(&req, "session_id=abc123; user=john");
+    
+    ASSERT(req.cookies != NULL);
+    ASSERT(strcmp(req.cookies->name, "session_id") == 0);
+    ASSERT(strcmp(req.cookies->value, "abc123") == 0);
+    
+    ASSERT(req.cookies->next != NULL);
+    ASSERT(strcmp(req.cookies->next->name, "user") == 0);
+    ASSERT(strcmp(req.cookies->next->value, "john") == 0);
+    
+    http_cookie_free(req.cookies);
+    
+    PASS();
+}
+
+/* Test getting cookie from request */
+void test_request_get_cookie(void) {
+    TEST("http_request_get_cookie");
+    
+    http_request_t req = {0};
+    http_request_parse_cookies(&req, "session_id=abc123; user=john");
+    
+    const char *session = http_request_get_cookie(&req, "session_id");
+    ASSERT(session != NULL);
+    ASSERT(strcmp(session, "abc123") == 0);
+    
+    const char *user = http_request_get_cookie(&req, "user");
+    ASSERT(user != NULL);
+    ASSERT(strcmp(user, "john") == 0);
+    
+    const char *missing = http_request_get_cookie(&req, "missing");
+    ASSERT(missing == NULL);
+    
+    http_cookie_free(req.cookies);
+    
+    PASS();
+}
+
+/* Test setting cookie in response */
+void test_response_set_cookie(void) {
+    TEST("http_response_set_cookie");
+    
+    http_response_t res = {0};
+    
+    http_cookie_t *cookie1 = http_cookie_create("session", "xyz789");
+    http_response_set_cookie(&res, cookie1);
+    ASSERT(res.cookies != NULL);
+    ASSERT(strcmp(res.cookies->name, "session") == 0);
+    
+    http_cookie_t *cookie2 = http_cookie_create("user", "jane");
+    http_response_set_cookie(&res, cookie2);
+    ASSERT(res.cookies->next != NULL);
+    ASSERT(strcmp(res.cookies->next->name, "user") == 0);
+    
+    http_cookie_free(res.cookies);
+    
+    PASS();
+}
+
+/* Test Set-Cookie header generation */
+void test_cookie_to_header(void) {
+    TEST("http_cookie_to_set_cookie_header");
+    
+    http_cookie_t *cookie = http_cookie_create("session", "abc123");
+    http_cookie_set_path(cookie, "/");
+    http_cookie_set_max_age(cookie, 3600);
+    http_cookie_set_http_only(cookie, true);
+    http_cookie_set_secure(cookie, true);
+    
+    char *header = http_cookie_to_set_cookie_header(cookie);
+    ASSERT(header != NULL);
+    ASSERT(strstr(header, "session=abc123") != NULL);
+    ASSERT(strstr(header, "Path=/") != NULL);
+    ASSERT(strstr(header, "Max-Age=3600") != NULL);
+    ASSERT(strstr(header, "HttpOnly") != NULL);
+    ASSERT(strstr(header, "Secure") != NULL);
+    
+    free(header);
+    http_cookie_free(cookie);
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -278,6 +416,14 @@ int main(void) {
     
     /* HTTP server tests */
     test_server_create();
+    
+    /* Cookie tests */
+    test_cookie_create();
+    test_cookie_attributes();
+    test_cookie_parsing();
+    test_request_get_cookie();
+    test_response_set_cookie();
+    test_cookie_to_header();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

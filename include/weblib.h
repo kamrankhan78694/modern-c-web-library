@@ -45,6 +45,20 @@ typedef struct router router_t;
 typedef struct route route_t;
 typedef struct middleware middleware_t;
 typedef struct json_value json_value_t;
+typedef struct http_cookie http_cookie_t;
+
+/* HTTP Cookie structure */
+struct http_cookie {
+    char *name;
+    char *value;
+    char *domain;
+    char *path;
+    int max_age;        /* Max-Age in seconds, -1 if not set */
+    bool http_only;
+    bool secure;
+    char *same_site;    /* "Strict", "Lax", or "None" */
+    struct http_cookie *next; /* Linked list for multiple cookies */
+};
 
 /* HTTP Request structure */
 struct http_request {
@@ -56,6 +70,7 @@ struct http_request {
     void *headers;  /* Hash map of headers */
     void *params;   /* Route parameters */
     void *user_data; /* For middleware context */
+    http_cookie_t *cookies; /* Linked list of cookies */
 };
 
 /* HTTP Response structure */
@@ -65,6 +80,7 @@ struct http_response {
     size_t body_length;
     void *headers;  /* Hash map of headers */
     bool sent;
+    http_cookie_t *cookies; /* Linked list of cookies to set */
 };
 
 /* Route handler callback */
@@ -277,6 +293,98 @@ char *json_stringify(json_value_t *value);
  * @param value JSON value
  */
 void json_value_free(json_value_t *value);
+
+/* ===== Cookie API ===== */
+
+/**
+ * Create a new cookie
+ * @param name Cookie name
+ * @param value Cookie value
+ * @return Pointer to cookie instance or NULL on failure
+ */
+http_cookie_t *http_cookie_create(const char *name, const char *value);
+
+/**
+ * Set cookie domain attribute
+ * @param cookie Cookie instance
+ * @param domain Domain value
+ * @return 0 on success, -1 on failure
+ */
+int http_cookie_set_domain(http_cookie_t *cookie, const char *domain);
+
+/**
+ * Set cookie path attribute
+ * @param cookie Cookie instance
+ * @param path Path value (default is "/")
+ * @return 0 on success, -1 on failure
+ */
+int http_cookie_set_path(http_cookie_t *cookie, const char *path);
+
+/**
+ * Set cookie max-age attribute
+ * @param cookie Cookie instance
+ * @param max_age Max age in seconds
+ */
+void http_cookie_set_max_age(http_cookie_t *cookie, int max_age);
+
+/**
+ * Set cookie HttpOnly flag
+ * @param cookie Cookie instance
+ * @param http_only HttpOnly flag value
+ */
+void http_cookie_set_http_only(http_cookie_t *cookie, bool http_only);
+
+/**
+ * Set cookie Secure flag
+ * @param cookie Cookie instance
+ * @param secure Secure flag value
+ */
+void http_cookie_set_secure(http_cookie_t *cookie, bool secure);
+
+/**
+ * Set cookie SameSite attribute
+ * @param cookie Cookie instance
+ * @param same_site SameSite value ("Strict", "Lax", or "None")
+ * @return 0 on success, -1 on failure
+ */
+int http_cookie_set_same_site(http_cookie_t *cookie, const char *same_site);
+
+/**
+ * Free cookie and associated resources
+ * @param cookie Cookie instance
+ */
+void http_cookie_free(http_cookie_t *cookie);
+
+/**
+ * Get cookie value from request by name
+ * @param req Request object
+ * @param name Cookie name
+ * @return Cookie value or NULL if not found
+ */
+const char *http_request_get_cookie(http_request_t *req, const char *name);
+
+/**
+ * Set cookie in response
+ * @param res Response object
+ * @param cookie Cookie to set (ownership transferred to response)
+ */
+void http_response_set_cookie(http_response_t *res, http_cookie_t *cookie);
+
+/* ===== Internal Helper Functions (for library use) ===== */
+
+/**
+ * Parse Cookie header and add cookies to request
+ * @param req Request object
+ * @param cookie_header Cookie header value
+ */
+void http_request_parse_cookies(http_request_t *req, const char *cookie_header);
+
+/**
+ * Build Set-Cookie header string from cookie
+ * @param cookie Cookie instance
+ * @return Set-Cookie header string (must be freed by caller) or NULL on error
+ */
+char *http_cookie_to_set_cookie_header(http_cookie_t *cookie);
 
 #ifdef __cplusplus
 }
