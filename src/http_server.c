@@ -206,8 +206,11 @@ static void *handle_connection(void *arg) {
             /* Parse request */
             http_request_t *req = parse_request(buffer);
             if (req) {
-                /* Set client IP address */
-                req->client_ip = strdup(inet_ntoa(conn->client_addr.sin_addr));
+                /* Set client IP address using thread-safe inet_ntop */
+                char ip_str[INET_ADDRSTRLEN];
+                if (inet_ntop(AF_INET, &conn->client_addr.sin_addr, ip_str, sizeof(ip_str))) {
+                    req->client_ip = strdup(ip_str);
+                }
                 
                 /* Create response */
                 http_response_t *res = (http_response_t *)calloc(1, sizeof(http_response_t));

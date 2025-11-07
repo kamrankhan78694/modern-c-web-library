@@ -40,6 +40,7 @@ static size_t hash_ip(const char *ip);
 static client_entry_t *find_or_create_client(rate_limiter_t *limiter, const char *ip);
 static void cleanup_old_timestamps(client_entry_t *client, time_t current_time, size_t window_seconds);
 static void free_client_entry(client_entry_t *client);
+static void cleanup_unlocked(rate_limiter_t *limiter);
 
 /* Create rate limiter */
 rate_limiter_t *rate_limiter_create(size_t max_requests, size_t window_seconds) {
@@ -89,7 +90,7 @@ bool rate_limiter_check(rate_limiter_t *limiter, const char *client_ip) {
     limiter->check_counter++;
     if (limiter->check_counter >= CLEANUP_THRESHOLD) {
         limiter->check_counter = 0;
-        rate_limiter_cleanup(limiter);
+        cleanup_unlocked(limiter);
     }
 
     time_t current_time = time(NULL);
@@ -211,8 +212,8 @@ void rate_limiter_reset_client(rate_limiter_t *limiter, const char *client_ip) {
 #endif
 }
 
-/* Cleanup expired entries */
-void rate_limiter_cleanup(rate_limiter_t *limiter) {
+/* Cleanup expired entries (internal, assumes lock is held) */
+static void cleanup_unlocked(rate_limiter_t *limiter) {
     if (!limiter) {
         return;
     }
@@ -235,6 +236,27 @@ void rate_limiter_cleanup(rate_limiter_t *limiter) {
             client->in_use = false;
         }
     }
+}
+
+/* Cleanup expired entries (public API) */
+void rate_limiter_cleanup(rate_limiter_t *limiter) {
+    if (!limiter) {
+        return;
+    }
+
+#ifdef _WIN32
+    EnterCriticalSection(&limiter->mutex);
+#else
+    pthread_mutex_lock(&limiter->mutex);
+#endif
+
+    cleanup_unlocked(limiter);
+
+#ifdef _WIN32
+    LeaveCriticalSection(&limiter->mutex);
+#else
+    pthread_mutex_unlock(&limiter->mutex);
+#endif
 }
 
 /* Destroy rate limiter */
@@ -344,8 +366,13 @@ typedef struct {
     rate_limiter_t *limiter;
 } rate_limiter_middleware_ctx_t;
 
-/* Static middleware context - simplified approach */
-static rate_limiter_t *global_middleware_limiter = NULL;
+/* Static middleware context - simplified approach 
+ * NOTE: This uses a global variable which limits the application to using
+ * one rate limiter at a time. This is acceptable for most use cases where
+ * there's one rate limiter per server. A more robust solution would require
+ * changing the middleware API to support context passing.
+ */
+static rate_limiter_t *volatile global_middleware_limiter = NULL;
 
 /* Middleware implementation */
 static bool rate_limiter_middleware_impl(http_request_t *req, http_response_t *res) {
