@@ -361,11 +361,6 @@ static void free_client_entry(client_entry_t *client) {
     client->timestamp_capacity = 0;
 }
 
-/* Middleware function holder */
-typedef struct {
-    rate_limiter_t *limiter;
-} rate_limiter_middleware_ctx_t;
-
 /* Static middleware context - simplified approach 
  * NOTE: This uses a global variable which limits the application to using
  * one rate limiter at a time. This is acceptable for most use cases where
@@ -382,24 +377,29 @@ static bool rate_limiter_middleware_impl(http_request_t *req, http_response_t *r
 
     const char *client_ip = req->client_ip ? req->client_ip : "unknown";
     
+    /* Always add rate limit headers */
+    char header_value[64];
+    snprintf(header_value, sizeof(header_value), "%zu", global_middleware_limiter->max_requests);
+    http_response_set_header(res, "X-RateLimit-Limit", header_value);
+    
+    snprintf(header_value, sizeof(header_value), "%zu", global_middleware_limiter->window_seconds);
+    http_response_set_header(res, "X-RateLimit-Window", header_value);
+    
     if (!rate_limiter_check(global_middleware_limiter, client_ip)) {
         /* Rate limit exceeded */
         http_response_send_text(res, HTTP_TOO_MANY_REQUESTS, "Too Many Requests");
         
-        /* Add rate limit headers */
-        char header_value[64];
-        snprintf(header_value, sizeof(header_value), "%zu", global_middleware_limiter->max_requests);
-        http_response_set_header(res, "X-RateLimit-Limit", header_value);
-        
-        size_t remaining = rate_limiter_get_remaining(global_middleware_limiter, client_ip);
-        snprintf(header_value, sizeof(header_value), "%zu", remaining);
+        /* Remaining is 0 when rate limited */
+        snprintf(header_value, sizeof(header_value), "0");
         http_response_set_header(res, "X-RateLimit-Remaining", header_value);
-        
-        snprintf(header_value, sizeof(header_value), "%zu", global_middleware_limiter->window_seconds);
-        http_response_set_header(res, "X-RateLimit-Window", header_value);
         
         return false;  /* Stop processing */
     }
+    
+    /* Get remaining after successful check - may be slightly inaccurate but avoids race */
+    size_t remaining = rate_limiter_get_remaining(global_middleware_limiter, client_ip);
+    snprintf(header_value, sizeof(header_value), "%zu", remaining);
+    http_response_set_header(res, "X-RateLimit-Remaining", header_value);
 
     return true;  /* Continue to next middleware/handler */
 }

@@ -210,6 +210,8 @@ static void *handle_connection(void *arg) {
                 char ip_str[INET_ADDRSTRLEN];
                 if (inet_ntop(AF_INET, &conn->client_addr.sin_addr, ip_str, sizeof(ip_str))) {
                     req->client_ip = strdup(ip_str);
+                    /* Note: If strdup fails, client_ip will be NULL, which is handled
+                     * gracefully by the rate limiter (uses "unknown" as fallback) */
                 }
                 
                 /* Create response */
