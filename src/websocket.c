@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <pthread.h>
@@ -13,7 +14,7 @@
 
 #define WS_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 #define WS_FRAME_HEADER_SIZE 2
-#define WS_MAX_FRAME_SIZE 65536
+#define WS_MAX_FRAME_SIZE (16 * 1024 * 1024)  /* 16MB max frame size */
 
 /* WebSocket opcodes */
 typedef enum {
@@ -421,11 +422,21 @@ static int ws_read_frame(int socket_fd, ws_opcode_t *opcode, uint8_t **payload, 
         if (recv(socket_fd, len_bytes, 8, 0) != 8) {
             return -1;
         }
-        /* For simplicity, we only support up to 32-bit lengths */
+        /* Check if high 32 bits are non-zero (frame too large) */
+        if (len_bytes[0] || len_bytes[1] || len_bytes[2] || len_bytes[3]) {
+            /* Frame size exceeds 32-bit limit, reject it */
+            return -1;
+        }
+        /* Read lower 32 bits */
         payload_len = ((uint64_t)len_bytes[4] << 24) |
                      ((uint64_t)len_bytes[5] << 16) |
                      ((uint64_t)len_bytes[6] << 8) |
                      (uint64_t)len_bytes[7];
+    }
+    
+    /* Validate payload length against maximum frame size */
+    if (payload_len > WS_MAX_FRAME_SIZE) {
+        return -1;
     }
     
     /* Read masking key if present */
