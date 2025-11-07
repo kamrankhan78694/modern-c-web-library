@@ -59,20 +59,20 @@ void json_object_set(json_value_t *obj, const char *key, json_value_t *value) {
     }
     
     /* Check if key already exists and replace it */
-    json_object_entry_t *entry = (json_object_entry_t *)obj->data.object_val;
+    json_object_entry_t *existing = (json_object_entry_t *)obj->data.object_val;
     
-    while (entry) {
-        if (strcmp(entry->key, key) == 0) {
+    while (existing) {
+        if (strcmp(existing->key, key) == 0) {
             /* Key exists, replace value */
-            json_value_free(entry->value);
-            entry->value = value;
+            json_value_free(existing->value);
+            existing->value = value;
             return;
         }
-        entry = entry->next;
+        existing = existing->next;
     }
     
     /* Key doesn't exist, add new entry */
-    entry = (json_object_entry_t *)malloc(sizeof(json_object_entry_t));
+    json_object_entry_t *entry = (json_object_entry_t *)malloc(sizeof(json_object_entry_t));
     if (!entry) {
         return;
     }
