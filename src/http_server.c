@@ -190,30 +190,40 @@ static void *handle_connection(void *arg) {
     if (bytes_read > 0) {
         buffer[bytes_read] = '\0';
         
-        /* Parse request */
-        http_request_t *req = parse_request(buffer);
-        if (req) {
-            /* Create response */
+        /* Check for oversized request */
+        if (bytes_read == BUFFER_SIZE - 1) {
+            /* Request too large, send 413 Payload Too Large */
             http_response_t *res = (http_response_t *)calloc(1, sizeof(http_response_t));
             if (res) {
-                res->status = HTTP_OK;
-                
-                /* Route request */
-                if (conn->server->router) {
-                    router_route(conn->server->router, req, res);
-                } else {
-                    /* No router configured, send 404 */
-                    http_response_send_text(res, HTTP_NOT_FOUND, "Not Found");
-                }
-                
-                /* Send response */
+                http_response_send_text(res, 413, "Payload Too Large");
                 send_response(conn->client_fd, res);
                 free_response(res);
             }
-            
-            free_request(req);
+        } else {
+            /* Parse request */
+            http_request_t *req = parse_request(buffer);
+            if (req) {
+                /* Create response */
+                http_response_t *res = (http_response_t *)calloc(1, sizeof(http_response_t));
+                if (res) {
+                    res->status = HTTP_OK;
+                    
+                    /* Route request */
+                    if (conn->server->router) {
+                        router_route(conn->server->router, req, res);
+                    } else {
+                        /* No router configured, send 404 */
+                        http_response_send_text(res, HTTP_NOT_FOUND, "Not Found");
+                    }
+                    
+                    /* Send response */
+                    send_response(conn->client_fd, res);
+                    free_response(res);
+                }
+                
+                free_request(req);
+            }
         }
-    }
     
     close(conn->client_fd);
     free(conn);
