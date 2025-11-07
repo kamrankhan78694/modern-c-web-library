@@ -158,6 +158,13 @@ void http_request_parse_cookies(http_request_t *req, const char *cookie_header) 
             char *name = pair;
             char *value = equals + 1;
             
+            /* Trim trailing whitespace from name */
+            char *name_end = equals - 1;
+            while (name_end > name && isspace((unsigned char)*name_end)) {
+                *name_end = '\0';
+                name_end--;
+            }
+            
             /* Create cookie */
             http_cookie_t *cookie = http_cookie_create(name, value);
             if (cookie) {

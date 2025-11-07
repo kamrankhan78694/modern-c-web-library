@@ -10,6 +10,7 @@
 
 #define MAX_CONNECTIONS 128
 #define BUFFER_SIZE 8192
+#define COOKIE_HEADER_SAFETY_MARGIN 100
 
 /* Internal server structure */
 struct http_server {
@@ -361,7 +362,7 @@ static void send_response(int client_fd, http_response_t *res) {
     /* Add Set-Cookie headers */
     if (res->cookies) {
         http_cookie_t *cookie = res->cookies;
-        while (cookie && header_len < BUFFER_SIZE - 100) {
+        while (cookie && header_len < BUFFER_SIZE - COOKIE_HEADER_SAFETY_MARGIN) {
             char *cookie_header = http_cookie_to_set_cookie_header(cookie);
             if (cookie_header) {
                 header_len += snprintf(header + header_len, BUFFER_SIZE - header_len,
