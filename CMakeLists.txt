@@ -33,6 +33,7 @@ set(WEBLIB_SOURCES
     src/http_server.c
     src/router.c
     src/json.c
+    src/event_loop.c
 )
 
 # Create static library

@@ -45,6 +45,8 @@ typedef struct router router_t;
 typedef struct route route_t;
 typedef struct middleware middleware_t;
 typedef struct json_value json_value_t;
+typedef struct event_loop event_loop_t;
+typedef struct event_handler event_handler_t;
 
 /* HTTP Request structure */
 struct http_request {
@@ -277,6 +279,114 @@ char *json_stringify(json_value_t *value);
  * @param value JSON value
  */
 void json_value_free(json_value_t *value);
+
+/* ===== Event Loop API (Async I/O) ===== */
+
+/**
+ * Event types for I/O operations
+ */
+typedef enum {
+    EVENT_READ = 1 << 0,   /* File descriptor is readable */
+    EVENT_WRITE = 1 << 1,  /* File descriptor is writable */
+    EVENT_ERROR = 1 << 2,  /* Error condition on file descriptor */
+    EVENT_TIMEOUT = 1 << 3 /* Timeout event */
+} event_type_t;
+
+/**
+ * Event callback function
+ * @param fd File descriptor that triggered the event
+ * @param events Event types that occurred
+ * @param user_data User-provided data
+ */
+typedef void (*event_callback_t)(int fd, int events, void *user_data);
+
+/**
+ * Create a new event loop
+ * @return Pointer to event loop instance or NULL on failure
+ */
+event_loop_t *event_loop_create(void);
+
+/**
+ * Add a file descriptor to the event loop
+ * @param loop Event loop instance
+ * @param fd File descriptor to monitor
+ * @param events Event types to monitor (EVENT_READ, EVENT_WRITE, etc.)
+ * @param callback Callback function to invoke when event occurs
+ * @param user_data User data to pass to callback
+ * @return 0 on success, -1 on failure
+ */
+int event_loop_add_fd(event_loop_t *loop, int fd, int events, event_callback_t callback, void *user_data);
+
+/**
+ * Modify events for a file descriptor
+ * @param loop Event loop instance
+ * @param fd File descriptor to modify
+ * @param events New event types to monitor
+ * @return 0 on success, -1 on failure
+ */
+int event_loop_modify_fd(event_loop_t *loop, int fd, int events);
+
+/**
+ * Remove a file descriptor from the event loop
+ * @param loop Event loop instance
+ * @param fd File descriptor to remove
+ * @return 0 on success, -1 on failure
+ */
+int event_loop_remove_fd(event_loop_t *loop, int fd);
+
+/**
+ * Run the event loop (blocking)
+ * @param loop Event loop instance
+ * @return 0 on normal exit, -1 on error
+ */
+int event_loop_run(event_loop_t *loop);
+
+/**
+ * Stop the event loop
+ * @param loop Event loop instance
+ */
+void event_loop_stop(event_loop_t *loop);
+
+/**
+ * Destroy the event loop and free resources
+ * @param loop Event loop instance
+ */
+void event_loop_destroy(event_loop_t *loop);
+
+/**
+ * Set a timeout callback
+ * @param loop Event loop instance
+ * @param timeout_ms Timeout in milliseconds
+ * @param callback Callback function to invoke on timeout
+ * @param user_data User data to pass to callback
+ * @return Timer ID on success, -1 on failure
+ */
+int event_loop_add_timeout(event_loop_t *loop, int timeout_ms, event_callback_t callback, void *user_data);
+
+/**
+ * Cancel a timeout
+ * @param loop Event loop instance
+ * @param timer_id Timer ID returned from event_loop_add_timeout
+ * @return 0 on success, -1 on failure
+ */
+int event_loop_cancel_timeout(event_loop_t *loop, int timer_id);
+
+/* ===== Async HTTP Server API ===== */
+
+/**
+ * Enable async I/O mode for the HTTP server
+ * @param server Server instance
+ * @param enable true to enable async mode, false to disable
+ * @return 0 on success, -1 on failure
+ */
+int http_server_set_async(http_server_t *server, bool enable);
+
+/**
+ * Get the event loop associated with the server (async mode only)
+ * @param server Server instance
+ * @return Event loop instance or NULL if not in async mode
+ */
+event_loop_t *http_server_get_event_loop(http_server_t *server);
 
 #ifdef __cplusplus
 }

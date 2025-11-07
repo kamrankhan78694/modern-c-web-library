@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #define MAX_CONNECTIONS 128
 #define BUFFER_SIZE 8192
@@ -18,6 +19,10 @@ struct http_server {
     router_t *router;
     bool running;
     pthread_t accept_thread;
+    
+    /* Async I/O support */
+    bool async_mode;
+    event_loop_t *event_loop;
 };
 
 /* Connection handler data */
@@ -26,6 +31,17 @@ typedef struct {
     http_server_t *server;
 } connection_t;
 
+/* Async connection context */
+typedef struct async_connection {
+    int client_fd;
+    http_server_t *server;
+    char buffer[BUFFER_SIZE];
+    size_t buffer_pos;
+    http_request_t *request;
+    http_response_t *response;
+    bool request_complete;
+} async_connection_t;
+
 /* Forward declarations */
 static void *accept_connections(void *arg);
 static void *handle_connection(void *arg);
@@ -33,6 +49,13 @@ static http_request_t *parse_request(const char *buffer);
 static void send_response(int client_fd, http_response_t *res);
 static void free_request(http_request_t *req);
 static void free_response(http_response_t *res);
+
+/* Async I/O functions */
+static int set_nonblocking(int fd);
+static void async_accept_handler(int fd, int events, void *user_data);
+static void async_read_handler(int fd, int events, void *user_data);
+static void async_write_handler(int fd, int events, void *user_data);
+static void free_async_connection(async_connection_t *conn);
 
 /* Create HTTP server */
 http_server_t *http_server_create(void) {
@@ -44,6 +67,8 @@ http_server_t *http_server_create(void) {
     server->socket_fd = -1;
     server->running = false;
     server->router = NULL;
+    server->async_mode = false;
+    server->event_loop = NULL;
     
     return server;
 }
@@ -91,15 +116,39 @@ int http_server_listen(http_server_t *server, uint16_t port) {
     server->port = port;
     server->running = true;
     
-    /* Start accept thread */
-    if (pthread_create(&server->accept_thread, NULL, accept_connections, server) != 0) {
-        perror("pthread_create failed");
-        server->running = false;
-        close(server->socket_fd);
-        return -1;
+    if (server->async_mode) {
+        /* Async mode - use event loop */
+        printf("HTTP server listening on port %d (async mode)\n", port);
+        
+        /* Set server socket to non-blocking */
+        if (set_nonblocking(server->socket_fd) < 0) {
+            perror("Failed to set server socket to non-blocking");
+            close(server->socket_fd);
+            return -1;
+        }
+        
+        /* Add server socket to event loop */
+        if (event_loop_add_fd(server->event_loop, server->socket_fd, EVENT_READ, 
+                             async_accept_handler, server) < 0) {
+            fprintf(stderr, "Failed to add server socket to event loop\n");
+            close(server->socket_fd);
+            return -1;
+        }
+        
+        /* Run event loop in main thread */
+        event_loop_run(server->event_loop);
+    } else {
+        /* Traditional threaded mode */
+        printf("HTTP server listening on port %d (threaded mode)\n", port);
+        
+        /* Start accept thread */
+        if (pthread_create(&server->accept_thread, NULL, accept_connections, server) != 0) {
+            perror("pthread_create failed");
+            server->running = false;
+            close(server->socket_fd);
+            return -1;
+        }
     }
-    
-    printf("HTTP server listening on port %d\n", port);
     
     return 0;
 }
@@ -112,12 +161,20 @@ void http_server_stop(http_server_t *server) {
     
     server->running = false;
     
+    if (server->async_mode) {
+        /* Stop event loop */
+        if (server->event_loop) {
+            event_loop_stop(server->event_loop);
+        }
+    } else {
+        /* Stop accept thread */
+        pthread_join(server->accept_thread, NULL);
+    }
+    
     if (server->socket_fd >= 0) {
         close(server->socket_fd);
         server->socket_fd = -1;
     }
-    
-    pthread_join(server->accept_thread, NULL);
     
     printf("HTTP server stopped\n");
 }
@@ -130,6 +187,11 @@ void http_server_destroy(http_server_t *server) {
     
     if (server->running) {
         http_server_stop(server);
+    }
+    
+    if (server->event_loop) {
+        event_loop_destroy(server->event_loop);
+        server->event_loop = NULL;
     }
     
     free(server);
@@ -224,6 +286,7 @@ static void *handle_connection(void *arg) {
                 free_request(req);
             }
         }
+    }
     
     close(conn->client_fd);
     free(conn);
@@ -390,3 +453,231 @@ const char *http_request_get_param(http_request_t *req, const char *key) {
     (void)key;
     return NULL;
 }
+
+/* Enable/disable async I/O mode */
+int http_server_set_async(http_server_t *server, bool enable) {
+    if (!server) {
+        return -1;
+    }
+    
+    if (server->running) {
+        fprintf(stderr, "Cannot change async mode while server is running\n");
+        return -1;
+    }
+    
+    if (enable && !server->event_loop) {
+        /* Create event loop */
+        server->event_loop = event_loop_create();
+        if (!server->event_loop) {
+            fprintf(stderr, "Failed to create event loop\n");
+            return -1;
+        }
+    } else if (!enable && server->event_loop) {
+        /* Destroy event loop */
+        event_loop_destroy(server->event_loop);
+        server->event_loop = NULL;
+    }
+    
+    server->async_mode = enable;
+    return 0;
+}
+
+/* Get event loop */
+event_loop_t *http_server_get_event_loop(http_server_t *server) {
+    if (!server || !server->async_mode) {
+        return NULL;
+    }
+    return server->event_loop;
+}
+
+/* Set non-blocking mode on a file descriptor */
+static int set_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return -1;
+    }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+/* Async accept handler */
+static void async_accept_handler(int fd, int events, void *user_data) {
+    http_server_t *server = (http_server_t *)user_data;
+    
+    if (events & EVENT_ERROR) {
+        fprintf(stderr, "Error on server socket\n");
+        return;
+    }
+    
+    if (!(events & EVENT_READ)) {
+        return;
+    }
+    
+    /* Accept new connection */
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    
+    int client_fd = accept(fd, (struct sockaddr *)&client_addr, &client_len);
+    if (client_fd < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            perror("accept failed");
+        }
+        return;
+    }
+    
+    /* Set client socket to non-blocking */
+    if (set_nonblocking(client_fd) < 0) {
+        perror("Failed to set client socket to non-blocking");
+        close(client_fd);
+        return;
+    }
+    
+    /* Create async connection context */
+    async_connection_t *conn = (async_connection_t *)calloc(1, sizeof(async_connection_t));
+    if (!conn) {
+        fprintf(stderr, "Failed to allocate connection context\n");
+        close(client_fd);
+        return;
+    }
+    
+    conn->client_fd = client_fd;
+    conn->server = server;
+    conn->buffer_pos = 0;
+    conn->request = NULL;
+    conn->response = NULL;
+    conn->request_complete = false;
+    
+    /* Add client socket to event loop for reading */
+    if (event_loop_add_fd(server->event_loop, client_fd, EVENT_READ, 
+                         async_read_handler, conn) < 0) {
+        fprintf(stderr, "Failed to add client socket to event loop\n");
+        free(conn);
+        close(client_fd);
+        return;
+    }
+}
+
+/* Async read handler */
+static void async_read_handler(int fd, int events, void *user_data) {
+    async_connection_t *conn = (async_connection_t *)user_data;
+    
+    if (events & EVENT_ERROR) {
+        fprintf(stderr, "Error on client socket\n");
+        event_loop_remove_fd(conn->server->event_loop, fd);
+        free_async_connection(conn);
+        return;
+    }
+    
+    if (!(events & EVENT_READ)) {
+        return;
+    }
+    
+    /* Read data from client */
+    ssize_t bytes_read = recv(fd, conn->buffer + conn->buffer_pos, 
+                              BUFFER_SIZE - conn->buffer_pos - 1, 0);
+    
+    if (bytes_read <= 0) {
+        if (bytes_read == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            /* Connection closed or error */
+            event_loop_remove_fd(conn->server->event_loop, fd);
+            free_async_connection(conn);
+        }
+        return;
+    }
+    
+    conn->buffer_pos += bytes_read;
+    conn->buffer[conn->buffer_pos] = '\0';
+    
+    /* Check if we have a complete HTTP request (ends with \r\n\r\n) */
+    if (strstr(conn->buffer, "\r\n\r\n") != NULL) {
+        conn->request_complete = true;
+        
+        /* Parse request */
+        conn->request = parse_request(conn->buffer);
+        if (!conn->request) {
+            fprintf(stderr, "Failed to parse request\n");
+            event_loop_remove_fd(conn->server->event_loop, fd);
+            free_async_connection(conn);
+            return;
+        }
+        
+        /* Create response */
+        conn->response = (http_response_t *)calloc(1, sizeof(http_response_t));
+        if (!conn->response) {
+            fprintf(stderr, "Failed to allocate response\n");
+            event_loop_remove_fd(conn->server->event_loop, fd);
+            free_async_connection(conn);
+            return;
+        }
+        conn->response->status = HTTP_OK;
+        
+        /* Route request */
+        if (conn->server->router) {
+            router_route(conn->server->router, conn->request, conn->response);
+        } else {
+            http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
+        }
+        
+        /* Switch to write mode */
+        if (event_loop_modify_fd(conn->server->event_loop, fd, EVENT_WRITE) < 0) {
+            fprintf(stderr, "Failed to modify event for writing\n");
+            event_loop_remove_fd(conn->server->event_loop, fd);
+            free_async_connection(conn);
+            return;
+        }
+        
+        /* Immediately send response since we're switching to write */
+        async_write_handler(fd, EVENT_WRITE, conn);
+    } else if (conn->buffer_pos >= BUFFER_SIZE - 1) {
+        /* Request too large */
+        fprintf(stderr, "Request too large\n");
+        event_loop_remove_fd(conn->server->event_loop, fd);
+        free_async_connection(conn);
+    }
+}
+
+/* Async write handler */
+static void async_write_handler(int fd, int events, void *user_data) {
+    async_connection_t *conn = (async_connection_t *)user_data;
+    
+    if (events & EVENT_ERROR) {
+        fprintf(stderr, "Error on client socket\n");
+        event_loop_remove_fd(conn->server->event_loop, fd);
+        free_async_connection(conn);
+        return;
+    }
+    
+    if (!(events & EVENT_WRITE)) {
+        return;
+    }
+    
+    /* Send response */
+    if (conn->response) {
+        send_response(fd, conn->response);
+    }
+    
+    /* Close connection */
+    event_loop_remove_fd(conn->server->event_loop, fd);
+    free_async_connection(conn);
+}
+
+/* Free async connection */
+static void free_async_connection(async_connection_t *conn) {
+    if (!conn) {
+        return;
+    }
+    
+    if (conn->client_fd >= 0) {
+        close(conn->client_fd);
+    }
+    
+    if (conn->request) {
+        free_request(conn->request);
+    }
+    
+    if (conn->response) {
+        free_response(conn->response);
+    }
+    
+    free(conn);
+}
+

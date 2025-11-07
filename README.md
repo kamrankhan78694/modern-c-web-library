@@ -4,7 +4,9 @@ A modern AI-assisted C library for building efficient, scalable, and feature-ric
 
 ## Features
 
-- **HTTP Server**: Multi-threaded HTTP server with async I/O
+- **HTTP Server**: Multi-threaded and async I/O HTTP server
+- **Async I/O**: Full event loop support with epoll (Linux), kqueue (BSD/macOS), and poll fallback
+- **Event Loop**: High-performance non-blocking I/O for handling thousands of concurrent connections
 - **Routing**: Flexible routing with support for route parameters (e.g., `/users/:id`)
 - **Middleware**: Chain middleware functions for request processing
 - **JSON Support**: Built-in JSON parser and serializer
@@ -115,6 +117,77 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 router_use_middleware(router, logging_middleware);
 ```
 
+### Async I/O Mode
+
+The library supports full async I/O with event loops for high-performance, non-blocking request handling:
+
+```c
+#include "weblib.h"
+
+int main(void) {
+    // Create server
+    http_server_t *server = http_server_create();
+    
+    // Enable async I/O mode
+    http_server_set_async(server, true);
+    
+    // Get event loop (for advanced use cases)
+    event_loop_t *loop = http_server_get_event_loop(server);
+    
+    // Create and set up router
+    router_t *router = router_create();
+    router_add_route(router, HTTP_GET, "/", handle_root);
+    http_server_set_router(server, router);
+    
+    // Start server (runs event loop internally)
+    http_server_listen(server, 8080);
+    
+    // Cleanup
+    router_destroy(router);
+    http_server_destroy(server);
+    
+    return 0;
+}
+```
+
+**Event Loop Backends:**
+- **Linux**: epoll (high performance)
+- **macOS/BSD**: kqueue (high performance)
+- **Fallback**: poll (portable)
+
+### Event Loop API
+
+For advanced use cases, you can use the event loop directly:
+
+```c
+// Create event loop
+event_loop_t *loop = event_loop_create();
+
+// Add file descriptor to monitor
+event_loop_add_fd(loop, fd, EVENT_READ | EVENT_WRITE, callback, user_data);
+
+// Modify events for a file descriptor
+event_loop_modify_fd(loop, fd, EVENT_READ);
+
+// Remove file descriptor
+event_loop_remove_fd(loop, fd);
+
+// Add timeout
+int timer_id = event_loop_add_timeout(loop, 1000, timeout_callback, user_data);
+
+// Cancel timeout
+event_loop_cancel_timeout(loop, timer_id);
+
+// Run event loop
+event_loop_run(loop);
+
+// Stop event loop (from signal handler or callback)
+event_loop_stop(loop);
+
+// Cleanup
+event_loop_destroy(loop);
+```
+
 ## API Reference
 
 ### HTTP Server
@@ -123,6 +196,8 @@ router_use_middleware(router, logging_middleware);
 - `int http_server_listen(http_server_t *server, uint16_t port)` - Start listening on port
 - `void http_server_stop(http_server_t *server)` - Stop the server
 - `void http_server_destroy(http_server_t *server)` - Destroy server and free resources
+- `int http_server_set_async(http_server_t *server, bool enable)` - Enable/disable async I/O mode
+- `event_loop_t *http_server_get_event_loop(http_server_t *server)` - Get server's event loop
 
 ### Router
 
@@ -130,6 +205,18 @@ router_use_middleware(router, logging_middleware);
 - `int router_add_route(router_t *router, http_method_t method, const char *path, route_handler_t handler)` - Add a route
 - `int router_use_middleware(router_t *router, middleware_fn_t middleware)` - Add middleware
 - `void router_destroy(router_t *router)` - Destroy router
+
+### Event Loop
+
+- `event_loop_t *event_loop_create(void)` - Create a new event loop
+- `int event_loop_add_fd(event_loop_t *loop, int fd, int events, event_callback_t callback, void *user_data)` - Monitor file descriptor
+- `int event_loop_modify_fd(event_loop_t *loop, int fd, int events)` - Modify events for file descriptor
+- `int event_loop_remove_fd(event_loop_t *loop, int fd)` - Stop monitoring file descriptor
+- `int event_loop_run(event_loop_t *loop)` - Run the event loop
+- `void event_loop_stop(event_loop_t *loop)` - Stop the event loop
+- `int event_loop_add_timeout(event_loop_t *loop, int timeout_ms, event_callback_t callback, void *user_data)` - Add timeout
+- `int event_loop_cancel_timeout(event_loop_t *loop, int timer_id)` - Cancel timeout
+- `void event_loop_destroy(event_loop_t *loop)` - Destroy event loop
 
 ### JSON
 
@@ -147,11 +234,13 @@ modern-c-web-library/
 ├── include/
 │   └── weblib.h           # Public API header
 ├── src/
-│   ├── http_server.c      # HTTP server implementation
+│   ├── http_server.c      # HTTP server implementation (sync & async)
 │   ├── router.c           # Router implementation
-│   └── json.c             # JSON parser/serializer
+│   ├── json.c             # JSON parser/serializer
+│   └── event_loop.c       # Event loop implementation (epoll/kqueue/poll)
 ├── examples/
-│   └── simple_server.c    # Example HTTP server
+│   ├── simple_server.c    # Example HTTP server (threaded mode)
+│   └── async_server.c     # Example async HTTP server (event loop mode)
 ├── tests/
 │   └── test_weblib.c      # Unit tests
 ├── CMakeLists.txt         # Main CMake configuration
@@ -214,7 +303,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Roadmap
 
-- [ ] Full async I/O support with event loops
+- [x] Full async I/O support with event loops (epoll/kqueue/poll)
 - [ ] WebSocket support
 - [ ] SSL/TLS support
 - [ ] Request body parsing (form data, multipart)
