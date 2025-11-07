@@ -1,11 +1,13 @@
 #include "weblib.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <signal.h>
 #include <unistd.h>
 
 /* Global server instance for signal handling */
 static http_server_t *g_server = NULL;
+static rate_limiter_t *g_rate_limiter = NULL;
 static volatile sig_atomic_t shutdown_requested = 0;
 
 /* Signal handler for graceful shutdown */
@@ -109,6 +111,7 @@ bool cors_middleware(http_request_t *req, http_response_t *res) {
 
 int main(int argc, char *argv[]) {
     uint16_t port = 8080;
+    bool enable_rate_limit = false;
     
     /* Parse command line arguments */
     if (argc > 1) {
@@ -117,6 +120,11 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Invalid port number\n");
             return 1;
         }
+    }
+    
+    /* Check for rate limiting flag */
+    if (argc > 2 && strcmp(argv[2], "--rate-limit") == 0) {
+        enable_rate_limit = true;
     }
     
     /* Setup signal handlers */
@@ -142,6 +150,18 @@ int main(int argc, char *argv[]) {
     router_use_middleware(router, logging_middleware);
     router_use_middleware(router, cors_middleware);
     
+    /* Add rate limiting if enabled */
+    if (enable_rate_limit) {
+        /* Create rate limiter: 10 requests per 60 seconds */
+        g_rate_limiter = rate_limiter_create(10, 60);
+        if (g_rate_limiter) {
+            router_use_middleware(router, rate_limiter_middleware(g_rate_limiter));
+            printf("Rate limiting enabled: 10 requests per 60 seconds\n");
+        } else {
+            fprintf(stderr, "Warning: Failed to create rate limiter\n");
+        }
+    }
+    
     /* Add routes */
     router_add_route(router, HTTP_GET, "/", handle_root);
     router_add_route(router, HTTP_GET, "/hello", handle_hello);
@@ -161,12 +181,18 @@ int main(int argc, char *argv[]) {
     printf("  GET  /api/json      - JSON response example\n");
     printf("  GET  /users/:id     - User info with route parameters\n");
     printf("  POST /api/data      - Echo posted data\n");
+    if (enable_rate_limit) {
+        printf("\nRate limiting is ENABLED\n");
+    }
     printf("\nPress Ctrl+C to stop the server.\n\n");
     
     if (http_server_listen(g_server, port) < 0) {
         fprintf(stderr, "Failed to start server\n");
         router_destroy(router);
         http_server_destroy(g_server);
+        if (g_rate_limiter) {
+            rate_limiter_destroy(g_rate_limiter);
+        }
         return 1;
     }
     
@@ -182,6 +208,9 @@ int main(int argc, char *argv[]) {
     /* Cleanup */
     router_destroy(router);
     http_server_destroy(g_server);
+    if (g_rate_limiter) {
+        rate_limiter_destroy(g_rate_limiter);
+    }
     
     printf("Server stopped successfully\n");
     

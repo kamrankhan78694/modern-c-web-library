@@ -4,6 +4,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <errno.h>
@@ -24,6 +25,7 @@ struct http_server {
 typedef struct {
     int client_fd;
     http_server_t *server;
+    struct sockaddr_in client_addr;
 } connection_t;
 
 /* Forward declarations */
@@ -163,6 +165,7 @@ static void *accept_connections(void *arg) {
         if (conn) {
             conn->client_fd = client_fd;
             conn->server = server;
+            conn->client_addr = client_addr;
             
             pthread_t thread;
             if (pthread_create(&thread, NULL, handle_connection, conn) != 0) {
@@ -203,6 +206,14 @@ static void *handle_connection(void *arg) {
             /* Parse request */
             http_request_t *req = parse_request(buffer);
             if (req) {
+                /* Set client IP address using thread-safe inet_ntop */
+                char ip_str[INET_ADDRSTRLEN];
+                if (inet_ntop(AF_INET, &conn->client_addr.sin_addr, ip_str, sizeof(ip_str))) {
+                    req->client_ip = strdup(ip_str);
+                    /* Note: If strdup fails, client_ip will be NULL, which is handled
+                     * gracefully by the rate limiter (uses "unknown" as fallback) */
+                }
+                
                 /* Create response */
                 http_response_t *res = (http_response_t *)calloc(1, sizeof(http_response_t));
                 if (res) {
@@ -224,6 +235,7 @@ static void *handle_connection(void *arg) {
                 free_request(req);
             }
         }
+    }
     
     close(conn->client_fd);
     free(conn);
@@ -284,6 +296,9 @@ static http_request_t *parse_request(const char *buffer) {
         return NULL;
     }
     
+    /* Initialize client_ip to NULL - will be set by caller */
+    req->client_ip = NULL;
+    
     /* TODO: Parse headers and body */
     
     return req;
@@ -342,6 +357,7 @@ static void free_request(http_request_t *req) {
     free(req->path);
     free(req->query_string);
     free(req->body);
+    free(req->client_ip);
     free(req);
 }
 

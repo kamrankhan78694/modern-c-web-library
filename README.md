@@ -7,6 +7,7 @@ A modern AI-assisted C library for building efficient, scalable, and feature-ric
 - **HTTP Server**: Multi-threaded HTTP server with async I/O
 - **Routing**: Flexible routing with support for route parameters (e.g., `/users/:id`)
 - **Middleware**: Chain middleware functions for request processing
+- **Rate Limiting**: IP-based rate limiting with configurable limits
 - **JSON Support**: Built-in JSON parser and serializer
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design
@@ -37,6 +38,9 @@ make test
 
 # Or specify a custom port
 ./examples/simple_server 3000
+
+# Enable rate limiting (10 requests per 60 seconds)
+./examples/simple_server 8080 --rate-limit
 ```
 
 The example server will start on port 8080 (or your specified port) with the following endpoints:
@@ -115,6 +119,25 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 router_use_middleware(router, logging_middleware);
 ```
 
+### Rate Limiting
+
+```c
+// Create rate limiter: 100 requests per 60 seconds
+rate_limiter_t *limiter = rate_limiter_create(100, 60);
+
+// Add as middleware to router
+router_use_middleware(router, rate_limiter_middleware(limiter));
+
+// Cleanup when done
+rate_limiter_destroy(limiter);
+```
+
+The rate limiter will automatically:
+- Track requests per client IP
+- Return HTTP 429 (Too Many Requests) when limit exceeded
+- Add rate limit headers to responses (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Window`)
+- Clean up expired entries automatically
+
 ## API Reference
 
 ### HTTP Server
@@ -140,6 +163,16 @@ router_use_middleware(router, logging_middleware);
 - `char *json_stringify(json_value_t *value)` - Convert JSON to string
 - `void json_value_free(json_value_t *value)` - Free JSON value
 
+### Rate Limiter
+
+- `rate_limiter_t *rate_limiter_create(size_t max_requests, size_t window_seconds)` - Create a rate limiter
+- `bool rate_limiter_check(rate_limiter_t *limiter, const char *client_ip)` - Check if request is allowed
+- `size_t rate_limiter_get_remaining(rate_limiter_t *limiter, const char *client_ip)` - Get remaining requests
+- `void rate_limiter_reset_client(rate_limiter_t *limiter, const char *client_ip)` - Reset rate limit for client
+- `void rate_limiter_cleanup(rate_limiter_t *limiter)` - Cleanup expired entries
+- `void rate_limiter_destroy(rate_limiter_t *limiter)` - Destroy rate limiter
+- `middleware_fn_t rate_limiter_middleware(rate_limiter_t *limiter)` - Create rate limiting middleware
+
 ## Project Structure
 
 ```
@@ -149,7 +182,8 @@ modern-c-web-library/
 ├── src/
 │   ├── http_server.c      # HTTP server implementation
 │   ├── router.c           # Router implementation
-│   └── json.c             # JSON parser/serializer
+│   ├── json.c             # JSON parser/serializer
+│   └── rate_limiter.c     # Rate limiting implementation
 ├── examples/
 │   └── simple_server.c    # Example HTTP server
 ├── tests/
@@ -222,7 +256,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Session management
 - [ ] Template engine
 - [ ] Database connection pooling
-- [ ] Rate limiting
+- [x] Rate limiting
 - [ ] Static file serving
 
 ## Author
