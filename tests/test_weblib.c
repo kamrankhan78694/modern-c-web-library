@@ -254,6 +254,135 @@ void test_server_create(void) {
     PASS();
 }
 
+/* Test URL-encoded form data parsing */
+void test_form_urlencoded(void) {
+    TEST("URL-encoded form data parsing");
+    
+    /* Create a mock request with URL-encoded body */
+    http_request_t *req = (http_request_t *)calloc(1, sizeof(http_request_t));
+    ASSERT(req != NULL);
+    
+    const char *body = "name=John+Doe&email=john%40example.com&age=30";
+    req->body = strdup(body);
+    req->body_length = strlen(body);
+    
+    /* Parse the body */
+    void *form_data = http_request_parse_body(req, "application/x-www-form-urlencoded");
+    ASSERT(form_data != NULL);
+    
+    /* Test field retrieval */
+    const char *name = http_request_get_form_field(req, "name");
+    ASSERT(name != NULL);
+    ASSERT(strcmp(name, "John Doe") == 0);
+    
+    const char *email = http_request_get_form_field(req, "email");
+    ASSERT(email != NULL);
+    ASSERT(strcmp(email, "john@example.com") == 0);
+    
+    const char *age = http_request_get_form_field(req, "age");
+    ASSERT(age != NULL);
+    ASSERT(strcmp(age, "30") == 0);
+    
+    /* Test non-existent field */
+    const char *missing = http_request_get_form_field(req, "missing");
+    ASSERT(missing == NULL);
+    
+    /* Cleanup */
+    http_request_free_form_data(req);
+    free(req->body);
+    free(req);
+    
+    PASS();
+}
+
+/* Test multipart form data parsing */
+void test_form_multipart(void) {
+    TEST("Multipart form data parsing");
+    
+    /* Create a mock request with multipart body */
+    http_request_t *req = (http_request_t *)calloc(1, sizeof(http_request_t));
+    ASSERT(req != NULL);
+    
+    const char *body = 
+        "------WebKitFormBoundary\r\n"
+        "Content-Disposition: form-data; name=\"username\"\r\n"
+        "\r\n"
+        "testuser\r\n"
+        "------WebKitFormBoundary\r\n"
+        "Content-Disposition: form-data; name=\"message\"\r\n"
+        "\r\n"
+        "Hello World\r\n"
+        "------WebKitFormBoundary--\r\n";
+    
+    req->body = strdup(body);
+    req->body_length = strlen(body);
+    
+    /* Parse the body */
+    void *form_data = http_request_parse_body(req, "multipart/form-data; boundary=----WebKitFormBoundary");
+    ASSERT(form_data != NULL);
+    
+    /* Test field retrieval */
+    const char *username = http_request_get_form_field(req, "username");
+    ASSERT(username != NULL);
+    ASSERT(strcmp(username, "testuser") == 0);
+    
+    const char *message = http_request_get_form_field(req, "message");
+    ASSERT(message != NULL);
+    ASSERT(strcmp(message, "Hello World") == 0);
+    
+    /* Cleanup */
+    http_request_free_form_data(req);
+    free(req->body);
+    free(req);
+    
+    PASS();
+}
+
+/* Test multipart file upload */
+void test_multipart_file_upload(void) {
+    TEST("Multipart file upload");
+    
+    /* Create a mock request with file upload */
+    http_request_t *req = (http_request_t *)calloc(1, sizeof(http_request_t));
+    ASSERT(req != NULL);
+    
+    const char *body = 
+        "------WebKitFormBoundary\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"test.txt\"\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        "File content here\r\n"
+        "------WebKitFormBoundary--\r\n";
+    
+    req->body = strdup(body);
+    req->body_length = strlen(body);
+    
+    /* Parse the body */
+    void *form_data = http_request_parse_body(req, "multipart/form-data; boundary=----WebKitFormBoundary");
+    ASSERT(form_data != NULL);
+    
+    /* Test file retrieval */
+    const char *filename = NULL;
+    const char *content_type = NULL;
+    size_t size = 0;
+    const char *file_data = http_request_get_file(req, "file", &filename, &content_type, &size);
+    
+    ASSERT(file_data != NULL);
+    ASSERT(filename != NULL);
+    ASSERT(strcmp(filename, "test.txt") == 0);
+    ASSERT(content_type != NULL);
+    ASSERT(strcmp(content_type, "text/plain") == 0);
+    ASSERT(size == 17); /* "File content here" */
+    ASSERT(strncmp(file_data, "File content here", size) == 0);
+    
+    /* Cleanup */
+    http_request_free_form_data(req);
+    free(req->body);
+    free(req);
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -278,6 +407,11 @@ int main(void) {
     
     /* HTTP server tests */
     test_server_create();
+    
+    /* Form data parsing tests */
+    test_form_urlencoded();
+    test_form_multipart();
+    test_multipart_file_upload();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

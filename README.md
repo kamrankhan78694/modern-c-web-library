@@ -115,6 +115,58 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 router_use_middleware(router, logging_middleware);
 ```
 
+### Form Data Parsing
+
+The library automatically parses form data from POST requests based on the Content-Type header.
+
+#### URL-encoded Form Data
+
+```c
+void handle_form_submit(http_request_t *req, http_response_t *res) {
+    // Get form fields from URL-encoded data (application/x-www-form-urlencoded)
+    const char *username = http_request_get_form_field(req, "username");
+    const char *email = http_request_get_form_field(req, "email");
+    
+    json_value_t *json = json_object_create();
+    json_object_set(json, "username", json_string_create(username ? username : ""));
+    json_object_set(json, "email", json_string_create(email ? email : ""));
+    
+    http_response_send_json(res, HTTP_OK, json);
+    json_value_free(json);
+}
+```
+
+#### Multipart Form Data with File Uploads
+
+```c
+void handle_file_upload(http_request_t *req, http_response_t *res) {
+    // Get regular form fields
+    const char *description = http_request_get_form_field(req, "description");
+    
+    // Get uploaded file
+    const char *filename = NULL;
+    const char *content_type = NULL;
+    size_t file_size = 0;
+    const char *file_data = http_request_get_file(req, "file", 
+                                                   &filename, 
+                                                   &content_type, 
+                                                   &file_size);
+    
+    if (file_data) {
+        // Process file...
+        json_value_t *json = json_object_create();
+        json_object_set(json, "filename", json_string_create(filename));
+        json_object_set(json, "size", json_number_create((double)file_size));
+        json_object_set(json, "type", json_string_create(content_type));
+        
+        http_response_send_json(res, HTTP_OK, json);
+        json_value_free(json);
+    } else {
+        http_response_send_text(res, HTTP_BAD_REQUEST, "No file uploaded");
+    }
+}
+```
+
 ## API Reference
 
 ### HTTP Server
@@ -140,6 +192,11 @@ router_use_middleware(router, logging_middleware);
 - `char *json_stringify(json_value_t *value)` - Convert JSON to string
 - `void json_value_free(json_value_t *value)` - Free JSON value
 
+### Form Data
+
+- `const char *http_request_get_form_field(http_request_t *req, const char *key)` - Get form field value (supports both URL-encoded and multipart)
+- `const char *http_request_get_file(http_request_t *req, const char *field_name, const char **filename, const char **content_type, size_t *size)` - Get uploaded file from multipart request
+
 ## Project Structure
 
 ```
@@ -149,7 +206,8 @@ modern-c-web-library/
 ├── src/
 │   ├── http_server.c      # HTTP server implementation
 │   ├── router.c           # Router implementation
-│   └── json.c             # JSON parser/serializer
+│   ├── json.c             # JSON parser/serializer
+│   └── body_parser.c      # Form data parser (URL-encoded & multipart)
 ├── examples/
 │   └── simple_server.c    # Example HTTP server
 ├── tests/
@@ -217,7 +275,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Full async I/O support with event loops
 - [ ] WebSocket support
 - [ ] SSL/TLS support
-- [ ] Request body parsing (form data, multipart)
+- [x] Request body parsing (form data, multipart)
 - [ ] Cookie handling
 - [ ] Session management
 - [ ] Template engine

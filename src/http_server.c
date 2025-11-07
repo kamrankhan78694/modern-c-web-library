@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -26,13 +27,28 @@ typedef struct {
     http_server_t *server;
 } connection_t;
 
+/* Header storage */
+typedef struct header_entry {
+    char *key;
+    char *value;
+    struct header_entry *next;
+} header_entry_t;
+
+typedef struct {
+    header_entry_t *entries;
+} header_map_t;
+
 /* Forward declarations */
 static void *accept_connections(void *arg);
 static void *handle_connection(void *arg);
-static http_request_t *parse_request(const char *buffer);
+static http_request_t *parse_request(const char *buffer, size_t buffer_size);
 static void send_response(int client_fd, http_response_t *res);
 static void free_request(http_request_t *req);
 static void free_response(http_response_t *res);
+static header_map_t *header_map_create(void);
+static void header_map_set(header_map_t *map, const char *key, const char *value);
+static const char *header_map_get(header_map_t *map, const char *key);
+static void header_map_free(header_map_t *map);
 
 /* Create HTTP server */
 http_server_t *http_server_create(void) {
@@ -201,7 +217,7 @@ static void *handle_connection(void *arg) {
             }
         } else {
             /* Parse request */
-            http_request_t *req = parse_request(buffer);
+            http_request_t *req = parse_request(buffer, bytes_read);
             if (req) {
                 /* Create response */
                 http_response_t *res = (http_response_t *)calloc(1, sizeof(http_response_t));
@@ -224,6 +240,7 @@ static void *handle_connection(void *arg) {
                 free_request(req);
             }
         }
+    }
     
     close(conn->client_fd);
     free(conn);
@@ -232,17 +249,29 @@ static void *handle_connection(void *arg) {
 }
 
 /* Parse HTTP request */
-static http_request_t *parse_request(const char *buffer) {
+static http_request_t *parse_request(const char *buffer, size_t buffer_size) {
     http_request_t *req = (http_request_t *)calloc(1, sizeof(http_request_t));
     if (!req) {
         return NULL;
     }
     
+    const char *line_start = buffer;
+    const char *line_end;
+    
     /* Parse first line: METHOD /path HTTP/1.1 */
+    line_end = strstr(line_start, "\r\n");
+    if (!line_end) {
+        line_end = strstr(line_start, "\n");
+    }
+    if (!line_end) {
+        free(req);
+        return NULL;
+    }
+    
     char method_str[16];
     char path[1024];
     
-    if (sscanf(buffer, "%15s %1023s", method_str, path) != 2) {
+    if (sscanf(line_start, "%15s %1023s", method_str, path) != 2) {
         free(req);
         return NULL;
     }
@@ -271,10 +300,6 @@ static http_request_t *parse_request(const char *buffer) {
     if (query_start) {
         *query_start = '\0';
         req->query_string = strdup(query_start + 1);
-        if (!req->query_string) {
-            free(req);
-            return NULL;
-        }
     }
     
     req->path = strdup(path);
@@ -284,7 +309,93 @@ static http_request_t *parse_request(const char *buffer) {
         return NULL;
     }
     
-    /* TODO: Parse headers and body */
+    /* Parse headers */
+    req->headers = header_map_create();
+    if (!req->headers) {
+        free(req->path);
+        free(req->query_string);
+        free(req);
+        return NULL;
+    }
+    
+    /* Move to headers */
+    line_start = line_end;
+    if (*line_start == '\r') line_start++;
+    if (*line_start == '\n') line_start++;
+    
+    /* Parse header lines */
+    while (line_start < buffer + buffer_size) {
+        line_end = strstr(line_start, "\r\n");
+        if (!line_end) {
+            line_end = strstr(line_start, "\n");
+        }
+        if (!line_end) {
+            break;
+        }
+        
+        /* Empty line indicates end of headers */
+        if (line_end == line_start || (line_end == line_start + 1 && *line_start == '\r')) {
+            line_start = line_end;
+            if (*line_start == '\r') line_start++;
+            if (*line_start == '\n') line_start++;
+            break;
+        }
+        
+        /* Parse header: Key: Value */
+        const char *colon = memchr(line_start, ':', line_end - line_start);
+        if (colon) {
+            size_t key_len = colon - line_start;
+            const char *value_start = colon + 1;
+            
+            /* Skip leading whitespace in value */
+            while (value_start < line_end && (*value_start == ' ' || *value_start == '\t')) {
+                value_start++;
+            }
+            
+            size_t value_len = line_end - value_start;
+            
+            char *key = (char *)malloc(key_len + 1);
+            char *value = (char *)malloc(value_len + 1);
+            
+            if (key && value) {
+                memcpy(key, line_start, key_len);
+                key[key_len] = '\0';
+                memcpy(value, value_start, value_len);
+                value[value_len] = '\0';
+                
+                header_map_set((header_map_t *)req->headers, key, value);
+                free(key);
+                free(value);
+            } else {
+                free(key);
+                free(value);
+            }
+        }
+        
+        /* Move to next line */
+        line_start = line_end;
+        if (*line_start == '\r') line_start++;
+        if (*line_start == '\n') line_start++;
+    }
+    
+    /* Parse body if present */
+    const char *body_start = line_start;
+    size_t body_len = buffer + buffer_size - body_start;
+    
+    if (body_len > 0) {
+        req->body = (char *)malloc(body_len + 1);
+        if (req->body) {
+            memcpy(req->body, body_start, body_len);
+            req->body[body_len] = '\0';
+            req->body_length = body_len;
+            
+            /* Parse form data if Content-Type is set */
+            const char *content_type = header_map_get((header_map_t *)req->headers, "Content-Type");
+            if (content_type) {
+                http_request_parse_body(req, content_type);
+            }
+        }
+    }
     
     return req;
 }
@@ -342,6 +453,15 @@ static void free_request(http_request_t *req) {
     free(req->path);
     free(req->query_string);
     free(req->body);
+    
+    if (req->headers) {
+        header_map_free((header_map_t *)req->headers);
+    }
+    
+    if (req->form_data) {
+        http_request_free_form_data(req);
+    }
+    
     free(req);
 }
 
@@ -378,10 +498,10 @@ void http_response_set_header(http_response_t *res, const char *key, const char 
 }
 
 const char *http_request_get_header(http_request_t *req, const char *key) {
-    /* TODO: Implement header retrieval */
-    (void)req;
-    (void)key;
-    return NULL;
+    if (!req || !req->headers || !key) {
+        return NULL;
+    }
+    return header_map_get((header_map_t *)req->headers, key);
 }
 
 const char *http_request_get_param(http_request_t *req, const char *key) {
@@ -389,4 +509,70 @@ const char *http_request_get_param(http_request_t *req, const char *key) {
     (void)req;
     (void)key;
     return NULL;
+}
+
+/* Header map implementation */
+static header_map_t *header_map_create(void) {
+    header_map_t *map = (header_map_t *)calloc(1, sizeof(header_map_t));
+    return map;
+}
+
+static void header_map_set(header_map_t *map, const char *key, const char *value) {
+    if (!map || !key || !value) {
+        return;
+    }
+    
+    /* Check if key already exists */
+    header_entry_t *entry = map->entries;
+    while (entry) {
+        if (strcasecmp(entry->key, key) == 0) {
+            /* Update existing entry */
+            free(entry->value);
+            entry->value = strdup(value);
+            return;
+        }
+        entry = entry->next;
+    }
+    
+    /* Create new entry */
+    entry = (header_entry_t *)malloc(sizeof(header_entry_t));
+    if (entry) {
+        entry->key = strdup(key);
+        entry->value = strdup(value);
+        entry->next = map->entries;
+        map->entries = entry;
+    }
+}
+
+static const char *header_map_get(header_map_t *map, const char *key) {
+    if (!map || !key) {
+        return NULL;
+    }
+    
+    header_entry_t *entry = map->entries;
+    while (entry) {
+        if (strcasecmp(entry->key, key) == 0) {
+            return entry->value;
+        }
+        entry = entry->next;
+    }
+    
+    return NULL;
+}
+
+static void header_map_free(header_map_t *map) {
+    if (!map) {
+        return;
+    }
+    
+    header_entry_t *entry = map->entries;
+    while (entry) {
+        header_entry_t *next = entry->next;
+        free(entry->key);
+        free(entry->value);
+        free(entry);
+        entry = next;
+    }
+    
+    free(map);
 }
