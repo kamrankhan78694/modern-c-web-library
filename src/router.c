@@ -149,6 +149,12 @@ static bool match_route(const char *pattern, const char *path) {
     char *pattern_copy = strdup(pattern);
     char *path_copy = strdup(path);
     
+    if (!pattern_copy || !path_copy) {
+        free(pattern_copy);
+        free(path_copy);
+        return false;
+    }
+    
     char *pattern_token = strtok(pattern_copy, "/");
     char *path_token = strtok(path_copy, "/");
     

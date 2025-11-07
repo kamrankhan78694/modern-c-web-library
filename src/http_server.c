@@ -261,9 +261,18 @@ static http_request_t *parse_request(const char *buffer) {
     if (query_start) {
         *query_start = '\0';
         req->query_string = strdup(query_start + 1);
+        if (!req->query_string) {
+            free(req);
+            return NULL;
+        }
     }
     
     req->path = strdup(path);
+    if (!req->path) {
+        free(req->query_string);
+        free(req);
+        return NULL;
+    }
     
     /* TODO: Parse headers and body */
     
@@ -323,8 +332,12 @@ void http_response_send_text(http_response_t *res, http_status_t status, const c
     }
     
     res->status = status;
-    res->body_length = strlen(text);
     res->body = strdup(text);
+    if (res->body) {
+        res->body_length = strlen(text);
+    } else {
+        res->body_length = 0;
+    }
 }
 
 void http_response_set_header(http_response_t *res, const char *key, const char *value) {
