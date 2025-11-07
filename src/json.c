@@ -25,7 +25,7 @@ static json_value_t *parse_string(const char **str);
 static json_value_t *parse_number(const char **str);
 static json_value_t *parse_bool(const char **str);
 static json_value_t *parse_null(const char **str);
-static void stringify_value(json_value_t *value, char **output, size_t *capacity, size_t *length);
+static bool stringify_value(json_value_t *value, char **output, size_t *capacity, size_t *length);
 
 /* Parse JSON string */
 json_value_t *json_parse(const char *json_str) {
@@ -58,7 +58,21 @@ void json_object_set(json_value_t *obj, const char *key, json_value_t *value) {
         return;
     }
     
-    json_object_entry_t *entry = (json_object_entry_t *)malloc(sizeof(json_object_entry_t));
+    /* Check if key already exists and replace it */
+    json_object_entry_t *entry = (json_object_entry_t *)obj->data.object_val;
+    
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            /* Key exists, replace value */
+            json_value_free(entry->value);
+            entry->value = value;
+            return;
+        }
+        entry = entry->next;
+    }
+    
+    /* Key doesn't exist, add new entry */
+    entry = (json_object_entry_t *)malloc(sizeof(json_object_entry_t));
     if (!entry) {
         return;
     }
@@ -150,7 +164,11 @@ char *json_stringify(json_value_t *value) {
         return NULL;
     }
     
-    stringify_value(value, &output, &capacity, &length);
+    if (!stringify_value(value, &output, &capacity, &length)) {
+        /* stringify_value failed, free buffer */
+        free(output);
+        return NULL;
+    }
     
     return output;
 }
@@ -205,6 +223,10 @@ void http_response_send_json(http_response_t *res, http_status_t status, json_va
     char *json_str = json_stringify(json);
     if (json_str) {
         res->status = status;
+        /* Free existing body to prevent memory leak */
+        if (res->body) {
+            free(res->body);
+        }
         res->body = json_str;
         res->body_length = strlen(json_str);
     }
@@ -407,9 +429,9 @@ static json_value_t *parse_null(const char **str) {
     return NULL;
 }
 
-static void stringify_value(json_value_t *value, char **output, size_t *capacity, size_t *length) {
+static bool stringify_value(json_value_t *value, char **output, size_t *capacity, size_t *length) {
     if (!value || !output || !*output) {
-        return;
+        return false;
     }
     
     /* Ensure capacity */
@@ -417,7 +439,7 @@ static void stringify_value(json_value_t *value, char **output, size_t *capacity
         *capacity *= 2;
         char *new_output = (char *)realloc(*output, *capacity);
         if (!new_output) {
-            return;
+            return false;
         }
         *output = new_output;
     }
@@ -445,7 +467,7 @@ static void stringify_value(json_value_t *value, char **output, size_t *capacity
                     *capacity *= 2;
                     char *new_output = (char *)realloc(*output, *capacity);
                     if (!new_output) {
-                        return;
+                        return false;
                     }
                     *output = new_output;
                 }
@@ -485,7 +507,9 @@ static void stringify_value(json_value_t *value, char **output, size_t *capacity
                     *length += sprintf(*output + *length, ",");
                 }
                 *length += sprintf(*output + *length, "\"%s\":", entry->key);
-                stringify_value(entry->value, output, capacity, length);
+                if (!stringify_value(entry->value, output, capacity, length)) {
+                    return false;
+                }
                 entry = entry->next;
                 first = false;
             }
@@ -498,4 +522,6 @@ static void stringify_value(json_value_t *value, char **output, size_t *capacity
             *length += sprintf(*output + *length, "[]");
             break;
     }
+    
+    return true;
 }

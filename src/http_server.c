@@ -285,13 +285,33 @@ static void send_response(int client_fd, http_response_t *res) {
         return;
     }
     
+    /* Get status text based on status code */
+    const char *status_text = "OK";
+    switch (res->status) {
+        case HTTP_OK: status_text = "OK"; break;
+        case HTTP_CREATED: status_text = "Created"; break;
+        case HTTP_ACCEPTED: status_text = "Accepted"; break;
+        case HTTP_NO_CONTENT: status_text = "No Content"; break;
+        case HTTP_BAD_REQUEST: status_text = "Bad Request"; break;
+        case HTTP_UNAUTHORIZED: status_text = "Unauthorized"; break;
+        case HTTP_FORBIDDEN: status_text = "Forbidden"; break;
+        case HTTP_NOT_FOUND: status_text = "Not Found"; break;
+        case HTTP_METHOD_NOT_ALLOWED: status_text = "Method Not Allowed"; break;
+        case HTTP_INTERNAL_ERROR: status_text = "Internal Server Error"; break;
+        case HTTP_NOT_IMPLEMENTED: status_text = "Not Implemented"; break;
+        case HTTP_BAD_GATEWAY: status_text = "Bad Gateway"; break;
+        case HTTP_SERVICE_UNAVAILABLE: status_text = "Service Unavailable"; break;
+        default: status_text = "OK"; break;
+    }
+    
     char header[BUFFER_SIZE];
     int header_len = snprintf(header, BUFFER_SIZE,
-        "HTTP/1.1 %d OK\r\n"
+        "HTTP/1.1 %d %s\r\n"
         "Content-Length: %zu\r\n"
         "Connection: close\r\n"
         "\r\n",
         res->status,
+        status_text,
         res->body_length);
     
     send(client_fd, header, header_len, 0);

@@ -6,13 +6,12 @@
 
 /* Global server instance for signal handling */
 static http_server_t *g_server = NULL;
+static volatile sig_atomic_t shutdown_requested = 0;
 
 /* Signal handler for graceful shutdown */
 void signal_handler(int signum) {
-    printf("\nReceived signal %d, shutting down...\n", signum);
-    if (g_server) {
-        http_server_stop(g_server);
-    }
+    (void)signum;
+    shutdown_requested = 1;
 }
 
 /* Route handlers */
@@ -172,9 +171,13 @@ int main(int argc, char *argv[]) {
     }
     
     /* Wait for server to stop */
-    while (g_server) {
+    while (!shutdown_requested) {
         sleep(1);
     }
+    
+    /* Shutdown initiated */
+    printf("\nShutting down...\n");
+    http_server_stop(g_server);
     
     /* Cleanup */
     router_destroy(router);

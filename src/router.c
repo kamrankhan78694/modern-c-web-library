@@ -155,8 +155,11 @@ static bool match_route(const char *pattern, const char *path) {
         return false;
     }
     
-    char *pattern_token = strtok(pattern_copy, "/");
-    char *path_token = strtok(path_copy, "/");
+    /* Use strtok_r for thread-safe tokenization */
+    char *pattern_saveptr = NULL;
+    char *path_saveptr = NULL;
+    char *pattern_token = strtok_r(pattern_copy, "/", &pattern_saveptr);
+    char *path_token = strtok_r(path_copy, "/", &path_saveptr);
     
     bool match = true;
     
@@ -169,8 +172,8 @@ static bool match_route(const char *pattern, const char *path) {
             }
         }
         
-        pattern_token = strtok(NULL, "/");
-        path_token = strtok(NULL, "/");
+        pattern_token = strtok_r(NULL, "/", &pattern_saveptr);
+        path_token = strtok_r(NULL, "/", &path_saveptr);
     }
     
     /* Both must be exhausted for a match */
