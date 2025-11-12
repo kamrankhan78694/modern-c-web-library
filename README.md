@@ -301,7 +301,17 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! We appreciate your interest in improving the Modern C Web Library.
+
+Please read our [Contributing Guidelines](CONTRIBUTING.md) for details on:
+- Development setup and workflow
+- Coding standards and style guide
+- How to submit pull requests
+- Testing requirements
+
+Also review our [Code of Conduct](CODE_OF_CONDUCT.md) to understand our community expectations.
+
+For a list of planned features and enhancements, check out [TODO.md](TODO.md).
 
 ## Roadmap
 
@@ -315,6 +325,13 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Database connection pooling
 - [ ] Rate limiting
 - [ ] Static file serving
+
+## Community & Support
+
+- **Issues**: Found a bug or have a feature request? [Open an issue](https://github.com/kamrankhan78694/modern-c-web-library/issues)
+- **Discussions**: Have questions or want to discuss ideas? [Start a discussion](https://github.com/kamrankhan78694/modern-c-web-library/discussions)
+- **Contributing**: Check out [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines
+- **TODO List**: See [TODO.md](TODO.md) for planned features and ways to contribute
 
 ## Author
 
