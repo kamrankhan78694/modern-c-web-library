@@ -33,7 +33,7 @@ The entire project is written in **standard ISO C** (C99 or newer). This is a st
 - **C Only**: All source code, utilities, and tests must be written in C
 - **No Foreign Languages**: Python scripts, JavaScript wrappers, or any other language integrations are prohibited
 - **Standard C APIs**: Only standard C library functions and platform-specific system calls are permitted
-- **No Code Generation**: All code must be manually written C, not generated from other languages
+- **No Code Generation**: All code must be written in C, not generated from other languages
 
 **Why This Matters:**
 - **Maximum Portability**: Standard C runs on virtually any platform with a C compiler
