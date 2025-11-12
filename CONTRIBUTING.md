@@ -315,7 +315,6 @@ When adding new features, update:
 Contributors will be recognized in:
 - Git commit history
 - Release notes
-- Contributors section (if we add one)
 
 Thank you for contributing to Modern C Web Library! 🚀
 
