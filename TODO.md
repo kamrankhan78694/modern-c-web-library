@@ -19,7 +19,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Ping/pong support
   
 - [ ] 🎯 **SSL/TLS Support** - Secure HTTPS connections
-  - OpenSSL integration
+  - Custom TLS implementation in pure C
   - Certificate management
   - SNI support
   - TLS 1.2+ support
@@ -51,7 +51,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 - [ ] 🔧 **Session Management** - User session handling
   - In-memory session store
-  - Redis backend option
+  - File-based session persistence
   - Session encryption
   - Session expiration
 
@@ -89,20 +89,19 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Jinja2-style templates
   - Custom template syntax
 
-### Database Integration
+### Data Storage
 
-- [ ] 🔧 **Database Connection Pooling** - Efficient DB connections
-  - PostgreSQL support
-  - MySQL/MariaDB support
-  - SQLite support
-  - Connection lifecycle management
+- [ ] 🔧 **SQLite Integration** - Lightweight embedded database
+  - Direct SQLite C API usage (SQLite is public domain, not a dependency)
+  - Connection pooling
+  - Transaction management
   - Query builder helpers
 
-- [ ] 💡 **ORM Layer** - Object-relational mapping
-  - Model definitions
-  - Migrations
-  - Relationships
-  - Query API
+- [ ] 💡 **Custom File-Based Storage** - Simple data persistence
+  - Key-value store implementation
+  - Index structures
+  - Transaction log
+  - Query interface
 
 ### Security
 
@@ -136,8 +135,8 @@ This document tracks planned features, enhancements, and improvements for the Mo
 ### Performance
 
 - [ ] 🔧 **Caching Layer** - Performance optimization
-  - In-memory cache
-  - Redis integration
+  - In-memory cache implementation
+  - LRU eviction policy
   - Cache invalidation
   - TTL support
 
@@ -186,7 +185,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - WebSocket chat example
   - File upload example
   - Authentication example
-  - Database integration example
+  - Data persistence example
 
 - [ ] 🔧 **Tutorial Series** - Step-by-step guides
   - Getting started tutorial
@@ -234,7 +233,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - [ ] 💡 **Health Check Endpoint** - Service health monitoring
   - Readiness checks
   - Liveness checks
-  - Dependency checks
+  - System resource checks
 
 - [ ] 💡 **OpenTelemetry Support** - Distributed tracing
   - Trace context propagation

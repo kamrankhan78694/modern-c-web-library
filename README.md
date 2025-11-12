@@ -4,6 +4,46 @@ Clone from : https://github.com/kamrankhan78694/modern-c-web-library.git
 
 A modern AI-assisted C library for building efficient, scalable, and feature-rich web backends with support for routing, async I/O, middleware, and JSON handling.
 
+## Design Philosophy
+
+This project is a **pure ISO C implementation** (C99 or later) designed to demonstrate that modern web functionality can be achieved entirely in standard C, without relying on external dependencies or third-party libraries.
+
+**Core Principles:**
+- **Pure ISO C**: All code is written in standard C (C99 or newer) for maximum portability
+- **Zero External Dependencies**: No third-party libraries or frameworks are permitted
+- **Self-Sufficient**: The library implements all required functionality from the ground up
+- **Educational Foundation**: Serves as a reference implementation of modern C design patterns
+- **Minimal & Transparent**: Every line of code is part of the project—no hidden dependencies
+
+**Why Pure C?**
+This approach ensures that developers can:
+- Study and understand every aspect of the implementation
+- Trust the codebase as a minimal, foundational reference
+- Extend functionality without dependency conflicts
+- Deploy on any platform with a C compiler
+- Maintain full control over the entire codebase
+
+Contributors should align with this philosophy. Suggestions for external packages or higher-level language integrations will not be considered, as they contradict the project's core mission.
+
+## Language Policy
+
+The entire project is written in **standard ISO C** (C99 or newer). This is a strict policy to maintain the integrity of the project as a pure C foundation.
+
+**Language Requirements:**
+- **C Only**: All source code, utilities, and tests must be written in C
+- **No Foreign Languages**: Python scripts, JavaScript wrappers, or any other language integrations are prohibited
+- **Standard C APIs**: Only standard C library functions and platform-specific system calls are permitted
+- **No Code Generation**: All code must be manually written C, not generated from other languages
+
+**Why This Matters:**
+- **Maximum Portability**: Standard C runs on virtually any platform with a C compiler
+- **Transparency**: Every component is visible and understandable without learning multiple languages
+- **Foundational Clarity**: Demonstrates that complex systems can be built entirely in C
+- **Educational Value**: Provides a pure example of C craftsmanship and design
+- **No Hidden Magic**: What you see is what you get—no abstraction layers or runtime dependencies
+
+This policy emphasizes **craftsmanship in C**, not convenience through other ecosystems. The goal is to prove that modern web backends can be elegant, efficient, and maintainable using nothing but well-designed C code.
+
 ## Features
 
 - **HTTP Server**: Multi-threaded and async I/O HTTP server
@@ -294,6 +334,8 @@ make test
 - C11 compatible compiler (GCC, Clang, MSVC)
 - CMake 3.10 or higher
 - POSIX threads (Linux/macOS) or Windows threads
+
+**No External Dependencies**: This library uses only standard C library functions and platform-specific system APIs (sockets, threads, etc.). No third-party libraries are required or used.
 
 ## License
 
