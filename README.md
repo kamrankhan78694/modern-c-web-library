@@ -4,6 +4,15 @@ Clone from : https://github.com/kamrankhan78694/modern-c-web-library.git
 
 A modern AI-assisted C library for building efficient, scalable, and feature-rich web backends with support for routing, async I/O, middleware, and JSON handling.
 
+## Code Philosophy 
+```if working:
+    do nothing
+else:
+    adapt fast
+    if adaptation fails:
+        perish
+```
+
 ## Design Philosophy
 
 This project is a **pure ISO C implementation** (C99 or later) designed to demonstrate that modern web functionality can be achieved entirely in standard C, without relying on external dependencies or third-party libraries.
