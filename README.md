@@ -42,7 +42,7 @@ The entire project is written in **standard ISO C** (C99 or newer). This is a st
 - **Educational Value**: Provides a pure example of C craftsmanship and design
 - **No Hidden Magic**: What you see is what you get—no abstraction layers or runtime dependencies
 
-This policy emphasizes **craftsmanship in C**, not convenience through other ecosystems. The goal is to prove that modern web backends can be elegant, efficient, and maintainable using nothing but well-designed C code.
+This policy emphasizes **C craftsmanship** over convenience through other ecosystems. The goal is to prove that modern web backends can be elegant, efficient, and maintainable using nothing but well-designed C code.
 
 ## Features
 
