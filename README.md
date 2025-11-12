@@ -23,7 +23,7 @@ This approach ensures that developers can:
 - Deploy on any platform with a C compiler
 - Maintain full control over the entire codebase
 
-Contributors should align with this philosophy. Suggestions for external packages or higher-level language integrations will not be considered, as they contradict the project's core mission.
+Contributors should align with this philosophy. To maintain project integrity, suggestions involving external packages or higher-level language integrations cannot be accepted, as they conflict with the core mission of being a self-sufficient C library.
 
 ## Language Policy
 
