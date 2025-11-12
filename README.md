@@ -335,7 +335,7 @@ make test
 - CMake 3.10 or higher
 - POSIX threads (Linux/macOS) or Windows threads
 
-**No External Dependencies**: This library uses only standard C library functions and platform-specific system APIs (sockets, threads, etc.). No third-party libraries are required or used.
+**No External Dependencies**: This library uses only standard C library functions and platform-specific system libraries and APIs (such as POSIX threads, Windows API for sockets and threading, etc.). No third-party libraries are required or used.
 
 ## License
 
