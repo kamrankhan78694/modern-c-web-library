@@ -92,7 +92,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 ### Data Storage
 
 - [ ] 🔧 **SQLite Integration** - Lightweight embedded database
-  - Direct SQLite C API usage (SQLite is public domain, not a dependency)
+  - Direct SQLite C API usage (SQLite source code vendored/embedded, no external dependency)
   - Connection pooling
   - Transaction management
   - Query builder helpers
