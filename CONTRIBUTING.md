@@ -120,7 +120,7 @@ This project is committed to being a **pure C implementation** with zero externa
 
 ### C Style Guide
 
-- **C Standard**: Use C11 features (C99 minimum compatibility)
+- **C Standard**: Use C99 or newer features
 - **Indentation**: 4 spaces (no tabs)
 - **Line Length**: Keep lines under 100 characters when possible
 - **Braces**: K&R style (opening brace on same line)
