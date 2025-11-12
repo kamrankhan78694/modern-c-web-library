@@ -106,6 +106,29 @@ make test
 ./examples/async_server
 ```
 
+### Using Docker for Development (Optional)
+
+If you prefer not to install build tools locally, you can use Docker for a consistent development environment:
+
+```bash
+# Build the Docker image
+docker build -t modern-c-web-library .
+
+# Run verification (builds, tests, and validates)
+docker run --rm modern-c-web-library
+
+# Start development environment with docker-compose
+docker-compose run --rm weblib-dev
+
+# Inside the container:
+cd build
+cmake ..
+make
+make test
+```
+
+Docker automatically mounts your source code, so you can edit files locally and rebuild inside the container. See the [Docker Development Environment](#docker-development-environment) section in README.md for more details.
+
 ## Coding Standards
 
 ### Project Philosophy

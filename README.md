@@ -91,6 +91,70 @@ The example server will start on port 8080 (or your specified port) with the fol
 - `GET /users/:id` - User info with route parameters
 - `POST /api/data` - Echo posted data
 
+## Docker Development Environment
+
+For contributors who want a consistent, reproducible environment without installing dependencies locally, we provide a Docker setup.
+
+### Quick Start with Docker
+
+```bash
+# Build the Docker image
+docker build -t modern-c-web-library .
+
+# Run the container (executes build, tests, and verification)
+docker run --rm modern-c-web-library
+```
+
+### Development with Docker Compose
+
+For active development with live code editing:
+
+```bash
+# Start the development container
+docker-compose run --rm weblib-dev
+
+# Inside the container, rebuild after making changes:
+cd build
+cmake ..
+make
+make test
+```
+
+The `docker-compose.yml` configuration mounts your source code, so you can edit files locally and rebuild inside the container.
+
+### What's Included in the Docker Environment
+
+- **Ubuntu 22.04** base image
+- **Build tools**: gcc, g++, make, cmake, git
+- **Pre-built library**: The image builds and tests the library during image creation
+- **Verification script**: Automatically runs to validate the build
+
+### Docker Commands Reference
+
+```bash
+# Build the image
+docker build -t modern-c-web-library .
+
+# Run tests in container
+docker run --rm modern-c-web-library
+
+# Start interactive shell
+docker run --rm -it modern-c-web-library /bin/bash
+
+# Run example server (requires port mapping)
+docker run --rm -p 8080:8080 modern-c-web-library ./build/examples/simple_server
+
+# Use docker-compose for development
+docker-compose run --rm weblib-dev /bin/bash
+```
+
+### Benefits of Docker for Contributors
+
+- **No local dependencies**: No need to install gcc, cmake, or other tools
+- **Consistent environment**: Same build environment for all contributors
+- **Isolated testing**: Test changes without affecting your system
+- **CI/CD ready**: Same environment can be used in continuous integration
+
 ## Usage
 
 ### Basic HTTP Server
