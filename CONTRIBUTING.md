@@ -122,7 +122,7 @@ int http_server_create(uint16_t port) {
 // Bad
 typedef struct {
   int fd;
-  char* buffer;
+  char* buffer; // Incorrect: asterisk should be adjacent to variable name (should be 'char *buffer;')
 }Connection;
 
 int HTTPServerCreate(uint16_t Port){
