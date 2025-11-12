@@ -4,13 +4,26 @@ Clone from : https://github.com/kamrankhan78694/modern-c-web-library.git
 
 A modern AI-assisted C library for building efficient, scalable, and feature-rich web backends with support for routing, async I/O, middleware, and JSON handling.
 
-## Code Philosophy 
-```if working:
-    do nothing
-else:
-    adapt fast
-    if adaptation fails:
-        perish
+## // Philosophy: Life, Code, Evolution
+
+```
+if(system.working) {
+    // Classic wisdom
+    printf("If it ain't broke, don't fix it…\n");
+} else {
+    // Evolution kicks in
+    printf("Attempting adapt_fast()…\n");
+    if(adapt_fast()) {
+        printf("Adaptation succeeded. Survive(); Thrive();\n");
+    } else {
+        perish(); // The ultimate fallback
+    }
+}
+
+// adapt_fast() attempts changes.  
+// perish() triggers if adaptation fails.  
+// Life, like code, only preserves what works—and tests what survives.
+
 ```
 
 ## Design Philosophy
