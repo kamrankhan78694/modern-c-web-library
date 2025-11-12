@@ -19,6 +19,22 @@ This project adheres to a Code of Conduct that all contributors are expected to 
 
 ## How Can I Contribute?
 
+### Understanding Project Philosophy
+
+Before contributing, please understand that this project follows a **strict pure C philosophy**:
+
+- **No External Dependencies**: This project does not use any third-party libraries or frameworks
+- **C Language Only**: All code must be written in standard ISO C (C99 or newer)
+- **No Foreign Languages**: Python scripts, JavaScript, or any other language integrations are prohibited
+- **Self-Sufficient Implementation**: We implement all functionality from scratch in C
+
+**Dependency Proposals**: Suggestions to add external libraries, frameworks, or non-C code will not be accepted. This is a fundamental design principle, not a limitation to be worked around. If you believe a dependency is necessary, first consider:
+1. Can this be implemented in pure C within the project?
+2. Does it truly align with the project's mission of being a foundational, self-sufficient C library?
+3. Would it compromise portability, transparency, or educational value?
+
+In nearly all cases, the answer will be to implement the feature in C rather than adding a dependency.
+
 ### Reporting Bugs
 
 Before creating bug reports, please check existing issues to avoid duplicates. When creating a bug report, include:
@@ -35,8 +51,10 @@ Enhancement suggestions are welcome! Please provide:
 
 - **Clear description** of the enhancement
 - **Use cases** and examples
-- **Potential implementation approach** if you have ideas
+- **Pure C implementation approach** - explain how it can be implemented without external dependencies
 - **Impact on existing functionality**
+
+**Important**: Enhancement suggestions that involve external libraries, frameworks, or non-C code will be closed. All enhancements must be implementable in pure C using only standard library functions and platform-specific system APIs.
 
 ### Contributing Code
 
@@ -56,6 +74,7 @@ Enhancement suggestions are welcome! Please provide:
 - C11 compatible compiler (GCC 7+, Clang 5+, or MSVC 2019+)
 - CMake 3.10 or higher
 - Git
+- **No other dependencies** - this project uses only standard C and platform APIs
 
 ### Building the Project
 
@@ -89,9 +108,19 @@ make test
 
 ## Coding Standards
 
+### Project Philosophy
+
+This project is committed to being a **pure C implementation** with zero external dependencies:
+
+- **Pure ISO C**: Use only C99 or newer standard C features
+- **No External Libraries**: Do not suggest or use third-party libraries (e.g., no OpenSSL, no libcurl, no external JSON libraries)
+- **Platform APIs Only**: System calls and platform-specific APIs (POSIX, Windows API) are acceptable where necessary for functionality
+- **Self-Contained**: Implement all features within the project using C
+- **Educational Code**: Write clear, understandable C that serves as a learning resource
+
 ### C Style Guide
 
-- **C Standard**: Use C11 features
+- **C Standard**: Use C99 or newer features
 - **Indentation**: 4 spaces (no tabs)
 - **Line Length**: Keep lines under 100 characters when possible
 - **Braces**: K&R style (opening brace on same line)
@@ -100,6 +129,14 @@ make test
   - Types: `snake_case_t` suffix (e.g., `http_server_t`)
   - Constants/Macros: `UPPER_SNAKE_CASE` (e.g., `HTTP_OK`)
   - Private functions: Prefix with `_` (e.g., `_internal_helper`)
+
+### Language Requirements
+
+- **C Only**: All source files must be `.c` and `.h` files written in C
+- **No Scripts**: Do not add Python, shell, JavaScript, or any other language scripts
+- **No Wrappers**: Do not create language bindings or wrappers for other languages
+- **No Code Generators**: Do not use tools that generate C code from other languages
+- **Build System**: CMake is acceptable as a build system (not considered a dependency)
 
 ### Example Code Style
 
@@ -139,6 +176,8 @@ int HTTPServerCreate(uint16_t Port){
 - **Thread safety**: Document thread-safety guarantees
 - **Comments**: Use comments for complex logic, not obvious code
 - **Header guards**: Use `#ifndef` guards in header files
+- **No External Dependencies**: Never introduce dependencies on third-party libraries
+- **Pure C Implementation**: Implement features in C, not through external tools or languages
 
 ## Branching Strategy
 
@@ -309,6 +348,18 @@ When adding new features, update:
 - **Questions**: Open a GitHub issue with the `question` label
 - **Discussions**: Use GitHub Discussions for general topics
 - **Security Issues**: Contact the maintainer directly via GitHub ([@kamrankhan78694](https://github.com/kamrankhan78694))
+
+## Why Pure C?
+
+This project demonstrates that modern web functionality—including async I/O, routing, middleware, and JSON handling—can be elegantly implemented in pure C without external dependencies. By maintaining this discipline, we:
+
+- **Ensure Portability**: Code runs anywhere with a C compiler
+- **Maintain Transparency**: Every line of code is visible and auditable
+- **Provide Educational Value**: Developers can study foundational implementations
+- **Avoid Dependency Hell**: No version conflicts, no supply chain risks
+- **Emphasize Craftsmanship**: Show what's possible with well-designed C code
+
+This is not a limitation—it's a commitment to excellence in C programming.
 
 ## Recognition
 
