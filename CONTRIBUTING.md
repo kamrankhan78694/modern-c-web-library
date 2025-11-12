@@ -308,7 +308,7 @@ When adding new features, update:
 
 - **Questions**: Open a GitHub issue with the `question` label
 - **Discussions**: Use GitHub Discussions for general topics
-- **Security Issues**: Email maintainer directly (see SECURITY.md)
+- **Security Issues**: Contact the maintainer directly via GitHub ([@kamrankhan78694](https://github.com/kamrankhan78694))
 
 ## Recognition
 
