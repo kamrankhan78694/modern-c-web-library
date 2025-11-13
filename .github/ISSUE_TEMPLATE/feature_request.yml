@@ -1,0 +1,53 @@
+name: Feature request
+description: Propose an enhancement aligned with the pure C design
+labels: [enhancement]
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! Please ensure the proposal fits the project philosophy:
+        pure ISO C (C99/C11), zero external runtime dependencies, and cross‑platform support.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and motivation
+      description: What problem does this solve? Who benefits?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: High‑level design, data structures, and control flow
+  - type: textarea
+    id: api
+    attributes:
+      label: Public API changes (if any)
+      description: Proposed signatures in `include/weblib.h`
+      placeholder: |
+        // Example
+        int http_server_set_limit(http_server_t *s, size_t n);
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and considerations
+      description: Pure C only, portability, static limits, memory ownership, performance
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: testing
+    attributes:
+      label: Testing strategy
+      description: Unit/integration tests in `tests/test_weblib.c`, examples if user‑facing
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Proposal checks
+      options:
+        - label: Fits pure ISO C (C99/C11) with zero external dependencies
+        - label: Accounts for Linux/macOS/Windows with `#ifdef` guards where needed
+        - label: Defines clear ownership and cleanup for all allocations
+        - label: Includes plan for tests and documentation updates

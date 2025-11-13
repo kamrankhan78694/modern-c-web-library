@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerabilities
+    url: https://github.com/kamrankhan78694/modern-c-web-library/security/advisories/new
+    about: Please report security issues privately via GitHub Security Advisories.
+  - name: Discussions
+    url: https://github.com/kamrankhan78694/modern-c-web-library/discussions
+    about: Ask questions and discuss ideas before filing features.
+  - name: Wiki
+    url: https://github.com/kamrankhan78694/modern-c-web-library/wiki
+    about: Project overview, architecture, and guidance.

@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a problem with the Modern C Web Library
+labels: [bug]
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve the project! Please provide as much detail as possible.
+        This project is pure ISO C (C99/C11) with zero external runtime dependencies.
+  - type: input
+    id: version
+    attributes:
+      label: Version / Commit
+      description: Latest tag or commit SHA you tested
+      placeholder: e.g., v0.1.0 or 1a2b3c4
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: compiler
+    attributes:
+      label: Compiler and version
+      placeholder: e.g., gcc 13.2, clang 17, MSVC 19.3
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Operating mode
+      options:
+        - Threaded
+        - Async (event loop)
+        - Both / Not sure
+  - type: textarea
+    id: build
+    attributes:
+      label: Build method
+      description: CMake flags, Docker script used, and steps
+      placeholder: |
+        mkdir build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Debug
+        make
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps/code to reproduce the issue
+      placeholder: 1. … 2. … 3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+  - type: textarea
+    id: http
+    attributes:
+      label: HTTP sample (if applicable)
+      description: Raw request/response causing issues (headers/body)
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and diagnostics
+      description: Crashes, sanitizer output (ASan/UBSan), valgrind, stack traces
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment details
+      description: OS version, kernel, terminal/shell, anything relevant
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submit checks
+      options:
+        - label: I reproduced this on the latest main branch
+        - label: I attached minimal steps/code and logs
+        - label: I verified this is not a configuration issue in my app
