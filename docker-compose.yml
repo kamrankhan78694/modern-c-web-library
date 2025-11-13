@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # Production-like deployment using async server
+  weblib-async:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: modern-c-weblib-async
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    networks:
+      - weblib-network
+    # Uncomment to limit resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1.0'
+    #       memory: 512M
+
+  # Threaded server (alternative)
+  weblib-threaded:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: modern-c-weblib-threaded
+    command: ["/app/simple_server", "8080"]
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+    networks:
+      - weblib-network
+    profiles:
+      - threaded
+
+  # Development container with volume mount
+  weblib-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: modern-c-weblib-dev
+    volumes:
+      - .:/workspace
+    ports:
+      - "8082:8080"
+    networks:
+      - weblib-network
+    stdin_open: true
+    tty: true
+    profiles:
+      - dev
+
+networks:
+  weblib-network:
+    driver: bridge

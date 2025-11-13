@@ -1,0 +1,36 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.dylib
+
+# Git
+.git/
+.gitignore
+.github/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation (include in image but not needed for build cache)
+# README.md
+# TODO.md
+# CONTRIBUTING.md
+
+# Test outputs
+test_results/
+*.log
+
+# macOS
+.DS_Store
+
+# Coverage reports
+coverage/
+*.gcov
+*.gcda
+*.gcno
