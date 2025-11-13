@@ -119,10 +119,21 @@ docker run --rm modern-c-web-library
 
 # Start development environment with docker-compose
 docker-compose run --rm weblib-dev
+```
 
-# Inside the container:
-cd build
+**First-time setup inside the container:**
+
+```bash
+mkdir -p build && cd build
 cmake ..
+make
+make test
+```
+
+**For subsequent rebuilds after code changes:**
+
+```bash
+cd build
 make
 make test
 ```

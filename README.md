@@ -112,10 +112,21 @@ For active development with live code editing:
 ```bash
 # Start the development container
 docker-compose run --rm weblib-dev
+```
 
-# Inside the container, rebuild after making changes:
-cd build
+**First-time setup inside the container (when /workspace/build is empty):**
+
+```bash
+mkdir -p build && cd build
 cmake ..
+make
+make test
+```
+
+**For subsequent rebuilds after code changes:**
+
+```bash
+cd build
 make
 make test
 ```
