@@ -1,0 +1,33 @@
+name: Documentation update
+description: Improve wiki/README/examples or clarify APIs
+labels: [documentation]
+title: "[Docs]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us improve the documentation. Link to the affected pages/sections.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Files/pages affected and sections to update
+      placeholder: README.md (Quick Start), wiki/Home (Architecture), examples/simple_server.c
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary of changes
+    validations:
+      required: true
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      description: Why this improves clarity or correctness
+  - type: textarea
+    id: links
+    attributes:
+      label: Related links
+      description: Issues/PRs, specs, screenshots, or examples
