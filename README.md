@@ -4,6 +4,28 @@ Clone from : https://github.com/kamrankhan78694/modern-c-web-library.git
 
 A modern AI-assisted C library for building efficient, scalable, and feature-rich web backends with support for routing, async I/O, middleware, and JSON handling.
 
+## // Philosophy: Life, Code, Evolution
+
+```
+if(system.working) {
+    // Classic wisdom
+    printf("If it ain't broke, don't fix it…\n");
+} else {
+    // Evolution kicks in
+    printf("Attempting adapt_fast()…\n");
+    if(adapt_fast()) {
+        printf("Adaptation succeeded. Survive(); Thrive();\n");
+    } else {
+        perish(); // The ultimate fallback
+    }
+}
+
+// adapt_fast() attempts changes.  
+// perish() triggers if adaptation fails.  
+// Life, like code, only preserves what works—and tests what survives.
+
+```
+
 ## Design Philosophy
 
 This project is a **pure ISO C implementation** (C99 or later) designed to demonstrate that modern web functionality can be achieved entirely in standard C, without relying on external dependencies or third-party libraries.
@@ -57,7 +79,30 @@ This policy emphasizes **C craftsmanship** over convenience through other ecosys
 
 ## Quick Start
 
-### Building the Library
+### Option 1: Using Docker (Recommended for Contributors)
+
+Docker provides a consistent build environment without installing dependencies:
+
+```bash
+# Clone the repository
+git clone https://github.com/kamrankhan78694/modern-c-web-library.git
+cd modern-c-web-library
+
+# Build and run tests
+./docker-run.sh test
+
+# Start development environment
+./docker-run.sh dev
+
+# Run the server
+./docker-run.sh async
+```
+
+See [DOCKER.md](DOCKER.md) for complete Docker documentation.
+
+### Option 2: Building Locally
+
+#### Building the Library
 
 ```bash
 # Create build directory
@@ -73,7 +118,7 @@ make
 make test
 ```
 
-### Running the Example Server
+#### Running the Example Server
 
 ```bash
 # From build directory
@@ -368,7 +413,26 @@ modern-c-web-library/
 
 ## Building on Different Platforms
 
-### Linux/macOS
+### Using Docker (All Platforms)
+
+Docker provides the easiest way to build and test on any platform:
+
+```bash
+# Build and test
+./docker-run.sh test
+
+# Development environment
+./docker-run.sh dev
+
+# Run server
+./docker-run.sh async
+```
+
+See [DOCKER.md](DOCKER.md) for detailed Docker usage.
+
+### Native Builds
+
+#### Linux/macOS
 
 ```bash
 mkdir build && cd build
@@ -376,7 +440,7 @@ cmake ..
 make
 ```
 
-### Windows (Visual Studio)
+#### Windows (Visual Studio)
 
 ```bash
 mkdir build && cd build
@@ -384,7 +448,7 @@ cmake .. -G "Visual Studio 16 2019"
 cmake --build .
 ```
 
-### Windows (MinGW)
+#### Windows (MinGW)
 
 ```bash
 mkdir build && cd build
@@ -393,6 +457,18 @@ mingw32-make
 ```
 
 ## Testing
+
+### Using Docker (Recommended)
+
+```bash
+# Run all tests in Docker
+./docker-run.sh test
+
+# Or with docker-compose
+docker-compose --profile dev run --rm weblib-dev /bin/bash -c "cd build && make test"
+```
+
+### Native Testing
 
 Run the test suite:
 
@@ -404,13 +480,48 @@ make test
 ./tests/test_weblib
 ```
 
+### Memory Leak Testing with Valgrind (Docker)
+
+```bash
+# Start dev container
+./docker-run.sh dev
+
+# Inside container
+cd build
+valgrind --leak-check=full ./tests/test_weblib
+```
+
 ## Requirements
 
+### For Docker Users (Recommended)
+- Docker Desktop (Windows/macOS) or Docker Engine (Linux)
+- Git
+- **No other dependencies needed!**
+
+### For Native Builds
 - C11 compatible compiler (GCC, Clang, MSVC)
 - CMake 3.10 or higher
 - POSIX threads (Linux/macOS) or Windows threads
 
 **No External Dependencies**: This library uses only standard C library functions and platform-specific system libraries and APIs (such as POSIX threads, Windows API for sockets and threading, etc.). No third-party libraries are required or used.
+
+## Docker Support
+
+The project includes full Docker support for development and deployment:
+
+- **Development Environment**: Full toolchain with GCC, CMake, GDB, Valgrind
+- **Production Image**: Minimal runtime image (~150MB)
+- **Easy Testing**: Run tests with a single command
+- **Consistent Builds**: Same environment for all contributors
+
+**Quick Start:**
+```bash
+./docker-run.sh test    # Run tests
+./docker-run.sh dev     # Start development container
+./docker-run.sh async   # Run server
+```
+
+**Documentation**: See [DOCKER.md](DOCKER.md) for complete Docker guide.
 
 ## License
 
@@ -419,6 +530,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Contributing
 
 Contributions are welcome! We appreciate your interest in improving the Modern C Web Library.
+
+**Quick Start for Contributors:**
+```bash
+# Using Docker (recommended)
+git clone https://github.com/kamrankhan78694/modern-c-web-library.git
+cd modern-c-web-library
+./docker-run.sh test    # Verify everything works
+./docker-run.sh dev     # Start development environment
+```
 
 Please read our [Contributing Guidelines](CONTRIBUTING.md) for details on:
 - Development setup and workflow

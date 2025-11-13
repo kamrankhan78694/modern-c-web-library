@@ -37,6 +37,22 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Request/Response Handling
 
+- [ ] 🎯 **Complete HTTP Parser** - Fully parse and validate incoming requests
+  - Method support beyond GET with explicit error responses
+  - Header parsing, canonicalization, and lookup APIs
+  - Content-Length and chunked body handling with size safeguards
+  - Clear rejection of malformed or oversized payloads
+
+- [ ] 🎯 **Header & Parameter Storage** - Back middleware and handlers with real data
+  - Implement request header access and mutation
+  - Persist route parameters for `/path/:id` patterns
+  - Support response header setting and serialization
+
+- [ ] 🎯 **Robust Connection Handling** - Hardening for sync and async servers
+  - Looping reads/writes with back-pressure awareness
+  - HTTP/1.1 keep-alive negotiation and cleanup
+  - Deterministic connection teardown on timeouts and errors
+
 - [ ] 🎯 **Request Body Parsing** - Handle different content types
   - URL-encoded form data
   - Multipart form data
@@ -60,6 +76,13 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - deflate compression
   - brotli compression
   - Automatic content negotiation
+
+### JSON Handling
+
+- [ ] 🎯 **Complete JSON Support** - Finish parser/serializer edge cases
+  - Implement array parsing and serialization
+  - Escape control characters and Unicode consistently
+  - Harden number parsing and error signaling
 
 ### Static Content
 
@@ -132,6 +155,13 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Sanitization functions
   - Type checking
 
+### Server Lifecycle
+
+- [ ] 🎯 **Graceful Shutdown & Thread Management** - Reliable server teardown
+  - Close listening sockets before joining worker threads
+  - Introduce bounded thread pool or async-only execution mode
+  - Platform-specific guards for POSIX-only paths vs. Windows
+
 ### Performance
 
 - [ ] 🔧 **Caching Layer** - Performance optimization
@@ -194,6 +224,11 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Production deployment
 
 ### Testing & Quality
+
+- [ ] 🎯 **Networking Integration Tests** - Exercise live socket workflows
+  - Automated sync/async request regression suite
+  - Coverage for malformed input, timeouts, and partial I/O
+  - Baseline load and concurrency smoke tests
 
 - [ ] 🔧 **Comprehensive Test Suite** - Expand test coverage
   - Unit tests for all modules

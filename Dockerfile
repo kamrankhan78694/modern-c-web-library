@@ -1,37 +1,42 @@
-# Modern C Web Library - Development Environment
-# This Dockerfile provides a consistent environment for building, testing, and contributing
-# to the Modern C Web Library.
+# Multi-stage Dockerfile for Modern C Web Library
 
-FROM ubuntu:22.04
+# Stage 1: Builder
+FROM gcc:11 as builder
 
-# Prevent interactive prompts during package installation
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install build tools and dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    make \
     cmake \
-    git \
+    make \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
-WORKDIR /workspace
+WORKDIR /build
 
-# Copy project files
+# Copy source code
 COPY . .
 
-# Ensure verification script is executable
-RUN chmod +x /workspace/docker-verify.sh
-
-# Build the library
-RUN mkdir -p build && \
-    cd build && \
+# Build the library and examples
+RUN mkdir -p build && cd build && \
     cmake .. && \
     make
 
-# Run tests to verify the build
-RUN cd build && make test
+# Stage 2: Runtime
+FROM debian:bullseye-slim
 
-# Default command: Run verification script
-CMD ["/workspace/docker-verify.sh"]
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libpthread-stubs0-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy built executables from builder stage
+COPY --from=builder /build/build/examples/simple_server /app/simple_server
+COPY --from=builder /build/build/examples/async_server /app/async_server
+
+# Expose default port
+EXPOSE 8080
+
+# Default to running the async server (better for production)
+CMD ["/app/async_server", "8080"]
