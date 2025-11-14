@@ -70,7 +70,11 @@ _codeql_build_dir/
 _codeql_detected_source_root
 
 # IDE files
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/c_cpp_properties.json
+!.vscode/extensions.json
 .idea/
 *.swp
 *.swo

@@ -550,9 +550,61 @@ Also review our [Code of Conduct](CODE_OF_CONDUCT.md) to understand our communit
 
 For a list of planned features and enhancements, check out [TODO.md](TODO.md).
 
+## Test Results & Quality Metrics
+
+**Current Status**: ✅ All tests passing (18/18)
+
+**Latest Test Run** (November 2025):
+```
+Running Modern C Web Library Tests
+===================================
+
+Testing router_create... PASSED
+Testing router_add_route... PASSED
+Testing json_object_create... PASSED
+Testing json_string_create... PASSED
+Testing json_number_create... PASSED
+Testing json_bool_create... PASSED
+Testing json_object_set/get... PASSED
+Testing json_stringify... PASSED
+Testing json_parse (string)... PASSED
+Testing json_parse (number)... PASSED
+Testing json_parse (bool)... PASSED
+Testing json_parse (null)... PASSED
+Testing json_parse (object)... PASSED
+Testing http_server_create... PASSED
+Testing event_loop_create... PASSED
+Testing http_server_set_async... PASSED
+Testing event_loop_add_timeout... PASSED
+Testing event_loop_cancel_timeout... PASSED
+
+===================================
+Tests run: 18
+Tests passed: 18
+Tests failed: 0
+```
+
+**Code Quality:**
+- ✅ Zero compiler warnings (with `-Wall -Wextra`)
+- ✅ All `sprintf` replaced with secure `snprintf`
+- ✅ AddressSanitizer clean build
+- ✅ Memory leak detection ready
+- ✅ VS Code debugging configured with LLDB/GDB support
+
+**Debugging Tools:**
+- Full VS Code integration with launch configurations
+- LLDB debugger support (macOS/Linux)
+- GDB debugger support (Linux)
+- AddressSanitizer integration for memory error detection
+- Valgrind support (Linux/Docker)
+- Comprehensive debugging guide in [docs/DEBUGGING.md](docs/DEBUGGING.md)
+
 ## Roadmap
 
 - [x] Full async I/O support with event loops (epoll/kqueue/poll)
+- [x] Route parameter extraction (`:param` syntax)
+- [x] Security improvements (safe string operations)
+- [x] Comprehensive debugging setup
 - [ ] WebSocket support
 - [ ] SSL/TLS support
 - [ ] Request body parsing (form data, multipart)

@@ -1,0 +1,48 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cmake-configure-debug",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "-S", "${workspaceFolder}",
+        "-B", "${workspaceFolder}/build",
+        "-DCMAKE_BUILD_TYPE=Debug"
+      ],
+      "problemMatcher": ["$gcc"],
+      "group": "build"
+    },
+    {
+      "label": "cmake-build-debug",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build", "${workspaceFolder}/build",
+        "--config", "Debug",
+        "-j"
+      ],
+      "dependsOn": ["cmake-configure-debug"],
+      "problemMatcher": ["$gcc"],
+      "group": "build"
+    },
+    {
+      "label": "run-tests",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/tests/test_weblib",
+      "dependsOn": ["cmake-build-debug"],
+      "problemMatcher": ["$gcc"],
+      "group": "test"
+    },
+    {
+      "label": "docker-run-tests",
+      "type": "shell",
+      "command": "./docker-run.sh test",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": ["$gcc"],
+      "group": "test"
+    }
+  ]
+}

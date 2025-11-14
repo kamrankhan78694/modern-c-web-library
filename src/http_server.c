@@ -714,7 +714,7 @@ static int serialize_response(http_response_t *res, bool keep_alive, char **head
             header_buf = tmp;
             header_capacity = new_cap;
         }
-        header_len += (size_t)sprintf(header_buf + header_len, "%s: %s\r\n", node->raw_name, node->value);
+        header_len += (size_t)snprintf(header_buf + header_len, header_capacity - header_len, "%s: %s\r\n", node->raw_name, node->value);
     }
 
     if (header_len + 2 >= header_capacity) {
