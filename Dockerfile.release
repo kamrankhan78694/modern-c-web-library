@@ -1,0 +1,82 @@
+# Production Release Dockerfile for Modern C Web Library v0.3.0
+# Multi-stage build for optimized runtime image
+
+# Stage 1: Builder
+FROM gcc:11 AS builder
+
+LABEL org.opencontainers.image.source="https://github.com/kamrankhan78694/modern-c-web-library"
+LABEL org.opencontainers.image.description="Modern C Web Library - Production-ready HTTP and WebSocket server"
+LABEL org.opencontainers.image.version="0.3.0"
+LABEL org.opencontainers.image.licenses="MIT"
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    cmake \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /build
+
+# Copy source code
+COPY CMakeLists.txt LICENSE README.md ./
+COPY include/ include/
+COPY src/ src/
+COPY examples/ examples/
+
+# Build the library, examples, and tests
+RUN mkdir -p build && cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release .. && \
+    make && \
+    make test
+
+# Stage 2: Runtime
+FROM debian:bullseye-slim
+
+LABEL org.opencontainers.image.source="https://github.com/kamrankhan78694/modern-c-web-library"
+LABEL org.opencontainers.image.description="Modern C Web Library - Production-ready HTTP and WebSocket server"
+LABEL org.opencontainers.image.version="0.3.0"
+LABEL org.opencontainers.image.licenses="MIT"
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN useradd -m -u 1000 -s /bin/bash weblib && \
+    mkdir -p /app && \
+    chown -R weblib:weblib /app
+
+# Set working directory
+WORKDIR /app
+
+# Copy built executables from builder stage
+COPY --from=builder --chown=weblib:weblib /build/build/examples/simple_server ./simple_server
+COPY --from=builder --chown=weblib:weblib /build/build/examples/async_server ./async_server
+COPY --from=builder --chown=weblib:weblib /build/build/examples/websocket_echo_server ./websocket_echo_server
+COPY --from=builder --chown=weblib:weblib /build/README.md ./README.md
+COPY --from=builder --chown=weblib:weblib /build/LICENSE ./LICENSE
+
+# Switch to non-root user
+USER weblib
+
+# Expose default port
+EXPOSE 8080
+
+# Set environment variables
+ENV PORT=8080
+ENV SERVER_TYPE=websocket
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD pidof websocket_echo_server || pidof async_server || pidof simple_server || exit 1
+
+# Default to running the WebSocket echo server (v0.3.0 flagship feature)
+CMD if [ "$SERVER_TYPE" = "websocket" ]; then \
+        exec ./websocket_echo_server ${PORT}; \
+    elif [ "$SERVER_TYPE" = "async" ]; then \
+        exec ./async_server ${PORT}; \
+    else \
+        exec ./simple_server ${PORT}; \
+    fi
