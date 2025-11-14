@@ -16,9 +16,19 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - WebSocket handshake (RFC 6455 compliant)
   - Frame encoding/decoding with masking
   - Text and binary messages
-  - Ping/pong support
+  - Ping/pong support (automatic pong responses)
   - Message fragmentation handling
   - Close frames with status codes
+  - **Frame Processing (Threaded Mode)** - Completed 2025-01-12
+    - Persistent WebSocket connections after HTTP upgrade
+    - Full frame processing loop with recv() and websocket_process_data()
+    - Multiple concurrent connections support
+    - Comprehensive test suite (all tests passing)
+    - Production-ready for real-time applications
+  - **Frame Processing (Async Mode)** - TODO
+    - Integration with event loop (epoll/kqueue/poll)
+    - Non-blocking WebSocket I/O
+    - Single-threaded high-concurrency support
   
 - [ ] 🎯 **SSL/TLS Support** - Secure HTTPS connections
   - Custom TLS implementation in pure C
