@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /build
 
 # Copy project files
-COPY CMakeLists.txt ./
+COPY CMakeLists.txt LICENSE README.md ./
 COPY include/ include/
 COPY src/ src/
 COPY examples/ examples/
