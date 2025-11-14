@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Tests (LLDB)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/tests/test_weblib",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "cmake-build-debug",
+      "env": {
+        "ASAN_OPTIONS": "detect_leaks=1"
+      }
+    },
+    {
+      "name": "Debug Simple Server (LLDB)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/examples/simple_server",
+      "args": ["8080"],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "cmake-build-debug"
+    }
+  ]
+}

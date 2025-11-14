@@ -1,0 +1,18 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "macOS",
+      "includePath": [
+        "${workspaceFolder}/include",
+        "${workspaceFolder}/src"
+      ],
+      "defines": [
+        "_DEBUG"
+      ],
+      "compilerPath": "/usr/bin/clang",
+      "cStandard": "c11",
+      "intelliSenseMode": "macos-clang-x64"
+    }
+  ]
+}

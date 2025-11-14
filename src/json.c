@@ -446,20 +446,20 @@ static bool stringify_value(json_value_t *value, char **output, size_t *capacity
     
     switch (value->type) {
         case JSON_NULL:
-            *length += sprintf(*output + *length, "null");
+            *length += snprintf(*output + *length, *capacity - *length, "null");
             break;
             
         case JSON_BOOL:
-            *length += sprintf(*output + *length, "%s", value->data.bool_val ? "true" : "false");
+            *length += snprintf(*output + *length, *capacity - *length, "%s", value->data.bool_val ? "true" : "false");
             break;
             
         case JSON_NUMBER:
-            *length += sprintf(*output + *length, "%g", value->data.number_val);
+            *length += snprintf(*output + *length, *capacity - *length, "%g", value->data.number_val);
             break;
             
         case JSON_STRING: {
             /* Simple escaping for JSON strings */
-            *length += sprintf(*output + *length, "\"");
+            *length += snprintf(*output + *length, *capacity - *length, "\"");
             const char *str = value->data.string_val;
             while (*str) {
                 /* Ensure enough space for escaped character */
@@ -474,19 +474,19 @@ static bool stringify_value(json_value_t *value, char **output, size_t *capacity
                 
                 switch (*str) {
                     case '"':
-                        *length += sprintf(*output + *length, "\\\"");
+                        *length += snprintf(*output + *length, *capacity - *length, "\\\"");
                         break;
                     case '\\':
-                        *length += sprintf(*output + *length, "\\\\");
+                        *length += snprintf(*output + *length, *capacity - *length, "\\\\");
                         break;
                     case '\n':
-                        *length += sprintf(*output + *length, "\\n");
+                        *length += snprintf(*output + *length, *capacity - *length, "\\n");
                         break;
                     case '\r':
-                        *length += sprintf(*output + *length, "\\r");
+                        *length += snprintf(*output + *length, *capacity - *length, "\\r");
                         break;
                     case '\t':
-                        *length += sprintf(*output + *length, "\\t");
+                        *length += snprintf(*output + *length, *capacity - *length, "\\t");
                         break;
                     default:
                         (*output)[(*length)++] = *str;
@@ -494,32 +494,32 @@ static bool stringify_value(json_value_t *value, char **output, size_t *capacity
                 }
                 str++;
             }
-            *length += sprintf(*output + *length, "\"");
+            *length += snprintf(*output + *length, *capacity - *length, "\"");
             break;
         }
             
         case JSON_OBJECT: {
-            *length += sprintf(*output + *length, "{");
+            *length += snprintf(*output + *length, *capacity - *length, "{");
             json_object_entry_t *entry = (json_object_entry_t *)value->data.object_val;
             bool first = true;
             while (entry) {
                 if (!first) {
-                    *length += sprintf(*output + *length, ",");
+                    *length += snprintf(*output + *length, *capacity - *length, ",");
                 }
-                *length += sprintf(*output + *length, "\"%s\":", entry->key);
+                *length += snprintf(*output + *length, *capacity - *length, "\"%s\":", entry->key);
                 if (!stringify_value(entry->value, output, capacity, length)) {
                     return false;
                 }
                 entry = entry->next;
                 first = false;
             }
-            *length += sprintf(*output + *length, "}");
+            *length += snprintf(*output + *length, *capacity - *length, "}");
             break;
         }
             
         case JSON_ARRAY:
             /* Simplified - empty array */
-            *length += sprintf(*output + *length, "[]");
+            *length += snprintf(*output + *length, *capacity - *length, "[]");
             break;
     }
     
