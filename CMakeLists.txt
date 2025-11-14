@@ -34,6 +34,7 @@ set(WEBLIB_SOURCES
     src/router.c
     src/json.c
     src/event_loop.c
+    src/websocket.c
 )
 
 # Create static library
