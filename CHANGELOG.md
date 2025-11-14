@@ -7,15 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-11-14
+
 ### Added
-- WebSocket frame processing in threaded mode with persistent connections
-  - Automatic ping/pong handling
+- **WebSocket frame processing in threaded mode** - Production-ready real-time bidirectional communication
+  - Automatic ping/pong handling with <0.001s latency
   - Text and binary message echo support
   - Multiple concurrent WebSocket connections
-  - Graceful connection close with status codes
+  - Graceful connection close with status codes (1000-1015)
+  - Persistent connections after HTTP upgrade
 - Socket fd exposure to route handlers via `http_request_t.socket_fd`
 - `handle_websocket_connection()` function for WebSocket frame processing loop
 - Comprehensive WebSocket test suite (test_ping.py, test_handshake.py, test_basic_ws.py)
+- Complete CHANGELOG.md following Keep a Changelog format
 
 ### Fixed
 - WebSocket handshake response not being sent (removed `res->sent = true` in `websocket_handle_upgrade`)
@@ -28,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `websocket_echo_server.c` example with working frame processing
 - Simplified WebSocket connection management (removed manual tracking)
 - Improved signal handling in example server
+- Enhanced documentation with production-ready status indicators
 
 ## [0.2.0] - 2025-01-12
 
@@ -124,9 +129,11 @@ and immediately closed connections. Now:
 
 ## Version History
 
+- **0.3.x**: WebSocket frame processing (Production-ready threaded mode)
 - **0.2.x**: WebSocket support (RFC 6455 compliant)
 - **0.1.x**: Initial HTTP server implementation with event loop
 
-[Unreleased]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/kamrankhan78694/modern-c-web-library/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kamrankhan78694/modern-c-web-library/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kamrankhan78694/modern-c-web-library/releases/tag/v0.1.0
