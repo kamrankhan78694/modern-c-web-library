@@ -289,7 +289,7 @@ bool websocket_handle_upgrade(http_request_t *req, http_response_t *res) {
     http_response_set_header(res, "Sec-WebSocket-Accept", accept_key);
     
     free(accept_key);
-    res->sent = true;
+    /* Note: Don't set res->sent = true here, let the server send the response */
     
     return true;
 }

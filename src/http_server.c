@@ -115,6 +115,7 @@ typedef struct async_connection {
 /* Forward declarations */
 static void *accept_connections(void *arg);
 static void *handle_connection(void *arg);
+static void handle_websocket_connection(int client_fd, http_request_t *req);
 static bool response_forces_close(http_response_t *res);
 static void send_response(int client_fd, http_response_t *res, bool keep_alive);
 static void send_error_response(int client_fd, http_status_t status, const char *message);
@@ -328,6 +329,68 @@ static void *accept_connections(void *arg) {
     return NULL;
 }
 
+/* Handle WebSocket connection after successful upgrade */
+static void handle_websocket_connection(int client_fd, http_request_t *req) {
+    /* Create WebSocket connection object */
+    websocket_connection_t *ws_conn = websocket_connection_create(client_fd);
+    if (!ws_conn) {
+        fprintf(stderr, "Failed to create WebSocket connection\n");
+        return;
+    }
+    
+    /* Get callbacks from request user_data (set by route handler) */
+    typedef struct {
+        websocket_message_cb_t on_message;
+        websocket_close_cb_t on_close;
+        websocket_error_cb_t on_error;
+        void *user_data;
+    } websocket_callbacks_t;
+    
+    websocket_callbacks_t *callbacks = (websocket_callbacks_t *)req->user_data;
+    if (callbacks) {
+        if (callbacks->on_message) {
+            websocket_set_message_callback(ws_conn, callbacks->on_message);
+        }
+        if (callbacks->on_close) {
+            websocket_set_close_callback(ws_conn, callbacks->on_close);
+        }
+        if (callbacks->on_error) {
+            websocket_set_error_callback(ws_conn, callbacks->on_error);
+        }
+        if (callbacks->user_data) {
+            websocket_set_user_data(ws_conn, callbacks->user_data);
+        }
+    }
+    
+    /* Enter WebSocket frame processing loop */
+    uint8_t buffer[4096];
+    while (websocket_is_open(ws_conn)) {
+        ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer), 0);
+        
+        if (bytes_read < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            perror("WebSocket recv failed");
+            break;
+        }
+        
+        if (bytes_read == 0) {
+            /* Client closed connection */
+            break;
+        }
+        
+        /* Process WebSocket frames */
+        if (websocket_process_data(ws_conn, buffer, (size_t)bytes_read) < 0) {
+            fprintf(stderr, "WebSocket frame processing error\n");
+            break;
+        }
+    }
+    
+    /* Cleanup */
+    websocket_connection_destroy(ws_conn);
+}
+
 /* Handle single connection */
 static void *handle_connection(void *arg) {
     connection_t *conn = (connection_t *)arg;
@@ -348,6 +411,9 @@ static void *handle_connection(void *arg) {
             connection_open = false;
             goto iteration_cleanup;
         }
+
+        /* Populate socket fd for WebSocket upgrades */
+        conn->request->socket_fd = client_fd;
 
         if (!parser_initialized) {
             http_parser_init(&conn->parser, conn->request);
@@ -399,6 +465,19 @@ static void *handle_connection(void *arg) {
             http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
         }
 
+        /* Check for WebSocket upgrade (status 101 Switching Protocols) */
+        if (conn->response->status == 101) {
+            /* Send the upgrade response */
+            send_response(client_fd, conn->response, false);
+            
+            /* Enter WebSocket mode - this function won't return until WS closes */
+            handle_websocket_connection(client_fd, conn->request);
+            
+            /* WebSocket closed, exit connection loop */
+            connection_open = false;
+            goto iteration_cleanup;
+        }
+
         keep_alive = conn->parser.keep_alive && !response_forces_close(conn->response);
         send_response(client_fd, conn->response, keep_alive);
 
@@ -444,6 +523,7 @@ static char *lowercase_dup(const char *src) {
 
 static const char *status_reason_phrase(http_status_t status) {
     switch (status) {
+        case 101: return "Switching Protocols";  /* WebSocket upgrade */
         case HTTP_OK: return "OK";
         case HTTP_CREATED: return "Created";
         case HTTP_ACCEPTED: return "Accepted";
@@ -680,8 +760,11 @@ static int serialize_response(http_response_t *res, bool keep_alive, char **head
         return -1;
     }
 
-    if (header_list_add(headers_ref, "connection", "Connection", keep_alive ? "keep-alive" : "close", true) < 0) {
-        return -1;
+    /* Don't override Connection header for WebSocket upgrade (101) */
+    if (res->status != 101) {
+        if (header_list_add(headers_ref, "connection", "Connection", keep_alive ? "keep-alive" : "close", true) < 0) {
+            return -1;
+        }
     }
 
     size_t header_capacity = 256;

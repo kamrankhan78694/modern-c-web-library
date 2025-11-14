@@ -25,29 +25,14 @@
 
 /* Global server for signal handling */
 static http_server_t *g_server = NULL;
-
-/* WebSocket connection tracking */
-typedef struct {
-    websocket_connection_t *ws_conn;
-    int fd;
-} ws_client_t;
-
-#define MAX_WS_CLIENTS 100
-static ws_client_t ws_clients[MAX_WS_CLIENTS];
-static size_t ws_client_count = 0;
+static volatile bool server_running = true;
 
 /* Signal handler for graceful shutdown */
 void signal_handler(int sig) {
     (void)sig;
     printf("\nShutting down server...\n");
     
-    /* Close all WebSocket connections */
-    for (size_t i = 0; i < ws_client_count; i++) {
-        if (ws_clients[i].ws_conn) {
-            websocket_close(ws_clients[i].ws_conn, WS_CLOSE_GOING_AWAY, "Server shutting down");
-            websocket_connection_destroy(ws_clients[i].ws_conn);
-        }
-    }
+    server_running = false;
     
     if (g_server) {
         http_server_stop(g_server);
@@ -73,21 +58,8 @@ void on_websocket_message(websocket_connection_t *conn, ws_message_type_t type, 
 
 /* WebSocket close callback */
 void on_websocket_close(websocket_connection_t *conn, uint16_t code) {
+    (void)conn;
     printf("WebSocket connection closed with code %u\n", code);
-    
-    /* Remove from client list */
-    for (size_t i = 0; i < ws_client_count; i++) {
-        if (ws_clients[i].ws_conn == conn) {
-            websocket_connection_destroy(conn);
-            
-            /* Shift remaining clients */
-            for (size_t j = i; j < ws_client_count - 1; j++) {
-                ws_clients[j] = ws_clients[j + 1];
-            }
-            ws_client_count--;
-            break;
-        }
-    }
 }
 
 /* WebSocket error callback */
@@ -108,20 +80,29 @@ void handle_websocket(http_request_t *req, http_response_t *res) {
     
     printf("WebSocket handshake successful\n");
     
-    /* In a real implementation with event loop integration, we would:
-     * 1. Get the client socket fd from the connection
-     * 2. Create a WebSocket connection object
-     * 3. Set up callbacks
-     * 4. Add to event loop for non-blocking I/O
-     * 
-     * For this example, we demonstrate the API usage pattern.
-     * Full integration with async I/O requires additional server-side
-     * connection management that tracks the underlying socket fd.
-     */
+    /* Define callback structure for WebSocket connection */
+    typedef struct {
+        websocket_message_cb_t on_message;
+        websocket_close_cb_t on_close;
+        websocket_error_cb_t on_error;
+        void *user_data;
+    } websocket_callbacks_t;
     
-    /* Note: This example shows the API pattern. For production use,
-     * you would need to integrate WebSocket connections with the
-     * event loop for proper async handling of multiple connections.
+    /* Allocate callbacks on heap (will be freed by connection handler) */
+    static websocket_callbacks_t callbacks = {
+        .on_message = on_websocket_message,
+        .on_close = on_websocket_close,
+        .on_error = on_websocket_error,
+        .user_data = NULL
+    };
+    
+    /* Store callbacks in request user_data for connection handler */
+    req->user_data = &callbacks;
+    
+    /* Note: After this function returns, the server will:
+     * 1. Send the 101 Switching Protocols response
+     * 2. Enter WebSocket mode via handle_websocket_connection()
+     * 3. Process frames using the callbacks set above
      */
 }
 
@@ -308,12 +289,27 @@ int main(int argc, char *argv[]) {
     printf("║  Press Ctrl+C to stop                  ║\n");
     printf("╚════════════════════════════════════════╝\n");
     
-    /* Start server (blocking) */
+    /* Start server */
     int result = http_server_listen(g_server, port);
+    if (result < 0) {
+        fprintf(stderr, "Failed to start server\n");
+        router_destroy(router);
+        http_server_destroy(g_server);
+        return 1;
+    }
+    
+    /* Keep the main thread alive - wait for signal */
+    printf("\nServer is running. Press Ctrl+C to stop.\n");
+    while (server_running) {
+        sleep(1);
+    }
+    
+    /* Stop server */
+    http_server_stop(g_server);
     
     /* Cleanup */
     router_destroy(router);
     http_server_destroy(g_server);
     
-    return result < 0 ? 1 : 0;
+    return 0;
 }

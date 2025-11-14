@@ -60,6 +60,7 @@ struct http_request {
     void *headers;  /* Hash map of headers */
     void *params;   /* Route parameters */
     void *user_data; /* For middleware context */
+    int socket_fd;   /* Client socket file descriptor (for WebSocket upgrade) */
 };
 
 /* HTTP Response structure */
