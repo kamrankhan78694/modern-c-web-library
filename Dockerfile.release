@@ -18,17 +18,17 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /build
 
-# Copy source code
-COPY CMakeLists.txt LICENSE README.md ./
+# Copy project files
+COPY CMakeLists.txt ./
 COPY include/ include/
 COPY src/ src/
 COPY examples/ examples/
+COPY tests/ tests/
 
-# Build the library and examples
-# Note: Skip 'make test' in Docker build as tests may require network access
+# Build the library and examples (without running tests)
 RUN mkdir -p build && cd build && \
-    cmake -DCMAKE_BUILD_TYPE=Release .. && \
-    make
+    cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF .. && \
+    make -j$(nproc)
 
 # Stage 2: Runtime
 FROM debian:bullseye-slim
