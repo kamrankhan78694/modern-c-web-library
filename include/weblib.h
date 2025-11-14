@@ -47,6 +47,8 @@ typedef struct middleware middleware_t;
 typedef struct json_value json_value_t;
 typedef struct event_loop event_loop_t;
 typedef struct event_handler event_handler_t;
+typedef struct websocket_connection websocket_connection_t;
+typedef struct websocket_server websocket_server_t;
 
 /* HTTP Request structure */
 struct http_request {
@@ -396,6 +398,199 @@ int http_server_set_async(http_server_t *server, bool enable);
  * @return Event loop instance or NULL if not in async mode
  */
 event_loop_t *http_server_get_event_loop(http_server_t *server);
+
+/* ===== WebSocket API ===== */
+
+/**
+ * WebSocket message types
+ */
+typedef enum {
+    WS_MESSAGE_TEXT,   /* UTF-8 text message */
+    WS_MESSAGE_BINARY  /* Binary message */
+} ws_message_type_t;
+
+/**
+ * WebSocket close codes (RFC 6455)
+ */
+typedef enum {
+    WS_CLOSE_NORMAL = 1000,           /* Normal closure */
+    WS_CLOSE_GOING_AWAY = 1001,       /* Endpoint is going away */
+    WS_CLOSE_PROTOCOL_ERROR = 1002,   /* Protocol error */
+    WS_CLOSE_UNSUPPORTED = 1003,      /* Unsupported data type */
+    WS_CLOSE_NO_STATUS = 1005,        /* No status code received */
+    WS_CLOSE_ABNORMAL = 1006,         /* Abnormal closure */
+    WS_CLOSE_INVALID_DATA = 1007,     /* Invalid frame payload data */
+    WS_CLOSE_POLICY = 1008,           /* Policy violation */
+    WS_CLOSE_TOO_LARGE = 1009,        /* Message too large */
+    WS_CLOSE_EXTENSION = 1010,        /* Extension negotiation failure */
+    WS_CLOSE_UNEXPECTED = 1011,       /* Unexpected condition */
+    WS_CLOSE_TLS_FAILED = 1015        /* TLS handshake failure */
+} ws_close_code_t;
+
+/**
+ * WebSocket message callback
+ * @param conn WebSocket connection
+ * @param type Message type (text or binary)
+ * @param data Message data
+ * @param len Message length
+ */
+typedef void (*websocket_message_cb_t)(websocket_connection_t *conn, ws_message_type_t type, const void *data, size_t len);
+
+/**
+ * WebSocket close callback
+ * @param conn WebSocket connection
+ * @param code Close code
+ */
+typedef void (*websocket_close_cb_t)(websocket_connection_t *conn, uint16_t code);
+
+/**
+ * WebSocket error callback
+ * @param conn WebSocket connection
+ * @param error Error message
+ */
+typedef void (*websocket_error_cb_t)(websocket_connection_t *conn, const char *error);
+
+/**
+ * WebSocket connection callback (for server)
+ * @param conn WebSocket connection
+ * @param user_data User data provided when creating server
+ */
+typedef void (*websocket_connect_cb_t)(websocket_connection_t *conn, void *user_data);
+
+/**
+ * Handle WebSocket upgrade request
+ * This function performs the WebSocket handshake and upgrades an HTTP connection
+ * to a WebSocket connection. Should be called from an HTTP route handler.
+ * 
+ * @param req HTTP request object
+ * @param res HTTP response object
+ * @return true if upgrade was successful, false otherwise
+ */
+bool websocket_handle_upgrade(http_request_t *req, http_response_t *res);
+
+/**
+ * Create a new WebSocket connection from an existing file descriptor
+ * This is typically called after websocket_handle_upgrade() to create a
+ * WebSocket connection object for the upgraded connection.
+ * 
+ * @param fd File descriptor of the upgraded connection
+ * @return WebSocket connection or NULL on failure
+ */
+websocket_connection_t *websocket_connection_create(int fd);
+
+/**
+ * Destroy a WebSocket connection and free resources
+ * @param conn WebSocket connection
+ */
+void websocket_connection_destroy(websocket_connection_t *conn);
+
+/**
+ * Send a WebSocket message
+ * @param conn WebSocket connection
+ * @param type Message type (text or binary)
+ * @param data Message data
+ * @param len Message length
+ * @return 0 on success, -1 on failure
+ */
+int websocket_send(websocket_connection_t *conn, ws_message_type_t type, const void *data, size_t len);
+
+/**
+ * Send a WebSocket text message
+ * @param conn WebSocket connection
+ * @param text Text message (null-terminated string)
+ * @return 0 on success, -1 on failure
+ */
+int websocket_send_text(websocket_connection_t *conn, const char *text);
+
+/**
+ * Send a WebSocket binary message
+ * @param conn WebSocket connection
+ * @param data Binary data
+ * @param len Data length
+ * @return 0 on success, -1 on failure
+ */
+int websocket_send_binary(websocket_connection_t *conn, const void *data, size_t len);
+
+/**
+ * Send a WebSocket ping frame
+ * @param conn WebSocket connection
+ * @param data Optional ping data
+ * @param len Ping data length
+ * @return 0 on success, -1 on failure
+ */
+int websocket_send_ping(websocket_connection_t *conn, const void *data, size_t len);
+
+/**
+ * Send a WebSocket pong frame (usually in response to ping)
+ * @param conn WebSocket connection
+ * @param data Optional pong data
+ * @param len Pong data length
+ * @return 0 on success, -1 on failure
+ */
+int websocket_send_pong(websocket_connection_t *conn, const void *data, size_t len);
+
+/**
+ * Close a WebSocket connection gracefully
+ * @param conn WebSocket connection
+ * @param code Close code (see ws_close_code_t)
+ * @param reason Optional close reason (null-terminated string)
+ * @return 0 on success, -1 on failure
+ */
+int websocket_close(websocket_connection_t *conn, uint16_t code, const char *reason);
+
+/**
+ * Process incoming WebSocket data
+ * This function parses WebSocket frames and invokes the appropriate callbacks.
+ * Should be called when data is received on the WebSocket connection.
+ * 
+ * @param conn WebSocket connection
+ * @param data Received data
+ * @param len Data length
+ * @return 0 on success, -1 on failure
+ */
+int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, size_t len);
+
+/**
+ * Set message callback for WebSocket connection
+ * @param conn WebSocket connection
+ * @param callback Message callback function
+ */
+void websocket_set_message_callback(websocket_connection_t *conn, websocket_message_cb_t callback);
+
+/**
+ * Set close callback for WebSocket connection
+ * @param conn WebSocket connection
+ * @param callback Close callback function
+ */
+void websocket_set_close_callback(websocket_connection_t *conn, websocket_close_cb_t callback);
+
+/**
+ * Set error callback for WebSocket connection
+ * @param conn WebSocket connection
+ * @param callback Error callback function
+ */
+void websocket_set_error_callback(websocket_connection_t *conn, websocket_error_cb_t callback);
+
+/**
+ * Set user data for WebSocket connection
+ * @param conn WebSocket connection
+ * @param user_data User data pointer
+ */
+void websocket_set_user_data(websocket_connection_t *conn, void *user_data);
+
+/**
+ * Get user data from WebSocket connection
+ * @param conn WebSocket connection
+ * @return User data pointer
+ */
+void *websocket_get_user_data(websocket_connection_t *conn);
+
+/**
+ * Check if WebSocket connection is open
+ * @param conn WebSocket connection
+ * @return true if connection is open, false otherwise
+ */
+bool websocket_is_open(websocket_connection_t *conn);
 
 #ifdef __cplusplus
 }

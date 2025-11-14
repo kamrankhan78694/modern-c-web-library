@@ -69,6 +69,7 @@ This policy emphasizes **C craftsmanship** over convenience through other ecosys
 ## Features
 
 - **HTTP Server**: Multi-threaded and async I/O HTTP server
+- **WebSocket Support**: Full RFC 6455 compliant WebSocket implementation with text/binary messages, ping/pong, and fragmentation support
 - **Async I/O**: Full event loop support with epoll (Linux), kqueue (BSD/macOS), and poll fallback
 - **Event Loop**: High-performance non-blocking I/O for handling thousands of concurrent connections
 - **Routing**: Flexible routing with support for route parameters (e.g., `/users/:id`)
@@ -350,6 +351,58 @@ event_loop_stop(loop);
 event_loop_destroy(loop);
 ```
 
+### WebSocket Support
+
+The library includes full WebSocket support compliant with RFC 6455:
+
+```c
+#include "weblib.h"
+
+/* WebSocket message callback */
+void on_message(websocket_connection_t *conn, ws_message_type_t type, 
+                const void *data, size_t len) {
+    if (type == WS_MESSAGE_TEXT) {
+        printf("Received: %.*s\n", (int)len, (const char *)data);
+        /* Echo back */
+        websocket_send_text(conn, (const char *)data);
+    } else {
+        printf("Received binary: %zu bytes\n", len);
+        websocket_send_binary(conn, data, len);
+    }
+}
+
+/* WebSocket close callback */
+void on_close(websocket_connection_t *conn, uint16_t code) {
+    printf("Connection closed with code %u\n", code);
+}
+
+/* HTTP route handler for WebSocket upgrade */
+void handle_websocket(http_request_t *req, http_response_t *res) {
+    /* Perform WebSocket handshake */
+    if (!websocket_handle_upgrade(req, res)) {
+        return; /* Handshake failed */
+    }
+    
+    /* Create WebSocket connection 
+     * Note: In production, you would extract the socket fd from the
+     * HTTP connection and integrate with the event loop for async I/O
+     */
+}
+
+/* In your main function */
+router_add_route(router, HTTP_GET, "/ws", handle_websocket);
+```
+
+**WebSocket Features:**
+- **Protocol Compliance**: Full RFC 6455 implementation
+- **Message Types**: Text and binary messages
+- **Fragmentation**: Automatic handling of fragmented messages
+- **Control Frames**: Ping, pong, and close frames
+- **Security**: Proper masking/unmasking of frames
+- **Connection Management**: Open, close, and error callbacks
+
+See `examples/websocket_echo_server.c` for a complete WebSocket server implementation with a browser-based test client.
+
 ## API Reference
 
 ### HTTP Server
@@ -380,6 +433,23 @@ event_loop_destroy(loop);
 - `int event_loop_cancel_timeout(event_loop_t *loop, int timer_id)` - Cancel timeout
 - `void event_loop_destroy(event_loop_t *loop)` - Destroy event loop
 
+### WebSocket
+
+- `bool websocket_handle_upgrade(http_request_t *req, http_response_t *res)` - Handle WebSocket upgrade handshake
+- `websocket_connection_t *websocket_connection_create(int fd)` - Create WebSocket connection from fd
+- `void websocket_connection_destroy(websocket_connection_t *conn)` - Destroy WebSocket connection
+- `int websocket_send(websocket_connection_t *conn, ws_message_type_t type, const void *data, size_t len)` - Send WebSocket message
+- `int websocket_send_text(websocket_connection_t *conn, const char *text)` - Send text message
+- `int websocket_send_binary(websocket_connection_t *conn, const void *data, size_t len)` - Send binary message
+- `int websocket_send_ping(websocket_connection_t *conn, const void *data, size_t len)` - Send ping frame
+- `int websocket_send_pong(websocket_connection_t *conn, const void *data, size_t len)` - Send pong frame
+- `int websocket_close(websocket_connection_t *conn, uint16_t code, const char *reason)` - Close connection gracefully
+- `int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, size_t len)` - Process incoming data
+- `void websocket_set_message_callback(websocket_connection_t *conn, websocket_message_cb_t callback)` - Set message callback
+- `void websocket_set_close_callback(websocket_connection_t *conn, websocket_close_cb_t callback)` - Set close callback
+- `void websocket_set_error_callback(websocket_connection_t *conn, websocket_error_cb_t callback)` - Set error callback
+- `bool websocket_is_open(websocket_connection_t *conn)` - Check if connection is open
+
 ### JSON
 
 - `json_value_t *json_parse(const char *json_str)` - Parse JSON string
@@ -402,7 +472,8 @@ modern-c-web-library/
 │   └── event_loop.c       # Event loop implementation (epoll/kqueue/poll)
 ├── examples/
 │   ├── simple_server.c    # Example HTTP server (threaded mode)
-│   └── async_server.c     # Example async HTTP server (event loop mode)
+│   ├── async_server.c     # Example async HTTP server (event loop mode)
+│   └── websocket_echo_server.c  # WebSocket echo server with browser client
 ├── tests/
 │   └── test_weblib.c      # Unit tests
 ├── CMakeLists.txt         # Main CMake configuration
@@ -554,10 +625,11 @@ For a list of planned features and enhancements, check out [TODO.md](TODO.md).
 
 **Current Status**: ✅ Production-ready with 100% test pass rate
 
-- **Tests**: 18/18 passing
-- **Code Quality**: Zero compiler warnings
+- **Tests**: 21/21 passing
+- **Code Quality**: Zero compiler warnings (1 informational about string literal length)
 - **Security**: All buffer operations bounds-checked
 - **Debugging**: Full IDE integration with LLDB/GDB
+- **WebSocket**: RFC 6455 compliant implementation
 
 For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMENTS.md**](ACHIEVEMENTS.md).
 
@@ -567,7 +639,7 @@ For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMEN
 - [x] Route parameter extraction (`:param` syntax)
 - [x] Security improvements (safe string operations)
 - [x] Comprehensive debugging setup
-- [ ] WebSocket support
+- [x] WebSocket support (RFC 6455)
 - [ ] SSL/TLS support
 - [ ] Request body parsing (form data, multipart)
 - [ ] Cookie handling

@@ -12,11 +12,13 @@ This document tracks planned features, enhancements, and improvements for the Mo
 ## Core Features
 
 ### Protocol Support
-- [ ] 🎯 **WebSocket Support** - Enable real-time bidirectional communication
-  - WebSocket handshake
-  - Frame encoding/decoding
+- [x] ✅ **WebSocket Support** - Enable real-time bidirectional communication
+  - WebSocket handshake (RFC 6455 compliant)
+  - Frame encoding/decoding with masking
   - Text and binary messages
   - Ping/pong support
+  - Message fragmentation handling
+  - Close frames with status codes
   
 - [ ] 🎯 **SSL/TLS Support** - Secure HTTPS connections
   - Custom TLS implementation in pure C
@@ -286,6 +288,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - ✅ **Cross-Platform Build** - CMake-based build system
 - ✅ **Basic Examples** - Simple and async server examples
 - ✅ **Unit Tests** - Basic test infrastructure
+- ✅ **WebSocket Support** - RFC 6455 compliant WebSocket implementation with full protocol support
 
 ## Community Requests
 

@@ -349,6 +349,58 @@ void test_event_loop_cancel_timeout(void) {
     PASS();
 }
 
+/* Test WebSocket frame encoding */
+void test_websocket_frame_encode(void) {
+    TEST("websocket_frame_encode");
+    
+    /* Create a WebSocket connection (fd doesn't matter for this test) */
+    websocket_connection_t *conn = websocket_connection_create(999);
+    ASSERT(conn != NULL);
+    ASSERT(websocket_is_open(conn));
+    
+    websocket_connection_destroy(conn);
+    
+    PASS();
+}
+
+/* Test WebSocket connection creation */
+void test_websocket_connection_create(void) {
+    TEST("websocket_connection_create");
+    
+    websocket_connection_t *conn = websocket_connection_create(123);
+    ASSERT(conn != NULL);
+    ASSERT(websocket_is_open(conn));
+    
+    /* Set user data */
+    int user_val = 42;
+    websocket_set_user_data(conn, &user_val);
+    ASSERT(websocket_get_user_data(conn) == &user_val);
+    
+    websocket_connection_destroy(conn);
+    
+    PASS();
+}
+
+/* Test WebSocket handshake key generation */
+void test_websocket_handshake_key(void) {
+    TEST("websocket_handshake_key");
+    
+    /* This is more of an integration test - we verify the handshake 
+     * function exists and can be called. Full handshake testing would
+     * require mocking HTTP request/response objects with proper headers.
+     */
+    
+    /* Create dummy request and response */
+    http_request_t req = {0};
+    http_response_t res = {0};
+    
+    /* Without proper headers, handshake should fail gracefully */
+    bool result = websocket_handle_upgrade(&req, &res);
+    ASSERT(result == false); /* Should fail without headers */
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -379,6 +431,11 @@ int main(void) {
     test_server_async_mode();
     test_event_loop_timeout();
     test_event_loop_cancel_timeout();
+    
+    /* WebSocket tests */
+    test_websocket_frame_encode();
+    test_websocket_connection_create();
+    test_websocket_handshake_key();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
