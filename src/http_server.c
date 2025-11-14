@@ -824,6 +824,13 @@ const char *http_request_get_param(http_request_t *req, const char *key) {
     return param_list_get((http_param_node_t *)req->params, key);
 }
 
+int http_request_set_param(http_request_t *req, const char *key, const char *value) {
+    if (!req || !key || !value) {
+        return -1;
+    }
+    return param_list_set((http_param_node_t **)&req->params, key, value);
+}
+
 static void parser_set_error(http_parser_t *parser, http_status_t status, const char *message) {
     parser->state = PARSE_STATE_ERROR;
     parser->error_status = status;

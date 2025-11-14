@@ -192,10 +192,30 @@ static void extract_params(http_request_t *req, const char *pattern, const char 
     if (!req || !pattern || !path) {
         return;
     }
-    
-    /* TODO: Implement parameter extraction and storage */
-    /* This would extract values like "123" from /users/123 when pattern is /users/:id */
-    (void)req;
-    (void)pattern;
-    (void)path;
+
+    char *pattern_copy = strdup(pattern);
+    char *path_copy = strdup(path);
+    if (!pattern_copy || !path_copy) {
+        free(pattern_copy);
+        free(path_copy);
+        return;
+    }
+
+    char *pattern_save = NULL;
+    char *path_save = NULL;
+    char *p_tok = strtok_r(pattern_copy, "/", &pattern_save);
+    char *s_tok = strtok_r(path_copy, "/", &path_save);
+
+    while (p_tok && s_tok) {
+        if (p_tok[0] == ':' && p_tok[1] != '\0') {
+            const char *key = p_tok + 1;
+            /* Store raw segment value (no decoding here) */
+            http_request_set_param(req, key, s_tok);
+        }
+        p_tok = strtok_r(NULL, "/", &pattern_save);
+        s_tok = strtok_r(NULL, "/", &path_save);
+    }
+
+    free(pattern_copy);
+    free(path_copy);
 }

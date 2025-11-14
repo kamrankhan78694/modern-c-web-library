@@ -192,6 +192,15 @@ const char *http_request_get_header(http_request_t *req, const char *key);
 const char *http_request_get_param(http_request_t *req, const char *key);
 
 /**
+ * Set route parameter value (used by router during matching)
+ * @param req Request object
+ * @param key Parameter key
+ * @param value Parameter value
+ * @return 0 on success, -1 on failure
+ */
+int http_request_set_param(http_request_t *req, const char *key, const char *value);
+
+/**
  * Set response header
  * @param res Response object
  * @param key Header key
