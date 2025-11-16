@@ -65,6 +65,9 @@ Testing/
 *.cmake
 !CMakeLists.txt
 
+# Local vcpkg clone (tooling) - not part of library source
+vcpkg/
+
 # CodeQL analysis files
 _codeql_build_dir/
 _codeql_detected_source_root
