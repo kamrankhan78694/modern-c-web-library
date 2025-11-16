@@ -12,5 +12,9 @@ target_link_libraries(async_server weblib ${PLATFORM_LIBS})
 add_executable(websocket_echo_server websocket_echo_server.c)
 target_link_libraries(websocket_echo_server weblib ${PLATFORM_LIBS})
 
+# Async WebSocket echo server example
+add_executable(async_websocket_echo_server async_websocket_echo_server.c)
+target_link_libraries(async_websocket_echo_server weblib ${PLATFORM_LIBS})
+
 # Installation
-install(TARGETS simple_server async_server websocket_echo_server DESTINATION bin)
+install(TARGETS simple_server async_server websocket_echo_server async_websocket_echo_server DESTINATION bin)

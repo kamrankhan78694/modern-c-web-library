@@ -110,6 +110,9 @@ typedef struct async_connection {
     bool response_ready;
     bool keep_alive;
     bool closing;
+    /* WebSocket (async mode) */
+    bool is_websocket;
+    websocket_connection_t *ws_conn;
 } async_connection_t;
 
 /* Forward declarations */
@@ -143,6 +146,7 @@ static void async_read_handler(int fd, int events, void *user_data);
 static void async_write_handler(int fd, int events, void *user_data);
 static void free_async_connection(async_connection_t *conn);
 static bool async_on_parser_result(async_connection_t *conn, int fd, parser_result_t result);
+static void async_websocket_read_handler(int fd, int events, void *user_data);
 
 /* Create HTTP server */
 http_server_t *http_server_create(void) {
@@ -1571,6 +1575,8 @@ static void async_accept_handler(int fd, int events, void *user_data) {
     conn->response_ready = false;
     conn->keep_alive = false;
     conn->closing = false;
+    conn->is_websocket = false;
+    conn->ws_conn = NULL;
     if (!conn->request || !conn->response) {
         send_error_response(client_fd, HTTP_INTERNAL_ERROR, "Internal Server Error");
         free_async_connection(conn);
@@ -1615,7 +1621,13 @@ static bool async_on_parser_result(async_connection_t *conn, int fd, parser_resu
         } else {
             http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
         }
-        keep_alive = conn->parser.keep_alive && !response_forces_close(conn->response);
+        /* Detect WebSocket upgrade (status 101) */
+        if (conn->response->status == 101) {
+            conn->is_websocket = true;
+            keep_alive = false; /* WebSocket managed separately */
+        } else {
+            keep_alive = conn->parser.keep_alive && !response_forces_close(conn->response);
+        }
     } else {
         return true;
     }
@@ -1791,6 +1803,49 @@ static void async_write_handler(int fd, int events, void *user_data) {
         conn->header_len = 0;
         conn->response_ready = false;
 
+        /* Transition to WebSocket mode if upgrade occurred */
+        if (conn->is_websocket) {
+            /* Capture callbacks from request user_data before destroying */
+            typedef struct {
+                websocket_message_cb_t on_message;
+                websocket_close_cb_t on_close;
+                websocket_error_cb_t on_error;
+                void *user_data;
+            } websocket_callbacks_t;
+            websocket_callbacks_t *callbacks = (websocket_callbacks_t *)conn->request->user_data;
+
+            conn->ws_conn = websocket_connection_create(fd);
+            if (!conn->ws_conn) {
+                event_loop_remove_fd(conn->server->event_loop, fd);
+                free_async_connection(conn);
+                return;
+            }
+            if (callbacks) {
+                if (callbacks->on_message) websocket_set_message_callback(conn->ws_conn, callbacks->on_message);
+                if (callbacks->on_close) websocket_set_close_callback(conn->ws_conn, callbacks->on_close);
+                if (callbacks->on_error) websocket_set_error_callback(conn->ws_conn, callbacks->on_error);
+                if (callbacks->user_data) websocket_set_user_data(conn->ws_conn, callbacks->user_data);
+            }
+
+            /* Free HTTP parser/request/response resources */
+            http_request_destroy(conn->request);
+            http_response_destroy(conn->response);
+            conn->request = NULL;
+            conn->response = NULL;
+            http_parser_destroy(&conn->parser);
+            conn->parser_initialized = false;
+
+            /* Replace handler with WebSocket read handler */
+            if (event_loop_remove_fd(conn->server->event_loop, fd) < 0 ||
+                event_loop_add_fd(conn->server->event_loop, fd, EVENT_READ, async_websocket_read_handler, conn) < 0) {
+                websocket_connection_destroy(conn->ws_conn);
+                conn->ws_conn = NULL;
+                free_async_connection(conn);
+                return;
+            }
+            return; /* Handshake done; switch to frame processing */
+        }
+
         bool reuse = conn->keep_alive && !conn->closing;
 
         if (!reuse) {
@@ -1840,6 +1895,61 @@ static void async_write_handler(int fd, int events, void *user_data) {
     }
 }
 
+/* Async WebSocket frame read handler */
+static void async_websocket_read_handler(int fd, int events, void *user_data) {
+    async_connection_t *conn = (async_connection_t *)user_data;
+    if (!conn || !conn->ws_conn) {
+        return;
+    }
+
+    if (events & EVENT_ERROR) {
+        event_loop_remove_fd(conn->server->event_loop, fd);
+        websocket_connection_destroy(conn->ws_conn);
+        conn->ws_conn = NULL;
+        free_async_connection(conn);
+        return;
+    }
+
+    if (!(events & EVENT_READ)) {
+        return;
+    }
+
+    uint8_t buffer[4096];
+    for (;;) {
+        ssize_t bytes_read = recv(fd, buffer, sizeof(buffer), 0);
+        if (bytes_read < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break; /* No more data */
+            }
+            perror("WebSocket recv failed");
+            event_loop_remove_fd(conn->server->event_loop, fd);
+            websocket_connection_destroy(conn->ws_conn);
+            conn->ws_conn = NULL;
+            free_async_connection(conn);
+            return;
+        }
+        if (bytes_read == 0) {
+            /* Peer closed */
+            event_loop_remove_fd(conn->server->event_loop, fd);
+            websocket_connection_destroy(conn->ws_conn);
+            conn->ws_conn = NULL;
+            free_async_connection(conn);
+            return;
+        }
+
+        if (websocket_process_data(conn->ws_conn, buffer, (size_t)bytes_read) < 0 || !websocket_is_open(conn->ws_conn)) {
+            event_loop_remove_fd(conn->server->event_loop, fd);
+            websocket_connection_destroy(conn->ws_conn);
+            conn->ws_conn = NULL;
+            free_async_connection(conn);
+            return;
+        }
+    }
+}
+
 /* Free async connection */
 static void free_async_connection(async_connection_t *conn) {
     if (!conn) {
@@ -1857,6 +1967,10 @@ static void free_async_connection(async_connection_t *conn) {
     http_parser_destroy(&conn->parser);
     http_request_destroy(conn->request);
     http_response_destroy(conn->response);
+    if (conn->ws_conn) {
+        websocket_connection_destroy(conn->ws_conn);
+        conn->ws_conn = NULL;
+    }
     free(conn);
 }
 
