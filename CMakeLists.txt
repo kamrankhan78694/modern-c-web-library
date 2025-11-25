@@ -44,7 +44,6 @@ target_link_libraries(weblib ${PLATFORM_LIBS})
 # Create shared library (optional)
 add_library(weblib_shared SHARED ${WEBLIB_SOURCES})
 target_link_libraries(weblib_shared ${PLATFORM_LIBS})
-set_target_properties(weblib_shared PROPERTIES OUTPUT_NAME weblib)
 
 # Build examples
 option(BUILD_EXAMPLES "Build example programs" ON)
