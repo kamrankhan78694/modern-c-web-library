@@ -306,16 +306,25 @@ This section will track feature requests from the community. Please open an issu
 
 ---
 
+## Next Phase Roadmap
+
+For a detailed, phased implementation plan with timelines, priorities, and implementation guidance, see **[NEXT_PHASE.md](NEXT_PHASE.md)**.
+
+- **Phase 4 (v0.4.0)**: HTTP Foundation Hardening — parser, headers, connections, JSON arrays, graceful shutdown
+- **Phase 5 (v0.5.0)**: Request Processing & Security — body parsing, cookies, CORS, rate limiting, static files
+- **Phase 6 (v0.6.0)**: Production Readiness — SSL/TLS, sessions, auth, async WebSocket, API docs
+
 ## How to Contribute
 
 Interested in working on any of these features? Great!
 
 1. Check if there's an existing issue for the feature
-2. If not, create a new issue to discuss the implementation
-3. Fork the repository and create a feature branch
-4. Implement the feature following our coding standards
-5. Add tests and documentation
-6. Submit a pull request
+2. Review **[NEXT_PHASE.md](NEXT_PHASE.md)** for implementation details and priorities
+3. If not, create a new issue to discuss the implementation
+4. Fork the repository and create a feature branch
+5. Implement the feature following our coding standards
+6. Add tests and documentation
+7. Submit a pull request
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contribution guidelines.
 

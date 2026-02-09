@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Next Phase Roadmap** (NEXT_PHASE.md) - Detailed phased plan for v0.4.0–v0.6.0
+  - Phase 4: HTTP Foundation Hardening (parser, headers, connections, JSON arrays, graceful shutdown)
+  - Phase 5: Request Processing & Security (body parsing, cookies, CORS, rate limiting, static files)
+  - Phase 6: Production Readiness (SSL/TLS, sessions, auth, async WebSocket, API docs)
+  - Priority matrix with complexity estimates and timelines
+  - Implementation guidelines and success metrics
+
+### Changed
+- Updated TODO.md with cross-references to NEXT_PHASE.md roadmap
+
 ## [0.3.0] - 2025-11-14
 
 ### Added
