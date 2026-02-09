@@ -280,6 +280,35 @@ json_value_t *json_number_create(double num);
 json_value_t *json_bool_create(bool val);
 
 /**
+ * Create JSON array value
+ * @return JSON array value
+ */
+json_value_t *json_array_create(void);
+
+/**
+ * Append value to JSON array
+ * @param arr JSON array
+ * @param value JSON value to append
+ * @return 0 on success, -1 on failure
+ */
+int json_array_append(json_value_t *arr, json_value_t *value);
+
+/**
+ * Get element from JSON array by index
+ * @param arr JSON array
+ * @param index Array index (0-based)
+ * @return JSON value at index or NULL if out of bounds
+ */
+json_value_t *json_array_get(json_value_t *arr, size_t index);
+
+/**
+ * Get the length of a JSON array
+ * @param arr JSON array
+ * @return Number of elements in array, or 0 if not an array
+ */
+size_t json_array_length(json_value_t *arr);
+
+/**
  * Stringify JSON value
  * @param value JSON value
  * @return JSON string (must be freed by caller) or NULL on error

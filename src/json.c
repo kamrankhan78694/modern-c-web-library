@@ -151,6 +151,75 @@ json_value_t *json_bool_create(bool val) {
     return value;
 }
 
+/* Create array value */
+json_value_t *json_array_create(void) {
+    json_value_t *value = (json_value_t *)calloc(1, sizeof(json_value_t));
+    if (!value) {
+        return NULL;
+    }
+    value->type = JSON_ARRAY;
+    value->data.array_val = NULL;
+    return value;
+}
+
+/* Append value to array */
+int json_array_append(json_value_t *arr, json_value_t *value) {
+    if (!arr || arr->type != JSON_ARRAY || !value) {
+        return -1;
+    }
+
+    json_array_item_t *item = (json_array_item_t *)malloc(sizeof(json_array_item_t));
+    if (!item) {
+        return -1;
+    }
+    item->value = value;
+    item->next = NULL;
+
+    if (!arr->data.array_val) {
+        arr->data.array_val = item;
+    } else {
+        json_array_item_t *tail = (json_array_item_t *)arr->data.array_val;
+        while (tail->next) {
+            tail = tail->next;
+        }
+        tail->next = item;
+    }
+    return 0;
+}
+
+/* Get array element by index */
+json_value_t *json_array_get(json_value_t *arr, size_t index) {
+    if (!arr || arr->type != JSON_ARRAY) {
+        return NULL;
+    }
+
+    json_array_item_t *item = (json_array_item_t *)arr->data.array_val;
+    size_t i = 0;
+    while (item) {
+        if (i == index) {
+            return item->value;
+        }
+        item = item->next;
+        i++;
+    }
+    return NULL;
+}
+
+/* Get array length */
+size_t json_array_length(json_value_t *arr) {
+    if (!arr || arr->type != JSON_ARRAY) {
+        return 0;
+    }
+
+    size_t count = 0;
+    json_array_item_t *item = (json_array_item_t *)arr->data.array_val;
+    while (item) {
+        count++;
+        item = item->next;
+    }
+    return count;
+}
+
 /* Stringify JSON */
 char *json_stringify(json_value_t *value) {
     if (!value) {
@@ -332,21 +401,47 @@ static json_value_t *parse_object(const char **str) {
 }
 
 static json_value_t *parse_array(const char **str) {
-    /* Simplified array parsing - not fully implemented */
+    json_value_t *arr = json_array_create();
+    if (!arr) {
+        return NULL;
+    }
+
     (*str)++; /* Skip '[' */
     skip_whitespace(str);
-    
+
     if (**str == ']') {
         (*str)++;
-        json_value_t *arr = (json_value_t *)calloc(1, sizeof(json_value_t));
-        if (arr) {
-            arr->type = JSON_ARRAY;
-        }
         return arr;
     }
-    
-    /* TODO: Implement full array parsing */
-    return NULL;
+
+    while (**str) {
+        json_value_t *value = parse_value(str);
+        if (!value) {
+            json_value_free(arr);
+            return NULL;
+        }
+
+        if (json_array_append(arr, value) < 0) {
+            json_value_free(value);
+            json_value_free(arr);
+            return NULL;
+        }
+
+        skip_whitespace(str);
+
+        if (**str == ',') {
+            (*str)++;
+            skip_whitespace(str);
+        } else if (**str == ']') {
+            (*str)++;
+            break;
+        } else {
+            json_value_free(arr);
+            return NULL;
+        }
+    }
+
+    return arr;
 }
 
 static json_value_t *parse_string(const char **str) {
@@ -517,10 +612,41 @@ static bool stringify_value(json_value_t *value, char **output, size_t *capacity
             break;
         }
             
-        case JSON_ARRAY:
-            /* Simplified - empty array */
-            *length += snprintf(*output + *length, *capacity - *length, "[]");
+        case JSON_ARRAY: {
+            *length += snprintf(*output + *length, *capacity - *length, "[");
+            json_array_item_t *item = (json_array_item_t *)value->data.array_val;
+            bool first = true;
+            while (item) {
+                if (!first) {
+                    /* Ensure capacity for comma */
+                    if (*length + 2 > *capacity) {
+                        *capacity *= 2;
+                        char *new_output = (char *)realloc(*output, *capacity);
+                        if (!new_output) {
+                            return false;
+                        }
+                        *output = new_output;
+                    }
+                    *length += snprintf(*output + *length, *capacity - *length, ",");
+                }
+                if (!stringify_value(item->value, output, capacity, length)) {
+                    return false;
+                }
+                item = item->next;
+                first = false;
+            }
+            /* Ensure capacity for closing bracket */
+            if (*length + 2 > *capacity) {
+                *capacity *= 2;
+                char *new_output = (char *)realloc(*output, *capacity);
+                if (!new_output) {
+                    return false;
+                }
+                *output = new_output;
+            }
+            *length += snprintf(*output + *length, *capacity - *length, "]");
             break;
+        }
     }
     
     return true;
