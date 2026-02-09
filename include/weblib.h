@@ -22,6 +22,7 @@ typedef enum {
 
 /* HTTP Status Codes */
 typedef enum {
+    HTTP_SWITCHING_PROTOCOLS = 101,
     HTTP_OK = 200,
     HTTP_CREATED = 201,
     HTTP_ACCEPTED = 202,

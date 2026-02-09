@@ -8,12 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Complete JSON Array Support** (Phase 4.4) - Full array parsing, serialization, and manipulation
+  - `json_array_create()` - Create empty JSON array
+  - `json_array_append()` - Append element to JSON array
+  - `json_array_get()` - Get element by index
+  - `json_array_length()` - Get number of elements
+  - Full array parsing from JSON strings (nested arrays, mixed types)
+  - Full array serialization via `json_stringify()`
+  - 7 new unit tests (28/28 total passing)
+- **`HTTP_SWITCHING_PROTOCOLS` enum value** - Added 101 status to `http_status_t` enum
 - **Next Phase Roadmap** (NEXT_PHASE.md) - Detailed phased plan for v0.4.0–v0.6.0
-  - Phase 4: HTTP Foundation Hardening (parser, headers, connections, JSON arrays, graceful shutdown)
-  - Phase 5: Request Processing & Security (body parsing, cookies, CORS, rate limiting, static files)
-  - Phase 6: Production Readiness (SSL/TLS, sessions, auth, async WebSocket, API docs)
-  - Priority matrix with complexity estimates and timelines
-  - Implementation guidelines and success metrics
+
+### Fixed
+- Compiler warning for `case 101` not in enumerated type `http_status_t`
+- Replaced all magic number `101` references with `HTTP_SWITCHING_PROTOCOLS` enum value
 
 ### Changed
 - Updated TODO.md with cross-references to NEXT_PHASE.md roadmap

@@ -91,8 +91,10 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### JSON Handling
 
-- [ ] 🎯 **Complete JSON Support** - Finish parser/serializer edge cases
-  - Implement array parsing and serialization
+- [x] ✅ **Complete JSON Support** - Finish parser/serializer edge cases
+  - Implement array parsing and serialization ✅
+  - JSON array create/append/get/length APIs ✅
+  - Nested array support ✅
   - Escape control characters and Unicode consistently
   - Harden number parsing and error signaling
 
