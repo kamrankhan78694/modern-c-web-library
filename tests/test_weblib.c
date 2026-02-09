@@ -505,9 +505,9 @@ void test_json_array_stringify(void) {
     TEST("json_stringify (array)");
     
     json_value_t *arr = json_array_create();
-    json_array_append(arr, json_number_create(1));
-    json_array_append(arr, json_number_create(2));
-    json_array_append(arr, json_number_create(3));
+    ASSERT(json_array_append(arr, json_number_create(1)) == 0);
+    ASSERT(json_array_append(arr, json_number_create(2)) == 0);
+    ASSERT(json_array_append(arr, json_number_create(3)) == 0);
     
     char *str = json_stringify(arr);
     ASSERT(str != NULL);
