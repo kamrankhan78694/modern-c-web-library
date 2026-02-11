@@ -272,10 +272,8 @@ char *template_render(const char *template_str, template_context_t *ctx) {
                 const char *value = template_context_get(ctx, var_name);
                 if (value) {
                     buffer_append_str(output, value);
-                } else {
-                    /* Variable not found, leave empty */
-                    buffer_append_str(output, "");
                 }
+                /* Variable not found: leave empty (no output) */
                 free(var_name);
             }
             

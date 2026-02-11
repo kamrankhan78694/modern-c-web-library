@@ -327,8 +327,7 @@ int db_pool_close_idle(db_pool_t *pool) {
     
     while (i < pool->size) {
         if (pool->connections[i]->state == DB_CONN_IDLE) {
-            size_t current_count = pool->size - (size_t)closed;
-            if (current_count <= pool->config.min_connections) {
+            if (pool->size <= pool->config.min_connections) {
                 i++;
                 continue;
             }

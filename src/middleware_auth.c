@@ -747,8 +747,9 @@ static bool parse_jwt_token(const char *token,
     payload_decoded[decoded_len] = '\0';
 
     /* Store payload if requested */
-    if (payload_out && payload_size > 0) {
-        size_t copy_len = decoded_len < (int)payload_size - 1 ? decoded_len : (int)payload_size - 1;
+    if (payload_out && payload_size > 1) {
+        size_t max_copy = payload_size - 1;
+        size_t copy_len = (size_t)decoded_len < max_copy ? (size_t)decoded_len : max_copy;
         memcpy(payload_out, payload_decoded, copy_len);
         payload_out[copy_len] = '\0';
     }

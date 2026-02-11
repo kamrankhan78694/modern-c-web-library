@@ -39,21 +39,41 @@ static void generate_session_id(char *buffer, size_t length) {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz";
     
-    /* Initialize random seed on first call with better entropy */
-    static bool seeded = false;
-    if (!seeded) {
-        /* Combine multiple sources for better randomness */
-        unsigned int seed = (unsigned int)time(NULL);
-        seed ^= (unsigned int)clock();
-        seed ^= (unsigned int)(uintptr_t)buffer; /* Use stack address for additional entropy */
-        srand(seed);
-        seeded = true;
+    size_t charset_len = sizeof(charset) - 1;
+    unsigned char random_bytes[64]; /* Max SESSION_ID_LENGTH */
+    bool got_urandom = false;
+
+    if (length > sizeof(random_bytes)) {
+        length = sizeof(random_bytes);
     }
-    
-    for (size_t i = 0; i < length; i++) {
-        /* Use multiple rand() calls to increase randomness */
-        int index = (rand() ^ (rand() << 15)) % (sizeof(charset) - 1);
-        buffer[i] = charset[index];
+
+#ifndef _WIN32
+    /* Try /dev/urandom for cryptographically secure randomness */
+    FILE *urand = fopen("/dev/urandom", "rb");
+    if (urand) {
+        if (fread(random_bytes, 1, length, urand) == length) {
+            got_urandom = true;
+        }
+        fclose(urand);
+    }
+#endif
+
+    if (got_urandom) {
+        for (size_t i = 0; i < length; i++) {
+            buffer[i] = charset[random_bytes[i] % charset_len];
+        }
+    } else {
+        /* Fallback: seed rand() with time + clock */
+        static bool seeded = false;
+        if (!seeded) {
+            unsigned int seed = (unsigned int)time(NULL);
+            seed ^= (unsigned int)clock();
+            srand(seed);
+            seeded = true;
+        }
+        for (size_t i = 0; i < length; i++) {
+            buffer[i] = charset[rand() % charset_len];
+        }
     }
     buffer[length] = '\0';
 }
