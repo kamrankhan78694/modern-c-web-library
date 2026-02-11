@@ -40,6 +40,7 @@ set(WEBLIB_SOURCES
     src/middleware_cors.c
     src/middleware_ratelimit.c
     src/middleware_static.c
+    src/session.c
 )
 
 # Create static library
