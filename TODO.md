@@ -320,6 +320,7 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 - **Phase 4 (v0.4.0)**: HTTP Foundation Hardening — parser, headers, connections, JSON arrays, graceful shutdown
 - **Phase 5 (v0.5.0)**: ✅ Request Processing & Security — body parsing, cookies, CORS, rate limiting, static files
 - **Phase 6 (v0.6.0)**: Production Readiness — SSL/TLS, sessions, auth, async WebSocket, API docs
+- **Phase 7 (v0.7.0)**: Competitive Edge — self-documenting APIs, structured logging, coroutines, plugins, chaos testing, request replay, idempotency, canary routing, diagnostic REPL, and more features no framework in any language has built-in ([docs/phase-7.md](docs/phase-7.md))
 
 ## How to Contribute
 

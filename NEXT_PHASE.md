@@ -501,6 +501,18 @@ All development must adhere to the following principles:
 
 ---
 
+## Phase 7: Competitive Edge (v0.7.0 Target)
+
+**Goal**: Features that no other web framework — in C or any other language — provides as built-in capabilities.
+
+Phase 7 is fully planned in a separate document: **[docs/phase-7.md](docs/phase-7.md)**
+
+**Highlights** (15 features across two tiers):
+- **Tier 1 — First in C**: Self-documenting APIs, structured logging, coroutines, hot-reload plugins, config system, request validation, health checks, zero-downtime restart
+- **Tier 2 — First in ANY language**: Request recording & replay, chaos/fault injection middleware, API versioning with drift detection, per-route resource budgets, request idempotency, shadow/canary testing, diagnostic REPL
+
+---
+
 ## Notes for Contributors
 
 1. **Start with Phase 4**: These are prerequisite improvements. Don't skip ahead.
@@ -516,6 +528,7 @@ All development must adhere to the following principles:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2025-01-12 | Initial roadmap for v0.4.0-v0.6.0 |
+| 1.1 | 2026-02-11 | Added Phase 7 cross-reference (see [docs/phase-7.md](docs/phase-7.md)) |
 
 ---
 
