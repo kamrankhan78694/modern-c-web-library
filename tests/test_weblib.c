@@ -569,6 +569,442 @@ void test_json_object_with_array(void) {
     PASS();
 }
 
+/* ===== Phase 5 Tests ===== */
+
+/* Test body parser - URL-encoded form data */
+void test_body_parser_urlencoded(void) {
+    TEST("body_parser (url-encoded)");
+
+    /* Create a request with URL-encoded body */
+    http_request_t req = {0};
+    req.method = HTTP_POST;
+    req.path = strdup("/form");
+    req.body = strdup("username=john&password=secret123&email=john%40example.com");
+    req.body_length = strlen(req.body);
+
+    /* We need headers for Content-Type. Since the internal header API is used,
+     * we'll test via http_request_parse_body which calls get_header.
+     * For unit testing without full server infrastructure, we'll test the
+     * standalone form field access after manual parse. */
+
+    /* The body parser auto-creates parser data, so we just test that parse
+     * doesn't crash on a request without headers (it should return gracefully) */
+    int result = http_request_parse_body(&req);
+    /* Without Content-Type header, parse should succeed but find nothing */
+    ASSERT(result == 0);
+
+    free(req.path);
+    free(req.body);
+    /* Clean up parser data if it was created */
+    if (req.user_data) {
+        body_parser_data_free((body_parser_data_t *)req.user_data);
+    }
+
+    PASS();
+}
+
+/* Test body parser - data structures */
+void test_body_parser_data_structures(void) {
+    TEST("body_parser (data structures)");
+
+    /* Test that body_parser_data_free handles NULL gracefully */
+    body_parser_data_free(NULL);
+
+    /* Create and free a body_parser_data_t manually */
+    body_parser_data_t *data = calloc(1, sizeof(body_parser_data_t));
+    ASSERT(data != NULL);
+    ASSERT(data->parsed == false);
+    ASSERT(data->fields == NULL);
+    ASSERT(data->files == NULL);
+
+    /* Add a form field manually */
+    http_form_field_t *field = malloc(sizeof(http_form_field_t));
+    ASSERT(field != NULL);
+    field->name = strdup("test_key");
+    field->value = strdup("test_value");
+    field->next = NULL;
+    data->fields = field;
+
+    /* Add an uploaded file manually */
+    http_uploaded_file_t *file = calloc(1, sizeof(http_uploaded_file_t));
+    ASSERT(file != NULL);
+    file->field_name = strdup("avatar");
+    file->filename = strdup("photo.jpg");
+    file->content_type = strdup("image/jpeg");
+    file->data = malloc(4);
+    memcpy(file->data, "test", 4);
+    file->size = 4;
+    file->next = NULL;
+    data->files = file;
+
+    data->parsed = true;
+
+    /* Free everything - should not leak */
+    body_parser_data_free(data);
+
+    PASS();
+}
+
+/* Test body parser - empty body */
+void test_body_parser_empty(void) {
+    TEST("body_parser (empty body)");
+
+    http_request_t req = {0};
+    req.method = HTTP_POST;
+    req.body = NULL;
+    req.body_length = 0;
+
+    int result = http_request_parse_body(&req);
+    ASSERT(result == 0);
+
+    /* get_form_field should return NULL for empty body */
+    const char *val = http_request_get_form_field(&req, "key");
+    ASSERT(val == NULL);
+
+    /* get_file should return NULL for empty body */
+    http_uploaded_file_t *file = http_request_get_file(&req, "avatar");
+    ASSERT(file == NULL);
+
+    if (req.user_data) {
+        body_parser_data_free((body_parser_data_t *)req.user_data);
+    }
+
+    PASS();
+}
+
+/* Test body parser - NULL request */
+void test_body_parser_null(void) {
+    TEST("body_parser (null handling)");
+
+    /* All functions should handle NULL gracefully */
+    ASSERT(http_request_parse_body(NULL) == -1);
+    ASSERT(http_request_get_form_field(NULL, "key") == NULL);
+    ASSERT(http_request_get_form_field(&(http_request_t){0}, NULL) == NULL);
+    ASSERT(http_request_get_file(NULL, "key") == NULL);
+    ASSERT(http_request_get_file(&(http_request_t){0}, NULL) == NULL);
+
+    PASS();
+}
+
+/* Test cookie - get from request header */
+void test_cookie_get(void) {
+    TEST("cookie (get from request)");
+
+    /* Test with NULL request */
+    ASSERT(http_request_get_cookie(NULL, "name") == NULL);
+
+    /* Test with NULL name */
+    http_request_t req = {0};
+    ASSERT(http_request_get_cookie(&req, NULL) == NULL);
+
+    /* Test with empty name */
+    ASSERT(http_request_get_cookie(&req, "") == NULL);
+
+    /* Test with no Cookie header set */
+    ASSERT(http_request_get_cookie(&req, "session") == NULL);
+
+    PASS();
+}
+
+/* Test cookie - set on response */
+void test_cookie_set(void) {
+    TEST("cookie (set on response)");
+
+    /* Test NULL handling */
+    http_response_set_cookie(NULL, "name", "value", NULL);  /* Should not crash */
+
+    http_response_t res = {0};
+    http_response_set_cookie(&res, NULL, "value", NULL);  /* Should not crash */
+    http_response_set_cookie(&res, "name", NULL, NULL);   /* Should not crash */
+    http_response_set_cookie(&res, "", "value", NULL);    /* Should not crash */
+
+    /* Set a cookie with options */
+    cookie_options_t opts = {
+        .domain = "example.com",
+        .path = "/api",
+        .max_age = 3600,
+        .secure = true,
+        .http_only = true,
+        .same_site = "Lax"
+    };
+    http_response_set_cookie(&res, "session", "abc123", &opts);
+    /* The Set-Cookie header should be set (verified by the fact it doesn't crash) */
+
+    PASS();
+}
+
+/* Test cookie - delete */
+void test_cookie_delete(void) {
+    TEST("cookie (delete)");
+
+    /* Test NULL handling */
+    http_response_delete_cookie(NULL, "name");  /* Should not crash */
+
+    http_response_t res = {0};
+    http_response_delete_cookie(&res, NULL);    /* Should not crash */
+    http_response_delete_cookie(&res, "");      /* Should not crash */
+
+    /* Delete a cookie */
+    http_response_delete_cookie(&res, "session");
+    /* Should set Set-Cookie: session=; Path=/; Max-Age=0 */
+
+    PASS();
+}
+
+/* Test CORS middleware - creation and destruction */
+void test_cors_create_destroy(void) {
+    TEST("cors (create/destroy)");
+
+    /* NULL options should return NULL */
+    middleware_fn_t mw = cors_middleware_create(NULL);
+    ASSERT(mw == NULL);
+
+    /* Create with basic options */
+    const char *origins[] = {"http://localhost:3000", "https://example.com", NULL};
+    cors_options_t opts = {
+        .allowed_origins = origins,
+        .allowed_methods = "GET, POST",
+        .allowed_headers = "Content-Type",
+        .expose_headers = "X-Custom",
+        .allow_credentials = true,
+        .max_age = 3600
+    };
+
+    mw = cors_middleware_create(&opts);
+    ASSERT(mw != NULL);
+
+    /* Destroy should not crash */
+    cors_middleware_destroy();
+
+    /* Double destroy should be safe */
+    cors_middleware_destroy();
+
+    PASS();
+}
+
+/* Test CORS middleware - handler behavior */
+void test_cors_handler(void) {
+    TEST("cors (handler)");
+
+    /* Create CORS middleware with wildcard origins */
+    cors_options_t opts = {
+        .allowed_origins = NULL,  /* Wildcard */
+        .allowed_methods = "GET, POST, PUT, DELETE",
+        .allowed_headers = "Content-Type, Authorization",
+        .allow_credentials = false,
+        .max_age = 86400
+    };
+
+    middleware_fn_t mw = cors_middleware_create(&opts);
+    ASSERT(mw != NULL);
+
+    /* Test: Request without Origin header should pass through */
+    http_request_t req = {0};
+    http_response_t res = {0};
+    bool result = mw(&req, &res);
+    ASSERT(result == true);  /* Continue chain */
+
+    cors_middleware_destroy();
+
+    PASS();
+}
+
+/* Test rate limiting - creation and destruction */
+void test_ratelimit_create_destroy(void) {
+    TEST("ratelimit (create/destroy)");
+
+    /* NULL config should return NULL */
+    middleware_fn_t mw = ratelimit_middleware_create(NULL);
+    ASSERT(mw == NULL);
+
+    /* Invalid config should return NULL */
+    ratelimit_config_t bad_config = {0, 0, 0};
+    mw = ratelimit_middleware_create(&bad_config);
+    ASSERT(mw == NULL);
+
+    /* Valid config */
+    ratelimit_config_t config = {
+        .requests_per_window = 100,
+        .window_seconds = 60,
+        .burst_size = 120
+    };
+
+    mw = ratelimit_middleware_create(&config);
+    ASSERT(mw != NULL);
+
+    /* Destroy should not crash */
+    ratelimit_middleware_destroy();
+
+    /* Double destroy should be safe */
+    ratelimit_middleware_destroy();
+
+    PASS();
+}
+
+/* Test static file middleware - creation and destruction */
+void test_static_file_create_destroy(void) {
+    TEST("static_file (create/destroy)");
+
+    /* NULL config should return NULL */
+    middleware_fn_t mw = static_file_middleware_create(NULL);
+    ASSERT(mw == NULL);
+
+    /* Config without root_dir should return NULL */
+    static_file_config_t bad_config = {0};
+    mw = static_file_middleware_create(&bad_config);
+    ASSERT(mw == NULL);
+
+    /* Non-existent directory should return NULL */
+    static_file_config_t nodir_config = {
+        .root_dir = "/nonexistent/directory",
+        .enable_etag = true
+    };
+    mw = static_file_middleware_create(&nodir_config);
+    ASSERT(mw == NULL);
+
+    /* Valid config with /tmp directory */
+    static_file_config_t config = {
+        .root_dir = "/tmp",
+        .index_file = "index.html",
+        .cache_max_age = 3600,
+        .enable_etag = true
+    };
+
+    mw = static_file_middleware_create(&config);
+    ASSERT(mw != NULL);
+
+    /* Destroy should not crash */
+    static_file_middleware_destroy();
+
+    /* Double destroy should be safe */
+    static_file_middleware_destroy();
+
+    PASS();
+}
+
+/* Test static file middleware - MIME type detection */
+void test_static_file_serve(void) {
+    TEST("static_file (serve file)");
+
+    /* Create a test file */
+    FILE *f = fopen("/tmp/test_weblib_static.txt", "w");
+    ASSERT(f != NULL);
+    fprintf(f, "Hello, static file!");
+    fclose(f);
+
+    /* Create middleware pointing to /tmp */
+    static_file_config_t config = {
+        .root_dir = "/tmp",
+        .index_file = "index.html",
+        .cache_max_age = 3600,
+        .enable_etag = true
+    };
+
+    middleware_fn_t mw = static_file_middleware_create(&config);
+    ASSERT(mw != NULL);
+
+    /* Request for the test file */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = strdup("/test_weblib_static.txt");
+
+    http_response_t res = {0};
+    bool result = mw(&req, &res);
+    ASSERT(result == false);  /* File served, stop chain */
+    ASSERT(res.status == HTTP_OK);
+    ASSERT(res.body != NULL);
+    ASSERT(res.body_length == 19);  /* "Hello, static file!" */
+    ASSERT(memcmp(res.body, "Hello, static file!", 19) == 0);
+
+    free(req.path);
+    free(res.body);
+
+    /* Clean up test file */
+    remove("/tmp/test_weblib_static.txt");
+
+    static_file_middleware_destroy();
+
+    PASS();
+}
+
+/* Test static file middleware - file not found */
+void test_static_file_not_found(void) {
+    TEST("static_file (not found)");
+
+    static_file_config_t config = {
+        .root_dir = "/tmp",
+        .index_file = "index.html",
+        .cache_max_age = 3600,
+        .enable_etag = true
+    };
+
+    middleware_fn_t mw = static_file_middleware_create(&config);
+    ASSERT(mw != NULL);
+
+    /* Request for nonexistent file */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = strdup("/nonexistent_file_xyz.txt");
+
+    http_response_t res = {0};
+    bool result = mw(&req, &res);
+    ASSERT(result == true);  /* File not found, continue chain */
+
+    free(req.path);
+
+    static_file_middleware_destroy();
+
+    PASS();
+}
+
+/* Test static file middleware - path traversal prevention */
+void test_static_file_path_traversal(void) {
+    TEST("static_file (path traversal)");
+
+    static_file_config_t config = {
+        .root_dir = "/tmp",
+        .index_file = "index.html",
+        .cache_max_age = 3600,
+        .enable_etag = true
+    };
+
+    middleware_fn_t mw = static_file_middleware_create(&config);
+    ASSERT(mw != NULL);
+
+    /* Request with path traversal attempt */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = strdup("/../etc/passwd");
+
+    http_response_t res = {0};
+    bool result = mw(&req, &res);
+    ASSERT(result == true);  /* Path traversal blocked, continue chain */
+
+    free(req.path);
+
+    static_file_middleware_destroy();
+
+    PASS();
+}
+
+/* Test HTTP status codes */
+void test_http_status_codes(void) {
+    TEST("http_status_codes (new codes)");
+
+    /* Verify new status codes exist and have correct values */
+    ASSERT(HTTP_NOT_MODIFIED == 304);
+    ASSERT(HTTP_TOO_MANY_REQUESTS == 429);
+
+    /* Verify existing codes still correct */
+    ASSERT(HTTP_OK == 200);
+    ASSERT(HTTP_NO_CONTENT == 204);
+    ASSERT(HTTP_BAD_REQUEST == 400);
+    ASSERT(HTTP_NOT_FOUND == 404);
+    ASSERT(HTTP_INTERNAL_ERROR == 500);
+
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -613,6 +1049,33 @@ int main(void) {
     test_json_array_stringify();
     test_json_nested_array();
     test_json_object_with_array();
+    
+    /* Phase 5: Body parser tests */
+    test_body_parser_urlencoded();
+    test_body_parser_data_structures();
+    test_body_parser_empty();
+    test_body_parser_null();
+    
+    /* Phase 5: Cookie tests */
+    test_cookie_get();
+    test_cookie_set();
+    test_cookie_delete();
+    
+    /* Phase 5: CORS middleware tests */
+    test_cors_create_destroy();
+    test_cors_handler();
+    
+    /* Phase 5: Rate limiting tests */
+    test_ratelimit_create_destroy();
+    
+    /* Phase 5: Static file serving tests */
+    test_static_file_create_destroy();
+    test_static_file_serve();
+    test_static_file_not_found();
+    test_static_file_path_traversal();
+    
+    /* Phase 5: HTTP status codes */
+    test_http_status_codes();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

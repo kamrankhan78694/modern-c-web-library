@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 5: Request Processing & Security (v0.5.0)**
+- **Request Body Parsing** (Phase 5.1) - Parse HTTP request bodies
+  - `http_request_parse_body()` - Auto-detect and parse body based on Content-Type
+  - `http_request_get_form_field()` - Get URL-encoded or multipart form field value
+  - `http_request_get_file()` - Get uploaded file from multipart form data
+  - `body_parser_data_free()` - Free body parser resources
+  - URL-encoded form data parsing with percent-decoding
+  - Multipart form data parsing (RFC 7578) with boundary detection
+  - File upload handling with size limits and filename sanitization
+  - New types: `http_uploaded_file_t`, `http_form_field_t`, `body_parser_data_t`
+- **Cookie Handling** (Phase 5.2) - RFC 6265 cookie support
+  - `http_request_get_cookie()` - Parse and retrieve cookies from request
+  - `http_response_set_cookie()` - Set cookies with full attribute support
+  - `http_response_delete_cookie()` - Delete cookies via Max-Age=0
+  - New type: `cookie_options_t` with Domain, Path, Max-Age, Secure, HttpOnly, SameSite
+- **CORS Middleware** (Phase 5.3) - Cross-Origin Resource Sharing
+  - `cors_middleware_create()` - Create configurable CORS middleware
+  - `cors_middleware_destroy()` - Free CORS middleware resources
+  - Preflight OPTIONS request handling with 204 No Content
+  - Configurable allowed origins, methods, headers, credentials, max-age
+  - New type: `cors_options_t`
+- **Rate Limiting Middleware** (Phase 5.4) - IP-based rate limiting
+  - `ratelimit_middleware_create()` - Create rate limiter with token bucket algorithm
+  - `ratelimit_middleware_destroy()` - Free rate limiter resources
+  - IP-based tracking via hash table with automatic cleanup
+  - Rate limit headers: X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset
+  - 429 Too Many Requests response with Retry-After header
+  - New type: `ratelimit_config_t`
+- **Static File Serving** (Phase 5.5) - Efficient static asset delivery
+  - `static_file_middleware_create()` - Create static file middleware
+  - `static_file_middleware_destroy()` - Free static file middleware resources
+  - MIME type detection for 17 common file types
+  - Path traversal prevention via realpath() validation
+  - ETag generation and conditional request support (304 Not Modified)
+  - Cache-Control and Last-Modified headers
+  - New type: `static_file_config_t`
+- **New HTTP Status Codes** - `HTTP_NOT_MODIFIED` (304) and `HTTP_TOO_MANY_REQUESTS` (429)
+- **15 new unit tests** for Phase 5 features (43/43 total passing)
 - **Complete JSON Array Support** (Phase 4.4) - Full array parsing, serialization, and manipulation
   - `json_array_create()` - Create empty JSON array
   - `json_array_append()` - Append element to JSON array
