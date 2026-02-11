@@ -269,8 +269,14 @@ static bool _ratelimit_middleware(http_request_t *req, http_response_t *res) {
     
     if (!allowed) {
         /* Rate limit exceeded - send 429 response */
-        http_response_set_header(res, "Retry-After", 
-                                limiter->config.window_seconds > 0 ? "1" : "60");
+        /* Calculate retry time: time until at least 1 token is available */
+        double refill_rate = (double)limiter->config.requests_per_window / 
+                             (double)limiter->config.window_seconds;
+        int retry_seconds = (refill_rate > 0) ? (int)(1.0 / refill_rate) + 1 : 60;
+        if (retry_seconds < 1) retry_seconds = 1;
+        char retry_after[32];
+        snprintf(retry_after, sizeof(retry_after), "%d", retry_seconds);
+        http_response_set_header(res, "Retry-After", retry_after);
         http_response_send_text(res, HTTP_TOO_MANY_REQUESTS, 
                                "Rate limit exceeded. Please try again later.");
         return false;
