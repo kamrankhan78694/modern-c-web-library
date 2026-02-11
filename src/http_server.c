@@ -258,7 +258,12 @@ void http_server_stop(http_server_t *server) {
             event_loop_stop(server->event_loop);
         }
     } else {
-        /* Stop accept thread */
+        /* Close server socket to unblock accept() in the accept thread */
+        if (server->socket_fd >= 0) {
+            shutdown(server->socket_fd, SHUT_RDWR);
+            close(server->socket_fd);
+            server->socket_fd = -1;
+        }
         pthread_join(server->accept_thread, NULL);
     }
     
@@ -463,7 +468,7 @@ static void *handle_connection(void *arg) {
 
         if (server->router) {
             if (router_route(server->router, conn->request, conn->response) < 0) {
-                http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
+                /* router_route already set 404 response body */
             }
         } else {
             http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
@@ -527,21 +532,26 @@ static char *lowercase_dup(const char *src) {
 
 static const char *status_reason_phrase(http_status_t status) {
     switch (status) {
-        case HTTP_SWITCHING_PROTOCOLS: return "Switching Protocols";  /* WebSocket upgrade */
+        case HTTP_SWITCHING_PROTOCOLS: return "Switching Protocols";
         case HTTP_OK: return "OK";
         case HTTP_CREATED: return "Created";
         case HTTP_ACCEPTED: return "Accepted";
         case HTTP_NO_CONTENT: return "No Content";
+        case HTTP_NOT_MODIFIED: return "Not Modified";
         case HTTP_BAD_REQUEST: return "Bad Request";
         case HTTP_UNAUTHORIZED: return "Unauthorized";
         case HTTP_FORBIDDEN: return "Forbidden";
         case HTTP_NOT_FOUND: return "Not Found";
         case HTTP_METHOD_NOT_ALLOWED: return "Method Not Allowed";
+        case HTTP_PAYLOAD_TOO_LARGE: return "Payload Too Large";
+        case HTTP_URI_TOO_LONG: return "URI Too Long";
+        case HTTP_TOO_MANY_REQUESTS: return "Too Many Requests";
+        case HTTP_HEADER_FIELDS_TOO_LARGE: return "Request Header Fields Too Large";
         case HTTP_INTERNAL_ERROR: return "Internal Server Error";
         case HTTP_NOT_IMPLEMENTED: return "Not Implemented";
         case HTTP_BAD_GATEWAY: return "Bad Gateway";
         case HTTP_SERVICE_UNAVAILABLE: return "Service Unavailable";
-        default: return "OK";
+        default: return "Unknown";
     }
 }
 
@@ -758,10 +768,13 @@ static int serialize_response(http_response_t *res, bool keep_alive, char **head
         }
     }
 
-    char content_length_buf[32];
-    snprintf(content_length_buf, sizeof(content_length_buf), "%zu", res->body_length);
-    if (header_list_add(headers_ref, "content-length", "Content-Length", content_length_buf, true) < 0) {
-        return -1;
+    /* Don't add Content-Length for 1xx, 204, or 304 responses per RFC 7230 */
+    if (res->status >= 200 && res->status != HTTP_NO_CONTENT && res->status != HTTP_NOT_MODIFIED) {
+        char content_length_buf[32];
+        snprintf(content_length_buf, sizeof(content_length_buf), "%zu", res->body_length);
+        if (header_list_add(headers_ref, "content-length", "Content-Length", content_length_buf, true) < 0) {
+            return -1;
+        }
     }
 
     /* Don't override Connection header for WebSocket upgrade (101) */
@@ -783,6 +796,17 @@ static int serialize_response(http_response_t *res, bool keep_alive, char **head
     if (written < 0) {
         free(header_buf);
         return -1;
+    }
+    if ((size_t)written >= header_capacity) {
+        size_t new_cap = (size_t)written + 1;
+        char *tmp = (char *)realloc(header_buf, new_cap);
+        if (!tmp) {
+            free(header_buf);
+            return -1;
+        }
+        header_buf = tmp;
+        header_capacity = new_cap;
+        snprintf(header_buf, header_capacity, "HTTP/1.1 %d %s\r\n", res->status, reason);
     }
     header_len = (size_t)written;
 
@@ -882,6 +906,8 @@ void http_response_send_text(http_response_t *res, http_status_t status, const c
     res->body = copy;
     res->body_length = strlen(text);
     res->status = status;
+    header_list_add((http_header_node_t **)&res->headers, "content-type", "Content-Type",
+                    "text/plain; charset=utf-8", false);
 }
 
 void http_response_set_header(http_response_t *res, const char *key, const char *value) {
@@ -927,7 +953,7 @@ static void parser_set_error(http_parser_t *parser, http_status_t status, const 
 static int ensure_buffer_capacity(http_parser_t *parser, size_t additional) {
     size_t required = parser->buffer_len + additional;
     if (required > MAX_REQUEST_BUFFER) {
-        parser_set_error(parser, (http_status_t)413, "Payload Too Large");
+        parser_set_error(parser, HTTP_PAYLOAD_TOO_LARGE, "Payload Too Large");
         return -1;
     }
 
@@ -1006,7 +1032,7 @@ static int parse_request_line(http_parser_t *parser) {
     }
 
     if ((size_t)crlf_index > MAX_REQUEST_LINE_LEN) {
-        parser_set_error(parser, (http_status_t)414, "Request-URI Too Long");
+        parser_set_error(parser, HTTP_URI_TOO_LONG, "Request-URI Too Long");
         return -1;
     }
 
@@ -1056,7 +1082,7 @@ static int parse_request_line(http_parser_t *parser) {
 
     if (strlen(target) > MAX_REQUEST_LINE_LEN) {
         free(line);
-        parser_set_error(parser, (http_status_t)414, "Request-URI Too Long");
+        parser_set_error(parser, HTTP_URI_TOO_LONG, "Request-URI Too Long");
         return -1;
     }
 
@@ -1150,11 +1176,15 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
         char *endptr = NULL;
         unsigned long long val = strtoull(value_buf, &endptr, 10);
         if (endptr == value_buf || *endptr != '\0') {
+            free(name_buf);
+            free(value_buf);
             parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid Content-Length header");
             return -1;
         }
         if (val > MAX_BODY_BYTES) {
-            parser_set_error(parser, (http_status_t)413, "Payload Too Large");
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_PAYLOAD_TOO_LARGE, "Payload Too Large");
             return -1;
         }
         parser->content_length = (size_t)val;
@@ -1180,7 +1210,7 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
 
 static int append_body_data(http_parser_t *parser, const char *data, size_t len) {
     if (parser->body_received + len > MAX_BODY_BYTES) {
-        parser_set_error(parser, (http_status_t)413, "Payload Too Large");
+        parser_set_error(parser, HTTP_PAYLOAD_TOO_LARGE, "Payload Too Large");
         return -1;
     }
 
@@ -1215,7 +1245,7 @@ static int parse_headers(http_parser_t *parser) {
         ssize_t crlf_index = find_crlf(parser->buffer, parser->buffer_len);
         if (crlf_index < 0) {
             if (parser->buffer_len > MAX_HEADER_BYTES) {
-                parser_set_error(parser, (http_status_t)431, "Request Header Fields Too Large");
+                parser_set_error(parser, HTTP_HEADER_FIELDS_TOO_LARGE, "Request Header Fields Too Large");
                 return -1;
             }
             return 0;
@@ -1225,6 +1255,13 @@ static int parse_headers(http_parser_t *parser) {
             parser_consume(parser, 2);
             if (parser->keep_alive && !parser->seen_host) {
                 parser_set_error(parser, HTTP_BAD_REQUEST, "Missing Host header");
+                return -1;
+            }
+            /* RFC 7230 §3.3.3: reject requests with both Content-Length and
+               Transfer-Encoding to prevent request smuggling */
+            if (parser->chunked && parser->content_length > 0) {
+                parser_set_error(parser, HTTP_BAD_REQUEST,
+                                 "Both Content-Length and Transfer-Encoding present");
                 return -1;
             }
             if (parser->chunked) {
@@ -1238,12 +1275,12 @@ static int parse_headers(http_parser_t *parser) {
         }
 
         if ((size_t)crlf_index > MAX_HEADER_LINE_LEN) {
-            parser_set_error(parser, (http_status_t)431, "Header line too long");
+            parser_set_error(parser, HTTP_HEADER_FIELDS_TOO_LARGE, "Header line too long");
             return -1;
         }
 
         if (parser->header_count >= MAX_HEADER_COUNT) {
-            parser_set_error(parser, (http_status_t)431, "Too many headers");
+            parser_set_error(parser, HTTP_HEADER_FIELDS_TOO_LARGE, "Too many headers");
             return -1;
         }
 
@@ -1271,8 +1308,9 @@ static int parse_chunk_size(http_parser_t *parser) {
     line[crlf_index] = '\0';
 
     char *endptr = NULL;
+    errno = 0;
     unsigned long chunk_size = strtoul(line, &endptr, 16);
-    if (endptr == line) {
+    if (endptr == line || errno == ERANGE || chunk_size > MAX_BODY_BYTES) {
         free(line);
         parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid chunk size");
         return -1;
@@ -1378,7 +1416,7 @@ static void http_parser_reset(http_parser_t *parser, http_request_t *req, bool p
     parser->current_chunk_received = 0;
     parser->keep_alive = false;
     parser->seen_host = false;
-    parser->error_status = HTTP_BAD_REQUEST;
+    parser->error_status = 0;
     parser->error_message = NULL;
     if (parser->req) {
         parser->req->body_length = 0;
@@ -1616,7 +1654,7 @@ static bool async_on_parser_result(async_connection_t *conn, int fd, parser_resu
     } else if (result == PARSER_COMPLETE) {
         if (server->router) {
             if (router_route(server->router, conn->request, conn->response) < 0) {
-                http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
+                /* router_route already set 404 response body */
             }
         } else {
             http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
@@ -1964,7 +2002,10 @@ static void free_async_connection(async_connection_t *conn) {
     free(conn->header_buf);
     conn->header_buf = NULL;
 
-    http_parser_destroy(&conn->parser);
+    if (conn->parser_initialized) {
+        http_parser_destroy(&conn->parser);
+        conn->parser_initialized = false;
+    }
     http_request_destroy(conn->request);
     http_response_destroy(conn->response);
     if (conn->ws_conn) {

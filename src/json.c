@@ -298,6 +298,7 @@ void http_response_send_json(http_response_t *res, http_status_t status, json_va
         }
         res->body = json_str;
         res->body_length = strlen(json_str);
+        http_response_set_header(res, "Content-Type", "application/json; charset=utf-8");
     }
 }
 
