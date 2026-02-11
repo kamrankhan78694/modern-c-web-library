@@ -669,7 +669,12 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
                     /* Start of fragmented message */
                     conn->fragment_opcode = frame.opcode;
                     conn->fragment_len = frame.payload_length;
-                    size_t init_cap = frame.payload_length * 2;
+                    size_t init_cap;
+                    if (frame.payload_length > SIZE_MAX / 2) {
+                        init_cap = frame.payload_length;
+                    } else {
+                        init_cap = frame.payload_length * 2;
+                    }
                     if (init_cap < 256) init_cap = 256;
                     conn->fragment_capacity = init_cap;
                     conn->fragment_buffer = (uint8_t *)malloc(conn->fragment_capacity);
