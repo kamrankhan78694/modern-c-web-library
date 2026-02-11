@@ -361,6 +361,12 @@ json_value_t *json_number_create(double num);
 json_value_t *json_bool_create(bool val);
 
 /**
+ * Create JSON null value
+ * @return JSON null value
+ */
+json_value_t *json_null_create(void);
+
+/**
  * Create JSON array value
  * @return JSON array value
  */
