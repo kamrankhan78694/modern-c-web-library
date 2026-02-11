@@ -523,8 +523,9 @@ static json_value_t *parse_string(const char **str) {
     }
     
     raw_len = p - start;
-    /* Allocate output - raw_len is safe upper bound (decoding only shrinks) */
-    /* +4 for potential UTF-8 encoding of \uXXXX */
+    /* Allocate output buffer: raw_len + 1 is always sufficient because decoding
+     * can only shrink or maintain the length. Every escape sequence (\X = 2 raw
+     * chars → 1 output char, \uXXXX = 6 raw chars → 1-3 UTF-8 output bytes). */
     char *string_val = (char *)malloc(raw_len + 1);
     if (!string_val) {
         return NULL;
@@ -661,8 +662,10 @@ static bool stringify_string(const char *str, char **output, size_t *capacity, s
                 case '\t': (*output)[(*length)++] = '\\'; (*output)[(*length)++] = 't'; break;
                 default:
                     if (c < 0x20) {
-                        /* Escape control characters as \u00XX */
-                        *length += (size_t)snprintf(*output + *length, *capacity - *length, "\\u%04x", c);
+                        /* Escape control characters as \u00XX (exactly 6 chars) */
+                        int written = snprintf(*output + *length, *capacity - *length, "\\u%04x", c);
+                        if (written < 0 || (size_t)written >= *capacity - *length) return false;
+                        *length += (size_t)written;
                     } else {
                         (*output)[(*length)++] = *str;
                     }

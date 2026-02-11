@@ -1692,10 +1692,10 @@ void test_json_depth_limit(void) {
     TEST("json_parse (depth limit)");
 
     /* Build a deeply nested array: [[[[...]]]] */
-    char deep[1200];
+    char deep[1201];
     memset(deep, '[', 600);
     memset(deep + 600, ']', 600);
-    deep[1200 - 1] = '\0';
+    deep[1200] = '\0';
 
     json_value_t *val = json_parse(deep);
     /* Should be rejected due to depth limit */
