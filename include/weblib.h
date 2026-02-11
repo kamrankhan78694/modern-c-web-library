@@ -27,11 +27,13 @@ typedef enum {
     HTTP_CREATED = 201,
     HTTP_ACCEPTED = 202,
     HTTP_NO_CONTENT = 204,
+    HTTP_NOT_MODIFIED = 304,
     HTTP_BAD_REQUEST = 400,
     HTTP_UNAUTHORIZED = 401,
     HTTP_FORBIDDEN = 403,
     HTTP_NOT_FOUND = 404,
     HTTP_METHOD_NOT_ALLOWED = 405,
+    HTTP_TOO_MANY_REQUESTS = 429,
     HTTP_INTERNAL_ERROR = 500,
     HTTP_NOT_IMPLEMENTED = 501,
     HTTP_BAD_GATEWAY = 502,
@@ -50,6 +52,78 @@ typedef struct event_loop event_loop_t;
 typedef struct event_handler event_handler_t;
 typedef struct websocket_connection websocket_connection_t;
 typedef struct websocket_server websocket_server_t;
+typedef struct http_uploaded_file http_uploaded_file_t;
+typedef struct http_form_field http_form_field_t;
+typedef struct body_parser_data body_parser_data_t;
+
+/* ===== Body Parser Types ===== */
+
+/* Uploaded file structure */
+struct http_uploaded_file {
+    char *field_name;       /* Form field name */
+    char *filename;         /* Original filename (sanitized) */
+    char *content_type;     /* MIME type */
+    uint8_t *data;          /* File data */
+    size_t size;            /* File data size */
+    struct http_uploaded_file *next;
+};
+
+/* Form field structure */
+struct http_form_field {
+    char *name;
+    char *value;
+    struct http_form_field *next;
+};
+
+/* Body parser context stored in request */
+struct body_parser_data {
+    http_form_field_t *fields;
+    http_uploaded_file_t *files;
+    bool parsed;
+};
+
+/* ===== Cookie Types ===== */
+
+/* Cookie options for Set-Cookie header */
+typedef struct cookie_options {
+    const char *domain;     /* Domain attribute */
+    const char *path;       /* Path attribute (default: "/") */
+    int max_age;            /* Max-Age in seconds (-1 = session cookie) */
+    bool secure;            /* Secure flag */
+    bool http_only;         /* HttpOnly flag */
+    const char *same_site;  /* SameSite attribute: "Strict", "Lax", "None" */
+} cookie_options_t;
+
+/* ===== CORS Types ===== */
+
+/* CORS configuration */
+typedef struct cors_options {
+    const char **allowed_origins;  /* NULL-terminated array of origins, or NULL for "*" */
+    const char *allowed_methods;   /* Comma-separated methods */
+    const char *allowed_headers;   /* Comma-separated headers */
+    const char *expose_headers;    /* Comma-separated headers to expose */
+    bool allow_credentials;        /* Allow credentials */
+    int max_age;                   /* Preflight cache duration in seconds */
+} cors_options_t;
+
+/* ===== Rate Limiting Types ===== */
+
+/* Rate limit configuration */
+typedef struct ratelimit_config {
+    int requests_per_window;  /* Max requests per window */
+    int window_seconds;       /* Time window in seconds */
+    int burst_size;           /* Max burst size (token bucket capacity) */
+} ratelimit_config_t;
+
+/* ===== Static File Types ===== */
+
+/* Static file middleware configuration */
+typedef struct static_file_config {
+    const char *root_dir;       /* Root directory for static files */
+    const char *index_file;     /* Default index file (default: "index.html") */
+    int cache_max_age;          /* Cache-Control max-age in seconds (default: 3600) */
+    bool enable_etag;           /* Enable ETag support (default: true) */
+} static_file_config_t;
 
 /* HTTP Request structure */
 struct http_request {
@@ -622,6 +696,109 @@ void *websocket_get_user_data(websocket_connection_t *conn);
  * @return true if connection is open, false otherwise
  */
 bool websocket_is_open(websocket_connection_t *conn);
+
+/* ===== Body Parser API ===== */
+
+/**
+ * Parse the request body based on Content-Type header
+ * Supports application/x-www-form-urlencoded and multipart/form-data
+ * @param req Request object
+ * @return 0 on success, -1 on failure
+ */
+int http_request_parse_body(http_request_t *req);
+
+/**
+ * Get a form field value from the parsed request body
+ * Automatically parses body if not already parsed
+ * @param req Request object
+ * @param name Field name
+ * @return Field value or NULL if not found
+ */
+const char *http_request_get_form_field(http_request_t *req, const char *name);
+
+/**
+ * Get an uploaded file from the parsed request body
+ * Automatically parses body if not already parsed
+ * @param req Request object
+ * @param field_name Form field name for the file input
+ * @return Uploaded file structure or NULL if not found
+ */
+http_uploaded_file_t *http_request_get_file(http_request_t *req, const char *field_name);
+
+/**
+ * Free body parser resources
+ * @param data Body parser data to free
+ */
+void body_parser_data_free(body_parser_data_t *data);
+
+/* ===== Cookie API ===== */
+
+/**
+ * Get a cookie value from the request
+ * @param req Request object
+ * @param name Cookie name
+ * @return Cookie value or NULL if not found
+ */
+const char *http_request_get_cookie(http_request_t *req, const char *name);
+
+/**
+ * Set a cookie on the response with options
+ * @param res Response object
+ * @param name Cookie name
+ * @param value Cookie value
+ * @param options Cookie options (NULL for defaults)
+ */
+void http_response_set_cookie(http_response_t *res, const char *name,
+                              const char *value, const cookie_options_t *options);
+
+/**
+ * Delete a cookie by setting Max-Age=0
+ * @param res Response object
+ * @param name Cookie name to delete
+ */
+void http_response_delete_cookie(http_response_t *res, const char *name);
+
+/* ===== CORS Middleware API ===== */
+
+/**
+ * Create a CORS middleware function with the given configuration
+ * @param options CORS configuration (NULL for default permissive CORS)
+ * @return Middleware function for use with router_use_middleware()
+ */
+middleware_fn_t cors_middleware_create(const cors_options_t *options);
+
+/**
+ * Destroy CORS middleware and free resources
+ */
+void cors_middleware_destroy(void);
+
+/* ===== Rate Limiting Middleware API ===== */
+
+/**
+ * Create a rate limiting middleware with the given configuration
+ * @param config Rate limit configuration
+ * @return Middleware function for use with router_use_middleware()
+ */
+middleware_fn_t ratelimit_middleware_create(const ratelimit_config_t *config);
+
+/**
+ * Destroy rate limiting middleware and free resources
+ */
+void ratelimit_middleware_destroy(void);
+
+/* ===== Static File Middleware API ===== */
+
+/**
+ * Create a static file serving middleware
+ * @param config Static file configuration
+ * @return Middleware function for use with router_use_middleware()
+ */
+middleware_fn_t static_file_middleware_create(const static_file_config_t *config);
+
+/**
+ * Destroy static file middleware and free resources
+ */
+void static_file_middleware_destroy(void);
 
 #ifdef __cplusplus
 }

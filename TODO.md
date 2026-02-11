@@ -65,13 +65,13 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - HTTP/1.1 keep-alive negotiation and cleanup
   - Deterministic connection teardown on timeouts and errors
 
-- [ ] 🎯 **Request Body Parsing** - Handle different content types
+- [x] ✅ **Request Body Parsing** - Handle different content types
   - URL-encoded form data
   - Multipart form data
   - File upload handling
   - Streaming large bodies
 
-- [ ] 🎯 **Cookie Handling** - Full cookie support
+- [x] ✅ **Cookie Handling** - Full cookie support
   - Cookie parsing
   - Cookie serialization
   - Secure/HttpOnly flags
@@ -100,7 +100,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Static Content
 
-- [ ] 🎯 **Static File Serving** - Serve static assets
+- [x] ✅ **Static File Serving** - Serve static assets
   - Efficient file serving
   - MIME type detection
   - Range requests (partial content)
@@ -142,13 +142,13 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Security
 
-- [ ] 🎯 **Rate Limiting** - Prevent abuse
+- [x] ✅ **Rate Limiting** - Prevent abuse
   - IP-based rate limiting
   - Token bucket algorithm
   - Sliding window algorithm
   - Per-route limits
 
-- [ ] 🎯 **CORS Support** - Cross-origin resource sharing
+- [x] ✅ **CORS Support** - Cross-origin resource sharing
   - Configurable origins
   - Preflight handling
   - Credential support
@@ -197,9 +197,9 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Middleware
 
-- [ ] 🔧 **CORS Middleware** - Ready-to-use CORS handler
+- [x] ✅ **CORS Middleware** - Ready-to-use CORS handler
 - [ ] 🔧 **Logging Middleware** - Request/response logging
-- [ ] 🔧 **Body Parser Middleware** - Automatic body parsing
+- [x] ✅ **Body Parser Middleware** - Automatic body parsing
 - [ ] 🔧 **Error Handler Middleware** - Centralized error handling
 - [ ] 💡 **Metrics Middleware** - Request metrics collection
 
@@ -301,6 +301,11 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - ✅ **Basic Examples** - Simple and async server examples
 - ✅ **Unit Tests** - Basic test infrastructure
 - ✅ **WebSocket Support** - RFC 6455 compliant WebSocket implementation with full protocol support
+- ✅ **Request Body Parsing** - URL-encoded and multipart form data parsing with file uploads
+- ✅ **Cookie Handling** - Full RFC 6265 cookie support with all attributes
+- ✅ **CORS Support** - Configurable Cross-Origin Resource Sharing middleware
+- ✅ **Rate Limiting** - IP-based token bucket rate limiting middleware
+- ✅ **Static File Serving** - MIME detection, ETag, caching, path traversal prevention
 
 ## Community Requests
 
@@ -313,7 +318,7 @@ This section will track feature requests from the community. Please open an issu
 For a detailed, phased implementation plan with timelines, priorities, and implementation guidance, see **[NEXT_PHASE.md](NEXT_PHASE.md)**.
 
 - **Phase 4 (v0.4.0)**: HTTP Foundation Hardening — parser, headers, connections, JSON arrays, graceful shutdown
-- **Phase 5 (v0.5.0)**: Request Processing & Security — body parsing, cookies, CORS, rate limiting, static files
+- **Phase 5 (v0.5.0)**: ✅ Request Processing & Security — body parsing, cookies, CORS, rate limiting, static files
 - **Phase 6 (v0.6.0)**: Production Readiness — SSL/TLS, sessions, auth, async WebSocket, API docs
 
 ## How to Contribute

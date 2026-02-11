@@ -35,6 +35,11 @@ set(WEBLIB_SOURCES
     src/json.c
     src/event_loop.c
     src/websocket.c
+    src/body_parser.c
+    src/cookie.c
+    src/middleware_cors.c
+    src/middleware_ratelimit.c
+    src/middleware_static.c
 )
 
 # Create static library
