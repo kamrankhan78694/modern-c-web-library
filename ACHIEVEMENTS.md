@@ -38,8 +38,8 @@ The Modern C Web Library has successfully demonstrated that **enterprise-grade w
 
 **Metrics**:
 ```
-Tests run: 18
-Tests passed: 18
+Tests run: 60
+Tests passed: 60
 Tests failed: 0
 Success rate: 100%
 ```
@@ -156,7 +156,7 @@ Success rate: 100%
 
 | Metric | Value | Status |
 |--------|-------|--------|
-| Test Suite Size | 18 tests | ✅ Comprehensive |
+| Test Suite Size | 60 tests | ✅ Comprehensive |
 | Pass Rate | 100% | ✅ All passing |
 | Failed Tests | 0 | ✅ Perfect score |
 | Code Coverage | Core APIs | ✅ Complete |

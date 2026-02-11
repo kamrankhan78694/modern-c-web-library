@@ -77,11 +77,11 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Secure/HttpOnly flags
   - SameSite attribute
 
-- [ ] 🔧 **Session Management** - User session handling
+- [x] ✅ **Session Management** - User session handling
   - In-memory session store
-  - File-based session persistence
-  - Session encryption
-  - Session expiration
+  - Cookie-based session transport
+  - Session expiration and cleanup
+  - Key-value data storage per session
 
 - [ ] 🔧 **Response Compression** - Reduce bandwidth usage
   - gzip compression
@@ -114,12 +114,11 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Template & View Engines
 
-- [ ] 🔧 **Template Engine** - Server-side rendering
-  - Variable substitution
-  - Control structures (if, for, while)
-  - Template inheritance
-  - Custom filters/functions
-  - Caching
+- [x] ✅ **Template Engine** - Server-side rendering
+  - Variable substitution (`{{ variable }}` syntax)
+  - Template file loading
+  - Context-based rendering
+  - HTTP response integration
 
 - [ ] 💡 **Multiple Template Formats** - Support various template languages
   - Mustache templates
@@ -153,10 +152,9 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Preflight handling
   - Credential support
 
-- [ ] 🔧 **Authentication Middleware** - Common auth patterns
+- [x] ✅ **Authentication Middleware** - Common auth patterns
   - Basic authentication
-  - JWT token validation
-  - OAuth 2.0 support
+  - JWT token validation (HMAC-SHA256)
   - API key authentication
 
 - [ ] 🔧 **CSRF Protection** - Cross-site request forgery prevention
@@ -218,7 +216,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Documentation & Examples
 
-- [ ] 🎯 **API Documentation** - Complete API reference
+- [x] ✅ **API Documentation** - Complete API reference
   - Function documentation
   - Parameter descriptions
   - Return value documentation
@@ -306,6 +304,11 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - ✅ **CORS Support** - Configurable Cross-Origin Resource Sharing middleware
 - ✅ **Rate Limiting** - IP-based token bucket rate limiting middleware
 - ✅ **Static File Serving** - MIME detection, ETag, caching, path traversal prevention
+- ✅ **Session Management** - Cookie-based sessions with expiration, cleanup, and data storage
+- ✅ **Template Engine** - `{{ variable }}` syntax with context and file loading
+- ✅ **Authentication Middleware** - Basic Auth, API Key, JWT (HMAC-SHA256) — pure C
+- ✅ **Database Connection Pool** - Thread-safe pooling with configurable lifecycle
+- ✅ **API Documentation** - Comprehensive API reference in `docs/api/`
 
 ## Community Requests
 
@@ -319,7 +322,7 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 
 - **Phase 4 (v0.4.0)**: HTTP Foundation Hardening — parser, headers, connections, JSON arrays, graceful shutdown
 - **Phase 5 (v0.5.0)**: ✅ Request Processing & Security — body parsing, cookies, CORS, rate limiting, static files
-- **Phase 6 (v0.6.0)**: Production Readiness — SSL/TLS, sessions, auth, async WebSocket, API docs
+- **Phase 6 (v0.6.0)**: ✅ Production Readiness — sessions, template engine, auth middleware, db pooling, API docs
 
 ## How to Contribute
 

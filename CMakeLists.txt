@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(ModernCWebLibrary VERSION 1.0.0 LANGUAGES C)
+project(ModernCWebLibrary VERSION 0.6.0 LANGUAGES C)
 
 # Set C standard
 set(CMAKE_C_STANDARD 11)
@@ -40,6 +40,10 @@ set(WEBLIB_SOURCES
     src/middleware_cors.c
     src/middleware_ratelimit.c
     src/middleware_static.c
+    src/session.c
+    src/template.c
+    src/middleware_auth.c
+    src/db_pool.c
 )
 
 # Create static library
@@ -69,7 +73,7 @@ install(TARGETS weblib weblib_shared
     ARCHIVE DESTINATION lib
 )
 
-install(FILES include/weblib.h DESTINATION include)
+install(FILES include/weblib.h include/db_pool.h DESTINATION include)
 
 # Package configuration
 set(CPACK_PACKAGE_NAME "modern-c-web-library")

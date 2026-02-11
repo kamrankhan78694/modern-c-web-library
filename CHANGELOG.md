@@ -8,7 +8,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Phase 5: Request Processing & Security (v0.5.0)**
+- **Phase 6: Production Readiness (v0.6.0)**
+- **Session Management** (Phase 6.2) - Server-side session store
+  - `session_store_create()` / `session_store_destroy()` - Session store lifecycle
+  - `session_create()` - Create session with configurable max_age
+  - `session_get()` - Retrieve session by ID with expiration check
+  - `session_destroy()` - Remove session from store
+  - `session_set_data()` / `session_get_data()` / `session_remove_data()` - Key-value data storage
+  - `session_get_id()` - Get session identifier
+  - `session_is_expired()` - Check session expiration
+  - `session_cleanup_expired()` - Remove expired sessions
+  - `session_from_request()` - Extract session from request cookie
+  - `session_set_cookie()` - Set session cookie on response
+  - Cookie-based session transport with HttpOnly and SameSite=Lax
+  - Resolves PR #13 merge conflicts
+- **Template Engine** (Phase 6.3) - Dynamic HTML generation
+  - `template_context_create()` / `template_context_destroy()` - Context lifecycle
+  - `template_context_set()` / `template_context_get()` - Variable management
+  - `template_render()` - Render templates with `{{ variable }}` syntax
+  - `template_load_file()` - Load templates from files
+  - `http_response_send_template()` - Send rendered template as response
+  - Hash map storage (256 buckets) for O(1) variable lookups
+  - Resolves PR #15 merge conflicts
+- **Authentication Middleware** (Phase 6.4) - Pluggable auth
+  - `basic_auth_middleware_create()` / `basic_auth_middleware_destroy()` - HTTP Basic Auth
+  - `apikey_auth_middleware_create()` / `apikey_auth_middleware_destroy()` - API Key validation
+  - `jwt_auth_middleware_create()` / `jwt_auth_middleware_destroy()` - JWT (HMAC-SHA256)
+  - Pure C SHA-256 implementation (FIPS 180-4)
+  - Pure C HMAC-SHA256 (RFC 2104)
+  - Pure C Base64/Base64URL decode
+  - Constant-time signature comparison for timing attack prevention
+  - New types: `basic_auth_config_t`, `apikey_auth_config_t`, `jwt_auth_config_t`
+- **Database Connection Pool** (Phase 6.5) - Thread-safe pooling
+  - `db_pool_create()` / `db_pool_destroy()` - Pool lifecycle
+  - `db_pool_acquire()` / `db_pool_release()` - Connection management
+  - `db_pool_get_stats()` - Pool statistics
+  - `db_pool_close_idle()` - Close idle connections
+  - Configurable min/max connections, timeouts, and validation
+  - Pluggable backend callbacks for custom database types
+  - New header: `include/db_pool.h`
+  - Resolves PR #17 merge conflicts
+- **API Documentation** (Phase 6.6) - `docs/api/README.md` comprehensive reference
+- **17 new unit tests** for Phase 6 features (60/60 total passing)
+- **Resolved merge conflicts** from PRs #13, #15, #17
 - **Request Body Parsing** (Phase 5.1) - Parse HTTP request bodies
   - `http_request_parse_body()` - Auto-detect and parse body based on Content-Type
   - `http_request_get_form_field()` - Get URL-encoded or multipart form field value
