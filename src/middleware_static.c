@@ -140,7 +140,8 @@ static void _format_http_date(time_t t, char *buf, size_t buf_size) {
         return;
     }
     
-    struct tm *tm = gmtime(&t);
+    struct tm tm_buf;
+    struct tm *tm = gmtime_r(&t, &tm_buf);
     if (!tm) {
         buf[0] = '\0';
         return;

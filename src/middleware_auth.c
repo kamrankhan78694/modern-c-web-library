@@ -580,6 +580,9 @@ middleware_fn_t basic_auth_middleware_create(const basic_auth_config_t *config)
         return NULL;
     }
 
+    /* Destroy existing config if any */
+    basic_auth_middleware_destroy();
+
     /* Allocate and store configuration */
     g_basic_auth_config = malloc(sizeof(basic_auth_config_t));
     if (!g_basic_auth_config) {
@@ -591,6 +594,11 @@ middleware_fn_t basic_auth_middleware_create(const basic_auth_config_t *config)
     /* Duplicate realm string if provided */
     if (config->realm) {
         g_basic_auth_config->realm = strdup(config->realm);
+        if (!g_basic_auth_config->realm) {
+            free(g_basic_auth_config);
+            g_basic_auth_config = NULL;
+            return NULL;
+        }
     }
 
     return basic_auth_handler;
@@ -654,6 +662,9 @@ middleware_fn_t apikey_auth_middleware_create(const apikey_auth_config_t *config
         return NULL;
     }
 
+    /* Destroy existing config if any */
+    apikey_auth_middleware_destroy();
+
     /* Allocate and store configuration */
     g_apikey_auth_config = malloc(sizeof(apikey_auth_config_t));
     if (!g_apikey_auth_config) {
@@ -665,6 +676,11 @@ middleware_fn_t apikey_auth_middleware_create(const apikey_auth_config_t *config
     /* Duplicate header name if provided */
     if (config->header_name) {
         g_apikey_auth_config->header_name = strdup(config->header_name);
+        if (!g_apikey_auth_config->header_name) {
+            free(g_apikey_auth_config);
+            g_apikey_auth_config = NULL;
+            return NULL;
+        }
     }
 
     return apikey_auth_handler;
@@ -843,6 +859,9 @@ middleware_fn_t jwt_auth_middleware_create(const jwt_auth_config_t *config)
         return NULL;
     }
 
+    /* Destroy existing config if any */
+    jwt_auth_middleware_destroy();
+
     /* Allocate and store configuration */
     g_jwt_auth_config = malloc(sizeof(jwt_auth_config_t));
     if (!g_jwt_auth_config) {
@@ -863,6 +882,12 @@ middleware_fn_t jwt_auth_middleware_create(const jwt_auth_config_t *config)
     /* Duplicate header name if provided */
     if (config->header_name) {
         g_jwt_auth_config->header_name = strdup(config->header_name);
+        if (!g_jwt_auth_config->header_name) {
+            free((void *)g_jwt_auth_config->secret);
+            free(g_jwt_auth_config);
+            g_jwt_auth_config = NULL;
+            return NULL;
+        }
     }
 
     return jwt_auth_handler;

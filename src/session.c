@@ -379,8 +379,9 @@ static char *extract_session_id_from_cookies(const char *cookie_header) {
     /* Search for the cookie name, ensuring it's at the start or after "; " */
     while ((found = strstr(start, search_pattern)) != NULL) {
         /* Check if this is at the beginning or preceded by "; " */
-        if (found == cookie_header || (found > cookie_header + 1 && 
-            found[-1] == ' ' && found[-2] == ';')) {
+        if (found == cookie_header || 
+            (found > cookie_header && found[-1] == ';') ||
+            (found > cookie_header + 1 && found[-1] == ' ' && found[-2] == ';')) {
             /* Valid match found */
             break;
         }

@@ -220,6 +220,7 @@ db_connection_t *db_pool_acquire(db_pool_t *pool) {
                 } else {
                     close_connection(pool, conn);
                     pool->connections[i] = pool->connections[--pool->size];
+                    i--;  /* Re-check this index after compaction */
                     conn = NULL;
                 }
             }
@@ -352,6 +353,7 @@ void db_pool_destroy(db_pool_t *pool) {
     
     pthread_mutex_lock(&pool->mutex);
     pool->shutdown = true;
+    pthread_cond_broadcast(&pool->cond);
     
     for (size_t i = 0; i < pool->size; i++) {
         close_connection(pool, pool->connections[i]);

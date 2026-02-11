@@ -171,6 +171,12 @@ static void _add_form_field(body_parser_data_t *data, const char *name, const ch
 
     field->name = strdup(name);
     field->value = strdup(value);
+    if (!field->name || !field->value) {
+        free(field->name);
+        free(field->value);
+        free(field);
+        return;
+    }
     field->next = data->fields;
     data->fields = field;
 }
@@ -199,6 +205,11 @@ static void _trim_whitespace(char *str) {
     char *start = str;
     while (*start && isspace((unsigned char)*start)) {
         start++;
+    }
+
+    if (*start == '\0') {
+        str[0] = '\0';
+        return;
     }
 
     /* Trim trailing */
@@ -387,6 +398,9 @@ static char *_parse_multipart_headers(const uint8_t *data, size_t size,
     if (filename) *filename = NULL;
 
     /* Find end of headers (double CRLF) */
+    if (size < 4) {
+        return NULL;
+    }
     for (size_t i = 0; i < size - 3; i++) {
         if (data[i] == '\r' && data[i+1] == '\n' &&
             data[i+2] == '\r' && data[i+3] == '\n') {

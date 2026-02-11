@@ -236,6 +236,12 @@ middleware_fn_t cors_middleware_create(const cors_options_t *options) {
 
     /* Deep copy the configuration */
     g_cors_config->allowed_origins = _copy_string_array(options->allowed_origins);
+    if (options->allowed_origins != NULL && g_cors_config->allowed_origins == NULL) {
+        /* Memory allocation failure - don't silently degrade to wildcard CORS */
+        free(g_cors_config);
+        g_cors_config = NULL;
+        return NULL;
+    }
     g_cors_config->allowed_methods = _strdup_optional(options->allowed_methods);
     g_cors_config->allowed_headers = _strdup_optional(options->allowed_headers);
     g_cors_config->expose_headers = _strdup_optional(options->expose_headers);
