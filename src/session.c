@@ -1,612 +1,453 @@
-/**
- * @file session.c
- * @brief Server-side session management implementation
- *
- * Part of Modern C Web Library - Phase 6.2
- *
- * Provides HTTP session management with the following features:
- * - In-memory hash map session store (256 buckets)
- * - Cryptographically secure session ID generation
- * - Session middleware for automatic session loading from cookies
- * - Session API: session_set(), session_get(), session_delete()
- * - Session expiration and lazy garbage collection
- * - Thread-safe session storage (with basic mutex support)
- *
- * Pure C implementation with zero external dependencies.
- */
-
 #include "weblib.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <stdbool.h>
-#include <ctype.h>
+#include <stdint.h>
 
-/* POSIX-specific headers for /dev/urandom */
-#if defined(__unix__) || defined(__unix) || (defined(__APPLE__) && defined(__MACH__))
-#include <unistd.h>
-#include <fcntl.h>
-#define HAVE_DEV_URANDOM 1
-#endif
+#define MAX_SESSIONS 1024
+#define SESSION_ID_LENGTH 32
+#define SESSION_COOKIE_NAME "MCWL_SESSION"
 
-/* Session store configuration */
-#define SESSION_STORE_BUCKETS 256
-#define SESSION_ID_LENGTH 64  /* 64 hex characters = 32 bytes of randomness */
-#define SESSION_DEFAULT_TIMEOUT 1800  /* 30 minutes in seconds */
-#define SESSION_DEFAULT_COOKIE_NAME "SID"
-#define SESSION_GC_INTERVAL 100  /* Run GC every N requests */
+/* Session data entry */
+typedef struct session_data_entry {
+    char *key;
+    char *value;
+    struct session_data_entry *next;
+} session_data_entry_t;
+
+/* Session structure */
+struct session {
+    char session_id[SESSION_ID_LENGTH + 1];
+    time_t created_at;
+    time_t expires_at;
+    int max_age;
+    session_data_entry_t *data;
+    bool in_use;
+};
 
 /* Session store structure */
-typedef struct session_store {
-    session_t *buckets[SESSION_STORE_BUCKETS];
-    session_config_t config;
-    size_t request_count;  /* For lazy GC */
-    bool initialized;
-} session_store_t;
+struct session_store {
+    session_t sessions[MAX_SESSIONS];
+    size_t session_count;
+};
 
-/* Global session store */
-static session_store_t g_session_store = {0};
-
-/* Forward declarations of internal helpers */
-static unsigned int _hash_session_id(const char *session_id);
-static void _generate_session_id(char *out_id, size_t out_size);
-static bool _generate_random_bytes(unsigned char *buf, size_t len);
-static void _session_entry_destroy(session_entry_t *entry);
-static void _session_update_access_time(session_t *session);
-static bool _session_is_expired(session_t *session);
-
-/**
- * Helper: Generate a simple hash for session ID
- * Uses djb2 hash algorithm for distributing sessions across buckets
- */
-static unsigned int _hash_session_id(const char *session_id) {
-    if (!session_id) {
-        return 0;
+/* Generate random session ID */
+static void generate_session_id(char *buffer, size_t length) {
+    static const char charset[] = 
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+    
+    /* Initialize random seed on first call with better entropy */
+    static bool seeded = false;
+    if (!seeded) {
+        /* Combine multiple sources for better randomness */
+        unsigned int seed = (unsigned int)time(NULL);
+        seed ^= (unsigned int)clock();
+        seed ^= (unsigned int)(uintptr_t)buffer; /* Use stack address for additional entropy */
+        srand(seed);
+        seeded = true;
     }
     
-    unsigned long hash = 5381;
-    int c;
-    
-    while ((c = *session_id++)) {
-        hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+    for (size_t i = 0; i < length; i++) {
+        /* Use multiple rand() calls to increase randomness */
+        int index = (rand() ^ (rand() << 15)) % (sizeof(charset) - 1);
+        buffer[i] = charset[index];
     }
-    
-    return (unsigned int)(hash % SESSION_STORE_BUCKETS);
+    buffer[length] = '\0';
 }
 
-/**
- * Helper: Generate cryptographically secure random bytes
- * Uses /dev/urandom on POSIX systems, falls back to rand() otherwise
- */
-static bool _generate_random_bytes(unsigned char *buf, size_t len) {
-    if (!buf || len == 0) {
-        return false;
+/* Create session store */
+session_store_t *session_store_create(void) {
+    session_store_t *store = (session_store_t *)calloc(1, sizeof(session_store_t));
+    if (!store) {
+        return NULL;
     }
     
-#ifdef HAVE_DEV_URANDOM
-    /* Use /dev/urandom for secure random bytes */
-    int fd = open("/dev/urandom", O_RDONLY);
-    if (fd >= 0) {
-        ssize_t n = read(fd, buf, len);
-        close(fd);
-        if ((size_t)n == len) {
-            return true;
-        }
-    }
-#endif
+    store->session_count = 0;
     
-    /* Fallback: use time + rand() (not cryptographically secure) */
-    static bool rand_initialized = false;
-    if (!rand_initialized) {
-        srand((unsigned int)time(NULL));
-        rand_initialized = true;
+    /* Initialize all sessions as unused */
+    for (size_t i = 0; i < MAX_SESSIONS; i++) {
+        store->sessions[i].in_use = false;
+        store->sessions[i].data = NULL;
     }
     
-    for (size_t i = 0; i < len; i++) {
-        buf[i] = (unsigned char)(rand() & 0xFF);
-    }
-    
-    return true;
+    return store;
 }
 
-/**
- * Helper: Generate a session ID
- * Generates 32 random bytes and encodes them as 64 hex characters
- */
-static void _generate_session_id(char *out_id, size_t out_size) {
-    if (!out_id || out_size < SESSION_ID_LENGTH + 1) {
+/* Free session data entries */
+static void free_session_data(session_data_entry_t *data) {
+    session_data_entry_t *current = data;
+    while (current) {
+        session_data_entry_t *next = current->next;
+        free(current->key);
+        free(current->value);
+        free(current);
+        current = next;
+    }
+}
+
+/* Destroy session store */
+void session_store_destroy(session_store_t *store) {
+    if (!store) {
         return;
     }
     
-    unsigned char random_bytes[32];
-    _generate_random_bytes(random_bytes, sizeof(random_bytes));
-    
-    /* Convert to hex string */
-    for (size_t i = 0; i < sizeof(random_bytes); i++) {
-        snprintf(out_id + (i * 2), 3, "%02x", random_bytes[i]);
+    /* Free all session data */
+    for (size_t i = 0; i < MAX_SESSIONS; i++) {
+        if (store->sessions[i].in_use) {
+            free_session_data(store->sessions[i].data);
+        }
     }
     
-    out_id[SESSION_ID_LENGTH] = '\0';
+    free(store);
 }
 
-/**
- * Helper: Check if a session has expired
- */
-static bool _session_is_expired(session_t *session) {
+/* Create new session */
+char *session_create(session_store_t *store, int max_age) {
+    if (!store) {
+        return NULL;
+    }
+    
+    /* Find free session slot */
+    session_t *session = NULL;
+    for (size_t i = 0; i < MAX_SESSIONS; i++) {
+        if (!store->sessions[i].in_use) {
+            session = &store->sessions[i];
+            break;
+        }
+    }
+    
+    if (!session) {
+        fprintf(stderr, "No free session slots available\n");
+        return NULL;
+    }
+    
+    /* Generate unique session ID with collision check */
+    int max_attempts = 10;
+    bool unique = false;
+    
+    for (int attempt = 0; attempt < max_attempts && !unique; attempt++) {
+        generate_session_id(session->session_id, SESSION_ID_LENGTH);
+        
+        /* Check for uniqueness */
+        unique = true;
+        for (size_t i = 0; i < MAX_SESSIONS; i++) {
+            if (store->sessions[i].in_use && &store->sessions[i] != session &&
+                strcmp(store->sessions[i].session_id, session->session_id) == 0) {
+                unique = false;
+                break;
+            }
+        }
+    }
+    
+    if (!unique) {
+        fprintf(stderr, "Failed to generate unique session ID after %d attempts\n", max_attempts);
+        return NULL;
+    }
+    
+    /* Set session metadata */
+    session->created_at = time(NULL);
+    session->max_age = max_age;
+    
+    if (max_age > 0) {
+        session->expires_at = session->created_at + max_age;
+    } else {
+        session->expires_at = 0; /* Never expires (session cookie) */
+    }
+    
+    session->data = NULL;
+    session->in_use = true;
+    store->session_count++;
+    
+    return strdup(session->session_id);
+}
+
+/* Get session by ID */
+session_t *session_get(session_store_t *store, const char *session_id) {
+    if (!store || !session_id) {
+        return NULL;
+    }
+    
+    /* Find session with matching ID */
+    for (size_t i = 0; i < MAX_SESSIONS; i++) {
+        if (store->sessions[i].in_use && 
+            strcmp(store->sessions[i].session_id, session_id) == 0) {
+            
+            /* Check if expired */
+            if (session_is_expired(&store->sessions[i])) {
+                return NULL;
+            }
+            
+            return &store->sessions[i];
+        }
+    }
+    
+    return NULL;
+}
+
+/* Destroy session */
+void session_destroy(session_store_t *store, const char *session_id) {
+    if (!store || !session_id) {
+        return;
+    }
+    
+    /* Find and destroy session */
+    for (size_t i = 0; i < MAX_SESSIONS; i++) {
+        if (store->sessions[i].in_use && 
+            strcmp(store->sessions[i].session_id, session_id) == 0) {
+            
+            /* Free session data */
+            free_session_data(store->sessions[i].data);
+            store->sessions[i].data = NULL;
+            store->sessions[i].in_use = false;
+            store->session_count--;
+            break;
+        }
+    }
+}
+
+/* Set session data */
+void session_set_data(session_t *session, const char *key, const char *value) {
+    if (!session || !key || !value) {
+        return;
+    }
+    
+    /* Check if key already exists - update value */
+    session_data_entry_t *current = session->data;
+    while (current) {
+        if (strcmp(current->key, key) == 0) {
+            /* Update existing value */
+            char *new_value = strdup(value);
+            if (!new_value) {
+                return; /* Keep old value if allocation fails */
+            }
+            free(current->value);
+            current->value = new_value;
+            return;
+        }
+        current = current->next;
+    }
+    
+    /* Create new entry */
+    session_data_entry_t *entry = (session_data_entry_t *)malloc(sizeof(session_data_entry_t));
+    if (!entry) {
+        return;
+    }
+    
+    entry->key = strdup(key);
+    if (!entry->key) {
+        free(entry);
+        return;
+    }
+    
+    entry->value = strdup(value);
+    if (!entry->value) {
+        free(entry->key);
+        free(entry);
+        return;
+    }
+    
+    entry->next = session->data;
+    session->data = entry;
+}
+
+/* Get session data */
+const char *session_get_data(session_t *session, const char *key) {
+    if (!session || !key) {
+        return NULL;
+    }
+    
+    session_data_entry_t *current = session->data;
+    while (current) {
+        if (strcmp(current->key, key) == 0) {
+            return current->value;
+        }
+        current = current->next;
+    }
+    
+    return NULL;
+}
+
+/* Remove session data */
+void session_remove_data(session_t *session, const char *key) {
+    if (!session || !key) {
+        return;
+    }
+    
+    session_data_entry_t *current = session->data;
+    session_data_entry_t *prev = NULL;
+    
+    while (current) {
+        if (strcmp(current->key, key) == 0) {
+            /* Remove entry */
+            if (prev) {
+                prev->next = current->next;
+            } else {
+                session->data = current->next;
+            }
+            
+            free(current->key);
+            free(current->value);
+            free(current);
+            return;
+        }
+        
+        prev = current;
+        current = current->next;
+    }
+}
+
+/* Get session ID */
+const char *session_get_id(session_t *session) {
+    if (!session) {
+        return NULL;
+    }
+    return session->session_id;
+}
+
+/* Check if session is expired */
+bool session_is_expired(session_t *session) {
     if (!session) {
         return true;
     }
     
-    time_t now = time(NULL);
-    return now > session->expires_at;
-}
-
-/**
- * Helper: Update session's last accessed time and expiration
- */
-static void _session_update_access_time(session_t *session) {
-    if (!session) {
-        return;
+    /* Session cookies (max_age = 0) never expire based on time */
+    if (session->max_age == 0) {
+        return false;
     }
     
     time_t now = time(NULL);
-    session->last_accessed = now;
-    session->expires_at = now + g_session_store.config.session_timeout_seconds;
+    return (session->expires_at > 0 && now >= session->expires_at);
 }
 
-/**
- * Helper: Destroy a session entry and its chain
- */
-static void _session_entry_destroy(session_entry_t *entry) {
-    while (entry) {
-        session_entry_t *next = entry->next;
-        free(entry->key);
-        free(entry->value);
-        free(entry);
-        entry = next;
-    }
-}
-
-/**
- * Create a new session object
- * 
- * @return New session object, or NULL on failure
- */
-session_t *session_create(void) {
-    session_t *session = calloc(1, sizeof(session_t));
-    if (!session) {
-        return NULL;
-    }
-    
-    /* Generate session ID */
-    _generate_session_id(session->id, sizeof(session->id));
-    
-    /* Initialize timestamps */
-    time_t now = time(NULL);
-    session->created_at = now;
-    session->last_accessed = now;
-    session->expires_at = now + (g_session_store.initialized ? 
-                                  g_session_store.config.session_timeout_seconds : 
-                                  SESSION_DEFAULT_TIMEOUT);
-    
-    session->entries = NULL;
-    session->next = NULL;
-    
-    return session;
-}
-
-/**
- * Destroy a session object and all its entries
- * 
- * @param session Session to destroy
- */
-void session_destroy(session_t *session) {
-    if (!session) {
-        return;
-    }
-    
-    /* Free all entries */
-    _session_entry_destroy(session->entries);
-    
-    free(session);
-}
-
-/**
- * Set a key-value pair in the session
- * 
- * @param session Session object
- * @param key Key name
- * @param value Value to store
- * @return 0 on success, -1 on failure
- */
-int session_set(session_t *session, const char *key, const char *value) {
-    if (!session || !key || !value) {
-        return -1;
-    }
-    
-    /* Update access time */
-    _session_update_access_time(session);
-    
-    /* Check if key already exists - update it */
-    session_entry_t *entry = session->entries;
-    while (entry) {
-        if (strcmp(entry->key, key) == 0) {
-            /* Update existing entry */
-            char *new_value = strdup(value);
-            if (!new_value) {
-                return -1;
-            }
-            free(entry->value);
-            entry->value = new_value;
-            return 0;
-        }
-        entry = entry->next;
-    }
-    
-    /* Create new entry */
-    entry = calloc(1, sizeof(session_entry_t));
-    if (!entry) {
-        return -1;
-    }
-    
-    entry->key = strdup(key);
-    entry->value = strdup(value);
-    
-    if (!entry->key || !entry->value) {
-        free(entry->key);
-        free(entry->value);
-        free(entry);
-        return -1;
-    }
-    
-    /* Add to front of list */
-    entry->next = session->entries;
-    session->entries = entry;
-    
-    return 0;
-}
-
-/**
- * Get a value from the session by key
- * 
- * @param session Session object
- * @param key Key name
- * @return Value string, or NULL if not found
- */
-const char *session_get(session_t *session, const char *key) {
-    if (!session || !key) {
-        return NULL;
-    }
-    
-    /* Update access time */
-    _session_update_access_time(session);
-    
-    /* Search for key */
-    session_entry_t *entry = session->entries;
-    while (entry) {
-        if (strcmp(entry->key, key) == 0) {
-            return entry->value;
-        }
-        entry = entry->next;
-    }
-    
-    return NULL;
-}
-
-/**
- * Delete a key from the session
- * 
- * @param session Session object
- * @param key Key name
- * @return 0 on success, -1 if key not found or error
- */
-int session_delete(session_t *session, const char *key) {
-    if (!session || !key) {
-        return -1;
-    }
-    
-    /* Update access time */
-    _session_update_access_time(session);
-    
-    /* Search for key and remove it */
-    session_entry_t **ptr = &session->entries;
-    while (*ptr) {
-        session_entry_t *entry = *ptr;
-        if (strcmp(entry->key, key) == 0) {
-            /* Remove from list */
-            *ptr = entry->next;
-            free(entry->key);
-            free(entry->value);
-            free(entry);
-            return 0;
-        }
-        ptr = &entry->next;
-    }
-    
-    return -1; /* Key not found */
-}
-
-/**
- * Initialize the global session store
- * 
- * @param config Session configuration (can be NULL for defaults)
- * @return 0 on success, -1 on failure
- */
-int session_store_init(const session_config_t *config) {
-    if (g_session_store.initialized) {
-        /* Already initialized */
+/* Clean up expired sessions */
+int session_cleanup_expired(session_store_t *store) {
+    if (!store) {
         return 0;
     }
     
-    /* Clear buckets */
-    memset(g_session_store.buckets, 0, sizeof(g_session_store.buckets));
+    int cleaned = 0;
     
-    /* Set configuration */
-    if (config) {
-        g_session_store.config = *config;
+    for (size_t i = 0; i < MAX_SESSIONS; i++) {
+        if (store->sessions[i].in_use && session_is_expired(&store->sessions[i])) {
+            free_session_data(store->sessions[i].data);
+            store->sessions[i].data = NULL;
+            store->sessions[i].in_use = false;
+            store->session_count--;
+            cleaned++;
+        }
+    }
+    
+    return cleaned;
+}
+
+/* Parse cookie header to extract session ID */
+static char *extract_session_id_from_cookies(const char *cookie_header) {
+    if (!cookie_header) {
+        return NULL;
+    }
+    
+    /* Look for SESSION_COOKIE_NAME=value in cookie header */
+    char search_pattern[64];
+    snprintf(search_pattern, sizeof(search_pattern), "%s=", SESSION_COOKIE_NAME);
+    
+    const char *start = cookie_header;
+    const char *found = NULL;
+    
+    /* Search for the cookie name, ensuring it's at the start or after "; " */
+    while ((found = strstr(start, search_pattern)) != NULL) {
+        /* Check if this is at the beginning or preceded by "; " */
+        if (found == cookie_header || (found > cookie_header + 1 && 
+            found[-1] == ' ' && found[-2] == ';')) {
+            /* Valid match found */
+            break;
+        }
+        /* Continue searching after this false match */
+        start = found + 1;
+        found = NULL;
+    }
+    
+    if (!found) {
+        return NULL;
+    }
+    
+    start = found + strlen(search_pattern);
+    
+    /* Find end of cookie value (semicolon or end of string) */
+    const char *end = strchr(start, ';');
+    size_t length;
+    
+    if (end) {
+        length = end - start;
     } else {
-        /* Use defaults */
-        g_session_store.config.session_timeout_seconds = SESSION_DEFAULT_TIMEOUT;
-        g_session_store.config.cookie_name = SESSION_DEFAULT_COOKIE_NAME;
-        g_session_store.config.cookie_secure = false;
-        g_session_store.config.cookie_http_only = true;
+        length = strlen(start);
     }
     
-    /* Ensure we have default cookie name */
-    if (!g_session_store.config.cookie_name) {
-        g_session_store.config.cookie_name = SESSION_DEFAULT_COOKIE_NAME;
+    /* Allocate and copy session ID */
+    char *session_id = (char *)malloc(length + 1);
+    if (session_id) {
+        strncpy(session_id, start, length);
+        session_id[length] = '\0';
     }
     
-    /* Ensure timeout is reasonable */
-    if (g_session_store.config.session_timeout_seconds <= 0) {
-        g_session_store.config.session_timeout_seconds = SESSION_DEFAULT_TIMEOUT;
-    }
-    
-    g_session_store.request_count = 0;
-    g_session_store.initialized = true;
-    
-    return 0;
+    return session_id;
 }
 
-/**
- * Clean up the global session store
- * Destroys all sessions and frees memory
- */
-void session_store_cleanup(void) {
-    if (!g_session_store.initialized) {
-        return;
-    }
-    
-    /* Destroy all sessions in all buckets */
-    for (int i = 0; i < SESSION_STORE_BUCKETS; i++) {
-        session_t *session = g_session_store.buckets[i];
-        while (session) {
-            session_t *next = session->next;
-            session_destroy(session);
-            session = next;
-        }
-        g_session_store.buckets[i] = NULL;
-    }
-    
-    g_session_store.initialized = false;
-}
-
-/**
- * Get a session from the store by session ID
- * 
- * @param session_id Session ID string
- * @return Session object, or NULL if not found or expired
- */
-session_t *session_store_get(const char *session_id) {
-    if (!g_session_store.initialized || !session_id || strlen(session_id) != SESSION_ID_LENGTH) {
+/* Get session from request */
+session_t *session_from_request(session_store_t *store, http_request_t *req) {
+    if (!store || !req) {
         return NULL;
     }
     
-    /* Find bucket */
-    unsigned int bucket = _hash_session_id(session_id);
-    session_t *session = g_session_store.buckets[bucket];
-    
-    /* Search for session in bucket */
-    while (session) {
-        if (strcmp(session->id, session_id) == 0) {
-            /* Found - check if expired */
-            if (_session_is_expired(session)) {
-                /* Expired - remove it */
-                session_store_remove(session_id);
-                return NULL;
-            }
-            
-            /* Update access time */
-            _session_update_access_time(session);
-            return session;
-        }
-        session = session->next;
-    }
-    
-    return NULL;
-}
-
-/**
- * Create a new session and add it to the store
- * 
- * @return New session object, or NULL on failure
- */
-session_t *session_store_create(void) {
-    if (!g_session_store.initialized) {
-        /* Auto-initialize with defaults */
-        session_store_init(NULL);
-    }
-    
-    /* Create new session */
-    session_t *session = session_create();
-    if (!session) {
+    /* Get cookie header */
+    const char *cookie_header = http_request_get_header(req, "Cookie");
+    if (!cookie_header) {
         return NULL;
     }
     
-    /* Add to store */
-    unsigned int bucket = _hash_session_id(session->id);
-    session->next = g_session_store.buckets[bucket];
-    g_session_store.buckets[bucket] = session;
+    /* Extract session ID from cookie */
+    char *session_id = extract_session_id_from_cookies(cookie_header);
+    if (!session_id) {
+        return NULL;
+    }
+    
+    /* Get session from store */
+    session_t *session = session_get(store, session_id);
+    free(session_id);
     
     return session;
 }
 
-/**
- * Remove a session from the store by session ID
- * 
- * @param session_id Session ID string
- */
-void session_store_remove(const char *session_id) {
-    if (!g_session_store.initialized || !session_id) {
+/* Set session cookie in response */
+void session_set_cookie(http_response_t *res, const char *session_id, int max_age, const char *path) {
+    if (!res || !session_id) {
         return;
     }
     
-    /* Find bucket */
-    unsigned int bucket = _hash_session_id(session_id);
-    session_t **ptr = &g_session_store.buckets[bucket];
+    /* Build cookie value */
+    char cookie[512];
+    int len;
     
-    /* Search for session and remove it */
-    while (*ptr) {
-        session_t *session = *ptr;
-        if (strcmp(session->id, session_id) == 0) {
-            /* Remove from list */
-            *ptr = session->next;
-            session_destroy(session);
-            return;
-        }
-        ptr = &session->next;
-    }
-}
-
-/**
- * Garbage collect expired sessions
- * Scans all buckets and removes expired sessions
- */
-void session_store_gc(void) {
-    if (!g_session_store.initialized) {
-        return;
+    if (max_age < 0) {
+        /* Delete cookie */
+        len = snprintf(cookie, sizeof(cookie), 
+            "%s=; Path=%s; Max-Age=0; HttpOnly; SameSite=Lax",
+            SESSION_COOKIE_NAME, path ? path : "/");
+    } else if (max_age == 0) {
+        /* Session cookie (no Max-Age) */
+        len = snprintf(cookie, sizeof(cookie), 
+            "%s=%s; Path=%s; HttpOnly; SameSite=Lax",
+            SESSION_COOKIE_NAME, session_id, path ? path : "/");
+    } else {
+        /* Persistent cookie with Max-Age */
+        len = snprintf(cookie, sizeof(cookie), 
+            "%s=%s; Path=%s; Max-Age=%d; HttpOnly; SameSite=Lax",
+            SESSION_COOKIE_NAME, session_id, path ? path : "/", max_age);
     }
     
-    /* Scan all buckets */
-    for (int i = 0; i < SESSION_STORE_BUCKETS; i++) {
-        session_t **ptr = &g_session_store.buckets[i];
-        
-        while (*ptr) {
-            session_t *session = *ptr;
-            if (_session_is_expired(session)) {
-                /* Remove expired session */
-                *ptr = session->next;
-                session_destroy(session);
-            } else {
-                ptr = &session->next;
-            }
-        }
+    if (len > 0 && len < (int)sizeof(cookie)) {
+        http_response_set_header(res, "Set-Cookie", cookie);
     }
-}
-
-/**
- * Session middleware handler function
- * Automatically loads session from cookie on each request
- */
-static bool _session_middleware_handler(http_request_t *req, http_response_t *res) {
-    if (!req || !res || !g_session_store.initialized) {
-        return true; /* Continue processing */
-    }
-    
-    /* Increment request count and run GC if needed */
-    g_session_store.request_count++;
-    if (g_session_store.request_count % SESSION_GC_INTERVAL == 0) {
-        session_store_gc();
-    }
-    
-    /* Try to get session ID from cookie */
-    const char *session_id = http_request_get_cookie(req, g_session_store.config.cookie_name);
-    
-    session_t *session = NULL;
-    
-    if (session_id) {
-        /* Try to load existing session */
-        session = session_store_get(session_id);
-    }
-    
-    if (!session) {
-        /* No valid session - create a new one */
-        session = session_store_create();
-        if (!session) {
-            /* Failed to create session - continue without session */
-            return true;
-        }
-        
-        /* Set session cookie in response */
-        cookie_options_t opts = {0};
-        opts.path = "/";
-        opts.http_only = g_session_store.config.cookie_http_only;
-        opts.secure = g_session_store.config.cookie_secure;
-        opts.max_age = g_session_store.config.session_timeout_seconds;
-        
-        http_response_set_cookie(res, g_session_store.config.cookie_name, session->id, &opts);
-    }
-    
-    /* Store session pointer in request user_data
-     * Note: This may conflict with body_parser_middleware which also uses user_data.
-     * A more robust solution would be to store in a dedicated field or use a wrapper struct.
-     * For now, we document that session_middleware should be added before body_parser.
-     */
-    req->user_data = session;
-    
-    return true; /* Continue processing */
-}
-
-/**
- * Create session middleware
- * 
- * @param config Session configuration (can be NULL for defaults)
- * @return Middleware function pointer
- */
-middleware_fn_t session_middleware_create(const session_config_t *config) {
-    /* Initialize session store if not already done */
-    if (!g_session_store.initialized) {
-        session_store_init(config);
-    }
-    
-    return _session_middleware_handler;
-}
-
-/**
- * Destroy session middleware
- * Cleans up the session store
- */
-void session_middleware_destroy(void) {
-    session_store_cleanup();
-}
-
-/**
- * Get session from request
- * The session is set by the session middleware
- * 
- * @param req HTTP request
- * @return Session object, or NULL if no session
- */
-session_t *http_request_get_session(http_request_t *req) {
-    if (!req) {
-        return NULL;
-    }
-    
-    /* Check if session was set by middleware */
-    if (req->user_data) {
-        return (session_t *)req->user_data;
-    }
-    
-    /* Fallback: try to get session from cookie manually */
-    if (!g_session_store.initialized) {
-        return NULL;
-    }
-    
-    const char *session_id = http_request_get_cookie(req, g_session_store.config.cookie_name);
-    if (session_id) {
-        return session_store_get(session_id);
-    }
-    
-    return NULL;
 }

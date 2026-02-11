@@ -41,6 +41,9 @@ set(WEBLIB_SOURCES
     src/middleware_ratelimit.c
     src/middleware_static.c
     src/session.c
+    src/template.c
+    src/middleware_auth.c
+    src/db_pool.c
 )
 
 # Create static library
@@ -70,7 +73,7 @@ install(TARGETS weblib weblib_shared
     ARCHIVE DESTINATION lib
 )
 
-install(FILES include/weblib.h DESTINATION include)
+install(FILES include/weblib.h include/db_pool.h DESTINATION include)
 
 # Package configuration
 set(CPACK_PACKAGE_NAME "modern-c-web-library")

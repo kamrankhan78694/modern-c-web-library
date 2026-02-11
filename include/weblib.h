@@ -55,6 +55,9 @@ typedef struct websocket_server websocket_server_t;
 typedef struct http_uploaded_file http_uploaded_file_t;
 typedef struct http_form_field http_form_field_t;
 typedef struct body_parser_data body_parser_data_t;
+typedef struct session session_t;
+typedef struct session_store session_store_t;
+typedef struct template_context template_context_t;
 
 /* ===== Body Parser Types ===== */
 
@@ -799,6 +802,225 @@ middleware_fn_t static_file_middleware_create(const static_file_config_t *config
  * Destroy static file middleware and free resources
  */
 void static_file_middleware_destroy(void);
+
+/* ===== Session Management API ===== */
+
+/**
+ * Create a session store
+ * @return Pointer to session store instance or NULL on failure
+ */
+session_store_t *session_store_create(void);
+
+/**
+ * Destroy session store and free all sessions
+ * @param store Session store instance
+ */
+void session_store_destroy(session_store_t *store);
+
+/**
+ * Create a new session
+ * @param store Session store instance
+ * @param max_age Maximum age of session in seconds (0 for session cookie)
+ * @return Session ID or NULL on failure (caller must free)
+ */
+char *session_create(session_store_t *store, int max_age);
+
+/**
+ * Get session by ID
+ * @param store Session store instance
+ * @param session_id Session ID
+ * @return Session instance or NULL if not found/expired
+ */
+session_t *session_get(session_store_t *store, const char *session_id);
+
+/**
+ * Destroy a session
+ * @param store Session store instance
+ * @param session_id Session ID
+ */
+void session_destroy(session_store_t *store, const char *session_id);
+
+/**
+ * Set session data
+ * @param session Session instance
+ * @param key Data key
+ * @param value Data value (will be copied)
+ */
+void session_set_data(session_t *session, const char *key, const char *value);
+
+/**
+ * Get session data
+ * @param session Session instance
+ * @param key Data key
+ * @return Data value or NULL if not found
+ */
+const char *session_get_data(session_t *session, const char *key);
+
+/**
+ * Remove session data
+ * @param session Session instance
+ * @param key Data key
+ */
+void session_remove_data(session_t *session, const char *key);
+
+/**
+ * Get session ID
+ * @param session Session instance
+ * @return Session ID
+ */
+const char *session_get_id(session_t *session);
+
+/**
+ * Check if session is expired
+ * @param session Session instance
+ * @return true if expired, false otherwise
+ */
+bool session_is_expired(session_t *session);
+
+/**
+ * Clean up expired sessions from the store
+ * @param store Session store instance
+ * @return Number of sessions cleaned up
+ */
+int session_cleanup_expired(session_store_t *store);
+
+/**
+ * Get session from request (via cookie)
+ * @param store Session store instance
+ * @param req Request object
+ * @return Session instance or NULL if not found
+ */
+session_t *session_from_request(session_store_t *store, http_request_t *req);
+
+/**
+ * Set session cookie in response
+ * @param res Response object
+ * @param session_id Session ID
+ * @param max_age Maximum age in seconds (0 for session cookie, -1 to delete)
+ * @param path Cookie path (NULL for default "/")
+ */
+void session_set_cookie(http_response_t *res, const char *session_id, int max_age, const char *path);
+
+/* ===== Template Engine API ===== */
+
+/**
+ * Create a template context for variable substitution
+ * @return Template context or NULL on failure
+ */
+template_context_t *template_context_create(void);
+
+/**
+ * Set a variable in the template context
+ * @param ctx Template context
+ * @param key Variable name
+ * @param value Variable value
+ */
+void template_context_set(template_context_t *ctx, const char *key, const char *value);
+
+/**
+ * Get a variable from the template context
+ * @param ctx Template context
+ * @param key Variable name
+ * @return Variable value or NULL if not found
+ */
+const char *template_context_get(template_context_t *ctx, const char *key);
+
+/**
+ * Destroy a template context and free resources
+ * @param ctx Template context
+ */
+void template_context_destroy(template_context_t *ctx);
+
+/**
+ * Render a template string with variable substitution
+ * Variables use {{ variable_name }} syntax
+ * @param template_str Template string
+ * @param ctx Template context with variables
+ * @return Rendered string (caller must free) or NULL on error
+ */
+char *template_render(const char *template_str, template_context_t *ctx);
+
+/**
+ * Load a template from a file
+ * @param filename Path to template file
+ * @return Template string (caller must free) or NULL on error
+ */
+char *template_load_file(const char *filename);
+
+/**
+ * Send a rendered template as HTTP response
+ * @param res Response object
+ * @param status HTTP status code
+ * @param template_str Template string
+ * @param ctx Template context
+ */
+void http_response_send_template(http_response_t *res, http_status_t status,
+                                  const char *template_str, template_context_t *ctx);
+
+/* ===== Authentication Middleware API ===== */
+
+/* Auth callback: return true if authenticated, false otherwise */
+typedef bool (*auth_verify_cb_t)(const char *username, const char *password, void *user_data);
+
+/* API key verify callback */
+typedef bool (*apikey_verify_cb_t)(const char *api_key, void *user_data);
+
+/* Basic auth configuration */
+typedef struct basic_auth_config {
+    const char *realm;           /* HTTP realm for WWW-Authenticate header */
+    auth_verify_cb_t verify;     /* Callback to verify credentials */
+    void *user_data;             /* User data passed to callback */
+} basic_auth_config_t;
+
+/* API key auth configuration */
+typedef struct apikey_auth_config {
+    const char *header_name;     /* Header name (default: "X-API-Key") */
+    apikey_verify_cb_t verify;   /* Callback to verify API key */
+    void *user_data;             /* User data passed to callback */
+} apikey_auth_config_t;
+
+/* JWT auth configuration */
+typedef struct jwt_auth_config {
+    const char *secret;          /* HMAC-SHA256 secret key */
+    size_t secret_len;           /* Secret key length */
+    const char *header_name;     /* Header name (default: "Authorization") */
+} jwt_auth_config_t;
+
+/**
+ * Create a Basic Auth middleware
+ * @param config Basic auth configuration
+ * @return Middleware function or NULL on failure
+ */
+middleware_fn_t basic_auth_middleware_create(const basic_auth_config_t *config);
+
+/**
+ * Destroy Basic Auth middleware and free resources
+ */
+void basic_auth_middleware_destroy(void);
+
+/**
+ * Create an API Key auth middleware
+ * @param config API key auth configuration
+ * @return Middleware function or NULL on failure
+ */
+middleware_fn_t apikey_auth_middleware_create(const apikey_auth_config_t *config);
+
+/**
+ * Destroy API Key auth middleware and free resources
+ */
+void apikey_auth_middleware_destroy(void);
+
+/**
+ * Create a JWT auth middleware
+ * @param config JWT auth configuration
+ * @return Middleware function or NULL on failure
+ */
+middleware_fn_t jwt_auth_middleware_create(const jwt_auth_config_t *config);
+
+/**
+ * Destroy JWT auth middleware and free resources
+ */
+void jwt_auth_middleware_destroy(void);
 
 #ifdef __cplusplus
 }

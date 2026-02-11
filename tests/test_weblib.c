@@ -1,4 +1,5 @@
 #include "weblib.h"
+#include "db_pool.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1005,6 +1006,466 @@ void test_http_status_codes(void) {
     PASS();
 }
 
+/* ===== Phase 6 Tests ===== */
+
+/* Test session store create/destroy */
+void test_session_store_create_destroy(void) {
+    TEST("session_store (create/destroy)");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+
+    session_store_destroy(store);
+
+    /* Destroy NULL should not crash */
+    session_store_destroy(NULL);
+
+    PASS();
+}
+
+/* Test session create and get */
+void test_session_create_get(void) {
+    TEST("session (create/get)");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+
+    /* Create a session with 1 hour max_age */
+    char *sid = session_create(store, 3600);
+    ASSERT(sid != NULL);
+    ASSERT(strlen(sid) > 0);
+
+    /* Get session by ID */
+    session_t *sess = session_get(store, sid);
+    ASSERT(sess != NULL);
+
+    /* Session ID should match */
+    const char *retrieved_id = session_get_id(sess);
+    ASSERT(retrieved_id != NULL);
+    ASSERT(strcmp(retrieved_id, sid) == 0);
+
+    /* Session should not be expired */
+    ASSERT(session_is_expired(sess) == false);
+
+    free(sid);
+    session_store_destroy(store);
+
+    PASS();
+}
+
+/* Test session data set/get/remove */
+void test_session_data_operations(void) {
+    TEST("session (data operations)");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+
+    char *sid = session_create(store, 3600);
+    ASSERT(sid != NULL);
+
+    session_t *sess = session_get(store, sid);
+    ASSERT(sess != NULL);
+
+    /* Set data */
+    session_set_data(sess, "user_id", "42");
+    session_set_data(sess, "username", "testuser");
+
+    /* Get data */
+    const char *user_id = session_get_data(sess, "user_id");
+    ASSERT(user_id != NULL);
+    ASSERT(strcmp(user_id, "42") == 0);
+
+    const char *username = session_get_data(sess, "username");
+    ASSERT(username != NULL);
+    ASSERT(strcmp(username, "testuser") == 0);
+
+    /* Update data */
+    session_set_data(sess, "user_id", "99");
+    user_id = session_get_data(sess, "user_id");
+    ASSERT(user_id != NULL);
+    ASSERT(strcmp(user_id, "99") == 0);
+
+    /* Remove data */
+    session_remove_data(sess, "user_id");
+    ASSERT(session_get_data(sess, "user_id") == NULL);
+
+    /* Other data should still be there */
+    ASSERT(session_get_data(sess, "username") != NULL);
+
+    /* Get non-existent key */
+    ASSERT(session_get_data(sess, "nonexistent") == NULL);
+
+    free(sid);
+    session_store_destroy(store);
+
+    PASS();
+}
+
+/* Test session destroy */
+void test_session_destroy_session(void) {
+    TEST("session (destroy session)");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+
+    char *sid = session_create(store, 3600);
+    ASSERT(sid != NULL);
+
+    /* Session should exist */
+    ASSERT(session_get(store, sid) != NULL);
+
+    /* Destroy session */
+    session_destroy(store, sid);
+
+    /* Session should no longer exist */
+    ASSERT(session_get(store, sid) == NULL);
+
+    free(sid);
+    session_store_destroy(store);
+
+    PASS();
+}
+
+/* Test session expiration */
+void test_session_expiration(void) {
+    TEST("session (expiration)");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+
+    /* Create session cookie (never expires) */
+    char *sid = session_create(store, 0);
+    ASSERT(sid != NULL);
+
+    session_t *sess = session_get(store, sid);
+    ASSERT(sess != NULL);
+    ASSERT(session_is_expired(sess) == false);
+
+    /* NULL session should be considered expired */
+    ASSERT(session_is_expired(NULL) == true);
+
+    free(sid);
+    session_store_destroy(store);
+
+    PASS();
+}
+
+/* Test session cleanup */
+void test_session_cleanup(void) {
+    TEST("session (cleanup expired)");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+
+    /* Create a session with max_age=0 (session cookie, won't expire) */
+    char *sid = session_create(store, 0);
+    ASSERT(sid != NULL);
+
+    /* Cleanup should not remove it */
+    int cleaned = session_cleanup_expired(store);
+    ASSERT(cleaned == 0);
+
+    ASSERT(session_get(store, sid) != NULL);
+
+    free(sid);
+    session_store_destroy(store);
+
+    PASS();
+}
+
+/* Test session NULL handling */
+void test_session_null_handling(void) {
+    TEST("session (null handling)");
+
+    /* All functions should handle NULL gracefully */
+    ASSERT(session_create(NULL, 3600) == NULL);
+    ASSERT(session_get(NULL, "test") == NULL);
+    ASSERT(session_get_data(NULL, "key") == NULL);
+    ASSERT(session_get_id(NULL) == NULL);
+    session_destroy(NULL, "test");
+    session_set_data(NULL, "key", "value");
+    session_remove_data(NULL, "key");
+
+    PASS();
+}
+
+/* Test session cookie */
+void test_session_cookie_set(void) {
+    TEST("session (cookie set)");
+
+    http_response_t res = {0};
+
+    /* Should not crash with NULL */
+    session_set_cookie(NULL, "test", 3600, "/");
+    session_set_cookie(&res, NULL, 3600, "/");
+
+    /* Set a session cookie */
+    session_set_cookie(&res, "abc123", 3600, "/api");
+
+    /* Delete session cookie */
+    session_set_cookie(&res, "abc123", -1, "/");
+
+    PASS();
+}
+
+/* Test template context create/destroy */
+void test_template_create_destroy(void) {
+    TEST("template (create/destroy)");
+
+    template_context_t *ctx = template_context_create();
+    ASSERT(ctx != NULL);
+
+    template_context_destroy(ctx);
+
+    /* Destroy NULL should not crash */
+    template_context_destroy(NULL);
+
+    PASS();
+}
+
+/* Test template variable set/get */
+void test_template_variables(void) {
+    TEST("template (variables)");
+
+    template_context_t *ctx = template_context_create();
+    ASSERT(ctx != NULL);
+
+    /* Set variables */
+    template_context_set(ctx, "name", "Alice");
+    template_context_set(ctx, "role", "Engineer");
+
+    /* Get variables */
+    const char *name = template_context_get(ctx, "name");
+    ASSERT(name != NULL);
+    ASSERT(strcmp(name, "Alice") == 0);
+
+    const char *role = template_context_get(ctx, "role");
+    ASSERT(role != NULL);
+    ASSERT(strcmp(role, "Engineer") == 0);
+
+    /* Update variable */
+    template_context_set(ctx, "name", "Bob");
+    name = template_context_get(ctx, "name");
+    ASSERT(name != NULL);
+    ASSERT(strcmp(name, "Bob") == 0);
+
+    /* Non-existent variable */
+    ASSERT(template_context_get(ctx, "nonexistent") == NULL);
+
+    template_context_destroy(ctx);
+
+    PASS();
+}
+
+/* Test template rendering */
+void test_template_render(void) {
+    TEST("template (render)");
+
+    template_context_t *ctx = template_context_create();
+    ASSERT(ctx != NULL);
+
+    template_context_set(ctx, "name", "Alice");
+    template_context_set(ctx, "greeting", "Hello");
+
+    /* Simple variable substitution */
+    char *result = template_render("{{ greeting }}, {{ name }}!", ctx);
+    ASSERT(result != NULL);
+    ASSERT(strcmp(result, "Hello, Alice!") == 0);
+    free(result);
+
+    /* No variables */
+    result = template_render("No variables here", ctx);
+    ASSERT(result != NULL);
+    ASSERT(strcmp(result, "No variables here") == 0);
+    free(result);
+
+    /* Unknown variable renders as empty */
+    result = template_render("{{ unknown }}", ctx);
+    ASSERT(result != NULL);
+    ASSERT(strcmp(result, "") == 0);
+    free(result);
+
+    /* NULL template */
+    ASSERT(template_render(NULL, ctx) == NULL);
+
+    template_context_destroy(ctx);
+
+    PASS();
+}
+
+/* Test template file loading */
+void test_template_load_file(void) {
+    TEST("template (load file)");
+
+    /* Create a test template file */
+    FILE *f = fopen("/tmp/test_template.html", "w");
+    ASSERT(f != NULL);
+    fprintf(f, "<h1>{{ title }}</h1>");
+    fclose(f);
+
+    /* Load template */
+    char *tmpl = template_load_file("/tmp/test_template.html");
+    ASSERT(tmpl != NULL);
+    ASSERT(strcmp(tmpl, "<h1>{{ title }}</h1>") == 0);
+
+    /* Render it */
+    template_context_t *ctx = template_context_create();
+    template_context_set(ctx, "title", "Test Page");
+    char *result = template_render(tmpl, ctx);
+    ASSERT(result != NULL);
+    ASSERT(strcmp(result, "<h1>Test Page</h1>") == 0);
+
+    free(result);
+    free(tmpl);
+    template_context_destroy(ctx);
+    remove("/tmp/test_template.html");
+
+    /* Non-existent file */
+    ASSERT(template_load_file("/tmp/nonexistent_template.html") == NULL);
+    ASSERT(template_load_file(NULL) == NULL);
+
+    PASS();
+}
+
+/* Test auth middleware - basic auth create/destroy */
+void test_basic_auth_create_destroy(void) {
+    TEST("basic_auth (create/destroy)");
+
+    /* NULL config should return NULL */
+    middleware_fn_t mw = basic_auth_middleware_create(NULL);
+    ASSERT(mw == NULL);
+
+    /* Config without verify callback should return NULL */
+    basic_auth_config_t bad_config = {
+        .realm = "Test",
+        .verify = NULL,
+        .user_data = NULL
+    };
+    mw = basic_auth_middleware_create(&bad_config);
+    ASSERT(mw == NULL);
+
+    /* Destroy should be safe even without create */
+    basic_auth_middleware_destroy();
+    basic_auth_middleware_destroy();
+
+    PASS();
+}
+
+/* Test auth middleware - API key create/destroy */
+void test_apikey_auth_create_destroy(void) {
+    TEST("apikey_auth (create/destroy)");
+
+    /* NULL config should return NULL */
+    middleware_fn_t mw = apikey_auth_middleware_create(NULL);
+    ASSERT(mw == NULL);
+
+    /* Config without verify callback should return NULL */
+    apikey_auth_config_t bad_config = {
+        .header_name = "X-API-Key",
+        .verify = NULL,
+        .user_data = NULL
+    };
+    mw = apikey_auth_middleware_create(&bad_config);
+    ASSERT(mw == NULL);
+
+    /* Destroy should be safe even without create */
+    apikey_auth_middleware_destroy();
+    apikey_auth_middleware_destroy();
+
+    PASS();
+}
+
+/* Test auth middleware - JWT create/destroy */
+void test_jwt_auth_create_destroy(void) {
+    TEST("jwt_auth (create/destroy)");
+
+    /* NULL config should return NULL */
+    middleware_fn_t mw = jwt_auth_middleware_create(NULL);
+    ASSERT(mw == NULL);
+
+    /* Config without secret should return NULL */
+    jwt_auth_config_t bad_config = {
+        .secret = NULL,
+        .secret_len = 0,
+        .header_name = NULL
+    };
+    mw = jwt_auth_middleware_create(&bad_config);
+    ASSERT(mw == NULL);
+
+    /* Config with empty secret_len should return NULL */
+    jwt_auth_config_t empty_secret = {
+        .secret = "test",
+        .secret_len = 0,
+        .header_name = NULL
+    };
+    mw = jwt_auth_middleware_create(&empty_secret);
+    ASSERT(mw == NULL);
+
+    /* Destroy should be safe even without create */
+    jwt_auth_middleware_destroy();
+    jwt_auth_middleware_destroy();
+
+    PASS();
+}
+
+/* Test db_pool from PR #17 */
+void test_db_pool_create_destroy(void) {
+    TEST("db_pool (create/destroy)");
+
+    /* NULL config should return NULL */
+    ASSERT(db_pool_create(NULL) == NULL);
+
+    /* Config without connection string should return NULL */
+    db_pool_config_t bad_config = db_pool_config_default(DB_TYPE_GENERIC, NULL);
+    ASSERT(db_pool_create(&bad_config) == NULL);
+
+    /* Valid config */
+    db_pool_config_t config = db_pool_config_default(DB_TYPE_GENERIC, "generic://localhost");
+    db_pool_t *pool = db_pool_create(&config);
+    ASSERT(pool != NULL);
+
+    db_pool_destroy(pool);
+
+    /* Free the config connection string that was strdup'd */
+    free(config.connection_string);
+
+    /* Destroy NULL should not crash */
+    db_pool_destroy(NULL);
+
+    PASS();
+}
+
+/* Test db_pool acquire/release */
+void test_db_pool_acquire_release(void) {
+    TEST("db_pool (acquire/release)");
+
+    db_pool_config_t config = db_pool_config_default(DB_TYPE_GENERIC, "generic://localhost");
+    db_pool_t *pool = db_pool_create(&config);
+    ASSERT(pool != NULL);
+
+    /* Acquire a connection */
+    db_connection_t *conn = db_pool_acquire(pool);
+    ASSERT(conn != NULL);
+    ASSERT(db_connection_is_valid(conn) == true);
+    ASSERT(db_connection_get_handle(conn) != NULL);
+
+    /* Release connection */
+    int result = db_pool_release(pool, conn);
+    ASSERT(result == 0);
+
+    /* Get stats */
+    db_pool_stats_t stats;
+    result = db_pool_get_stats(pool, &stats);
+    ASSERT(result == 0);
+    ASSERT(stats.total_acquired >= 1);
+    ASSERT(stats.total_released >= 1);
+
+    db_pool_destroy(pool);
+    free(config.connection_string);
+
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -1076,6 +1537,31 @@ int main(void) {
     
     /* Phase 5: HTTP status codes */
     test_http_status_codes();
+
+    /* Phase 6: Session management tests */
+    test_session_store_create_destroy();
+    test_session_create_get();
+    test_session_data_operations();
+    test_session_destroy_session();
+    test_session_expiration();
+    test_session_cleanup();
+    test_session_null_handling();
+    test_session_cookie_set();
+
+    /* Phase 6: Template engine tests */
+    test_template_create_destroy();
+    test_template_variables();
+    test_template_render();
+    test_template_load_file();
+
+    /* Phase 6: Authentication middleware tests */
+    test_basic_auth_create_destroy();
+    test_apikey_auth_create_destroy();
+    test_jwt_auth_create_destroy();
+
+    /* Phase 6: Database connection pool tests */
+    test_db_pool_create_destroy();
+    test_db_pool_acquire_release();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

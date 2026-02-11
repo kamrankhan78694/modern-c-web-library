@@ -305,7 +305,6 @@ static void sha256_init(sha256_ctx_t *ctx)
  */
 static void sha256_update(sha256_ctx_t *ctx, const uint8_t *data, size_t len)
 {
-    size_t i;
     size_t index = (size_t)(ctx->count % SHA256_BLOCK_SIZE);
 
     ctx->count += len;
@@ -529,14 +528,12 @@ static bool parse_basic_auth(const char *auth_header,
 /**
  * basic_auth_handler - Basic authentication middleware handler
  */
-static bool basic_auth_handler(http_request_t *req, http_response_t *res, void *user_data)
+static bool basic_auth_handler(http_request_t *req, http_response_t *res)
 {
     const char *auth_header;
     char username[256];
     char password[256];
     char www_auth[512];
-
-    (void)user_data;
 
     if (!g_basic_auth_config) {
         return false;
@@ -569,8 +566,7 @@ unauthorized:
     }
     
     http_response_set_header(res, "WWW-Authenticate", www_auth);
-    http_response_set_status(res, 401);
-    http_response_send_text(res, "401 Unauthorized");
+    http_response_send_text(res, HTTP_UNAUTHORIZED, "401 Unauthorized");
     
     return false;
 }
@@ -621,12 +617,10 @@ static apikey_auth_config_t *g_apikey_auth_config = NULL;
 /**
  * apikey_auth_handler - API Key authentication middleware handler
  */
-static bool apikey_auth_handler(http_request_t *req, http_response_t *res, void *user_data)
+static bool apikey_auth_handler(http_request_t *req, http_response_t *res)
 {
     const char *header_name;
     const char *api_key;
-
-    (void)user_data;
 
     if (!g_apikey_auth_config || !g_apikey_auth_config->verify) {
         return false;
@@ -637,15 +631,13 @@ static bool apikey_auth_handler(http_request_t *req, http_response_t *res, void 
 
     api_key = http_request_get_header(req, header_name);
     if (!api_key) {
-        http_response_set_status(res, 403);
-        http_response_send_text(res, "403 Forbidden - Missing API Key");
+        http_response_send_text(res, HTTP_FORBIDDEN, "403 Forbidden - Missing API Key");
         return false;
     }
 
     /* Verify API key via callback */
     if (!g_apikey_auth_config->verify(api_key, g_apikey_auth_config->user_data)) {
-        http_response_set_status(res, 403);
-        http_response_send_text(res, "403 Forbidden - Invalid API Key");
+        http_response_send_text(res, HTTP_FORBIDDEN, "403 Forbidden - Invalid API Key");
         return false;
     }
 
@@ -785,14 +777,12 @@ static bool parse_jwt_token(const char *token,
 /**
  * jwt_auth_handler - JWT authentication middleware handler
  */
-static bool jwt_auth_handler(http_request_t *req, http_response_t *res, void *user_data)
+static bool jwt_auth_handler(http_request_t *req, http_response_t *res)
 {
     const char *header_name;
     const char *auth_header;
     const char *token;
     char payload[2048];
-
-    (void)user_data;
 
     if (!g_jwt_auth_config || !g_jwt_auth_config->secret) {
         return false;
@@ -839,8 +829,7 @@ static bool jwt_auth_handler(http_request_t *req, http_response_t *res, void *us
 
 unauthorized:
     http_response_set_header(res, "WWW-Authenticate", "Bearer");
-    http_response_set_status(res, 401);
-    http_response_send_text(res, "401 Unauthorized - Invalid or missing JWT");
+    http_response_send_text(res, HTTP_UNAUTHORIZED, "401 Unauthorized - Invalid or missing JWT");
     return false;
 }
 
