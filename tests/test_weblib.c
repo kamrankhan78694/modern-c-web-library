@@ -401,6 +401,174 @@ void test_websocket_handshake_key(void) {
     PASS();
 }
 
+/* Test JSON array creation */
+void test_json_array_create(void) {
+    TEST("json_array_create");
+    
+    json_value_t *arr = json_array_create();
+    ASSERT(arr != NULL);
+    ASSERT(arr->type == JSON_ARRAY);
+    ASSERT(json_array_length(arr) == 0);
+    
+    json_value_free(arr);
+    
+    PASS();
+}
+
+/* Test JSON array append and get */
+void test_json_array_append_get(void) {
+    TEST("json_array_append/get");
+    
+    json_value_t *arr = json_array_create();
+    ASSERT(arr != NULL);
+    
+    /* Append elements */
+    ASSERT(json_array_append(arr, json_number_create(1.0)) == 0);
+    ASSERT(json_array_append(arr, json_string_create("hello")) == 0);
+    ASSERT(json_array_append(arr, json_bool_create(true)) == 0);
+    
+    /* Check length */
+    ASSERT(json_array_length(arr) == 3);
+    
+    /* Check get by index */
+    json_value_t *elem0 = json_array_get(arr, 0);
+    ASSERT(elem0 != NULL);
+    ASSERT(elem0->type == JSON_NUMBER);
+    ASSERT(elem0->data.number_val == 1.0);
+    
+    json_value_t *elem1 = json_array_get(arr, 1);
+    ASSERT(elem1 != NULL);
+    ASSERT(elem1->type == JSON_STRING);
+    ASSERT(strcmp(elem1->data.string_val, "hello") == 0);
+    
+    json_value_t *elem2 = json_array_get(arr, 2);
+    ASSERT(elem2 != NULL);
+    ASSERT(elem2->type == JSON_BOOL);
+    ASSERT(elem2->data.bool_val == true);
+    
+    /* Out of bounds should return NULL */
+    ASSERT(json_array_get(arr, 3) == NULL);
+    ASSERT(json_array_get(arr, 999) == NULL);
+    
+    json_value_free(arr);
+    
+    PASS();
+}
+
+/* Test JSON array parse */
+void test_json_parse_array(void) {
+    TEST("json_parse (array)");
+    
+    json_value_t *arr = json_parse("[1,2,3]");
+    ASSERT(arr != NULL);
+    ASSERT(arr->type == JSON_ARRAY);
+    ASSERT(json_array_length(arr) == 3);
+    
+    json_value_t *elem0 = json_array_get(arr, 0);
+    ASSERT(elem0 != NULL);
+    ASSERT(elem0->type == JSON_NUMBER);
+    ASSERT(elem0->data.number_val == 1.0);
+    
+    json_value_t *elem2 = json_array_get(arr, 2);
+    ASSERT(elem2 != NULL);
+    ASSERT(elem2->data.number_val == 3.0);
+    
+    json_value_free(arr);
+    
+    PASS();
+}
+
+/* Test JSON array with mixed types */
+void test_json_parse_array_mixed(void) {
+    TEST("json_parse (mixed array)");
+    
+    json_value_t *arr = json_parse("[\"hello\",42,true,null]");
+    ASSERT(arr != NULL);
+    ASSERT(arr->type == JSON_ARRAY);
+    ASSERT(json_array_length(arr) == 4);
+    
+    ASSERT(json_array_get(arr, 0)->type == JSON_STRING);
+    ASSERT(strcmp(json_array_get(arr, 0)->data.string_val, "hello") == 0);
+    ASSERT(json_array_get(arr, 1)->type == JSON_NUMBER);
+    ASSERT(json_array_get(arr, 1)->data.number_val == 42.0);
+    ASSERT(json_array_get(arr, 2)->type == JSON_BOOL);
+    ASSERT(json_array_get(arr, 2)->data.bool_val == true);
+    ASSERT(json_array_get(arr, 3)->type == JSON_NULL);
+    
+    json_value_free(arr);
+    
+    PASS();
+}
+
+/* Test JSON array stringify */
+void test_json_array_stringify(void) {
+    TEST("json_stringify (array)");
+    
+    json_value_t *arr = json_array_create();
+    ASSERT(json_array_append(arr, json_number_create(1)) == 0);
+    ASSERT(json_array_append(arr, json_number_create(2)) == 0);
+    ASSERT(json_array_append(arr, json_number_create(3)) == 0);
+    
+    char *str = json_stringify(arr);
+    ASSERT(str != NULL);
+    ASSERT(strcmp(str, "[1,2,3]") == 0);
+    
+    free(str);
+    json_value_free(arr);
+    
+    PASS();
+}
+
+/* Test JSON nested array */
+void test_json_nested_array(void) {
+    TEST("json_parse (nested array)");
+    
+    json_value_t *arr = json_parse("[[1,2],[3,4]]");
+    ASSERT(arr != NULL);
+    ASSERT(arr->type == JSON_ARRAY);
+    ASSERT(json_array_length(arr) == 2);
+    
+    json_value_t *inner0 = json_array_get(arr, 0);
+    ASSERT(inner0 != NULL);
+    ASSERT(inner0->type == JSON_ARRAY);
+    ASSERT(json_array_length(inner0) == 2);
+    ASSERT(json_array_get(inner0, 0)->data.number_val == 1.0);
+    ASSERT(json_array_get(inner0, 1)->data.number_val == 2.0);
+    
+    json_value_t *inner1 = json_array_get(arr, 1);
+    ASSERT(inner1 != NULL);
+    ASSERT(inner1->type == JSON_ARRAY);
+    ASSERT(json_array_get(inner1, 0)->data.number_val == 3.0);
+    ASSERT(json_array_get(inner1, 1)->data.number_val == 4.0);
+    
+    json_value_free(arr);
+    
+    PASS();
+}
+
+/* Test JSON object with array value */
+void test_json_object_with_array(void) {
+    TEST("json_parse (object with array)");
+    
+    json_value_t *obj = json_parse("{\"items\":[1,2,3],\"name\":\"test\"}");
+    ASSERT(obj != NULL);
+    ASSERT(obj->type == JSON_OBJECT);
+    
+    json_value_t *items = json_object_get(obj, "items");
+    ASSERT(items != NULL);
+    ASSERT(items->type == JSON_ARRAY);
+    ASSERT(json_array_length(items) == 3);
+    ASSERT(json_array_get(items, 0)->data.number_val == 1.0);
+    
+    json_value_t *name = json_object_get(obj, "name");
+    ASSERT(name != NULL);
+    ASSERT(strcmp(name->data.string_val, "test") == 0);
+    
+    json_value_free(obj);
+    
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -436,6 +604,15 @@ int main(void) {
     test_websocket_frame_encode();
     test_websocket_connection_create();
     test_websocket_handshake_key();
+    
+    /* JSON array tests */
+    test_json_array_create();
+    test_json_array_append_get();
+    test_json_parse_array();
+    test_json_parse_array_mixed();
+    test_json_array_stringify();
+    test_json_nested_array();
+    test_json_object_with_array();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

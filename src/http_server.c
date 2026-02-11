@@ -470,7 +470,7 @@ static void *handle_connection(void *arg) {
         }
 
         /* Check for WebSocket upgrade (status 101 Switching Protocols) */
-        if (conn->response->status == 101) {
+        if (conn->response->status == HTTP_SWITCHING_PROTOCOLS) {
             /* Send the upgrade response */
             send_response(client_fd, conn->response, false);
             
@@ -527,7 +527,7 @@ static char *lowercase_dup(const char *src) {
 
 static const char *status_reason_phrase(http_status_t status) {
     switch (status) {
-        case 101: return "Switching Protocols";  /* WebSocket upgrade */
+        case HTTP_SWITCHING_PROTOCOLS: return "Switching Protocols";  /* WebSocket upgrade */
         case HTTP_OK: return "OK";
         case HTTP_CREATED: return "Created";
         case HTTP_ACCEPTED: return "Accepted";
@@ -765,7 +765,7 @@ static int serialize_response(http_response_t *res, bool keep_alive, char **head
     }
 
     /* Don't override Connection header for WebSocket upgrade (101) */
-    if (res->status != 101) {
+    if (res->status != HTTP_SWITCHING_PROTOCOLS) {
         if (header_list_add(headers_ref, "connection", "Connection", keep_alive ? "keep-alive" : "close", true) < 0) {
             return -1;
         }
@@ -1622,7 +1622,7 @@ static bool async_on_parser_result(async_connection_t *conn, int fd, parser_resu
             http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
         }
         /* Detect WebSocket upgrade (status 101) */
-        if (conn->response->status == 101) {
+        if (conn->response->status == HTTP_SWITCHING_PROTOCOLS) {
             conn->is_websocket = true;
             keep_alive = false; /* WebSocket managed separately */
         } else {

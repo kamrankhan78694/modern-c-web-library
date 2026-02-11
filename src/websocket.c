@@ -283,7 +283,7 @@ bool websocket_handle_upgrade(http_request_t *req, http_response_t *res) {
     }
     
     /* Send upgrade response */
-    res->status = 101; /* Switching Protocols */
+    res->status = HTTP_SWITCHING_PROTOCOLS;
     http_response_set_header(res, "Upgrade", "websocket");
     http_response_set_header(res, "Connection", "Upgrade");
     http_response_set_header(res, "Sec-WebSocket-Accept", accept_key);
