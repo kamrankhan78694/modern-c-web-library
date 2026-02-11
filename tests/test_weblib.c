@@ -1466,6 +1466,249 @@ void test_db_pool_acquire_release(void) {
     PASS();
 }
 
+/* ===== Phase 6.5: Bug Fix Regression Tests ===== */
+
+/* Test JSON escape sequence decoding in parse */
+void test_json_escape_decode(void) {
+    TEST("json_parse (escape decoding)");
+
+    /* Basic escapes */
+    json_value_t *val = json_parse("\"hello\\nworld\"");
+    ASSERT(val != NULL);
+    ASSERT(val->type == JSON_STRING);
+    ASSERT(strcmp(val->data.string_val, "hello\nworld") == 0);
+    ASSERT(strlen(val->data.string_val) == 11);
+    json_value_free(val);
+
+    /* Tab escape */
+    val = json_parse("\"a\\tb\"");
+    ASSERT(val != NULL);
+    ASSERT(strcmp(val->data.string_val, "a\tb") == 0);
+    json_value_free(val);
+
+    /* Backslash escape */
+    val = json_parse("\"a\\\\b\"");
+    ASSERT(val != NULL);
+    ASSERT(strcmp(val->data.string_val, "a\\b") == 0);
+    json_value_free(val);
+
+    /* Quote escape */
+    val = json_parse("\"a\\\"b\"");
+    ASSERT(val != NULL);
+    ASSERT(strcmp(val->data.string_val, "a\"b") == 0);
+    json_value_free(val);
+
+    /* Carriage return */
+    val = json_parse("\"a\\rb\"");
+    ASSERT(val != NULL);
+    ASSERT(strcmp(val->data.string_val, "a\rb") == 0);
+    json_value_free(val);
+
+    /* Backspace and formfeed */
+    val = json_parse("\"\\b\\f\"");
+    ASSERT(val != NULL);
+    ASSERT(val->data.string_val[0] == '\b');
+    ASSERT(val->data.string_val[1] == '\f');
+    json_value_free(val);
+
+    /* Forward slash */
+    val = json_parse("\"\\/\"");
+    ASSERT(val != NULL);
+    ASSERT(strcmp(val->data.string_val, "/") == 0);
+    json_value_free(val);
+
+    /* Unicode escape \u0041 = 'A' */
+    val = json_parse("\"\\u0041\"");
+    ASSERT(val != NULL);
+    ASSERT(strcmp(val->data.string_val, "A") == 0);
+    json_value_free(val);
+
+    /* Invalid escape rejected */
+    val = json_parse("\"\\q\"");
+    ASSERT(val == NULL);
+
+    PASS();
+}
+
+/* Test JSON stringify escape round-trip */
+void test_json_stringify_escapes(void) {
+    TEST("json_stringify (escape encoding)");
+
+    /* String with special chars */
+    json_value_t *val = json_string_create("line1\nline2\ttab");
+    char *str = json_stringify(val);
+    ASSERT(str != NULL);
+    ASSERT(strstr(str, "\\n") != NULL);
+    ASSERT(strstr(str, "\\t") != NULL);
+    json_value_free(val);
+
+    /* Round-trip: parse the stringify output */
+    json_value_t *reparsed = json_parse(str);
+    ASSERT(reparsed != NULL);
+    ASSERT(strcmp(reparsed->data.string_val, "line1\nline2\ttab") == 0);
+    json_value_free(reparsed);
+    free(str);
+
+    /* Backslash and quote round-trip */
+    val = json_string_create("a\\b\"c");
+    str = json_stringify(val);
+    ASSERT(str != NULL);
+    reparsed = json_parse(str);
+    ASSERT(reparsed != NULL);
+    ASSERT(strcmp(reparsed->data.string_val, "a\\b\"c") == 0);
+    json_value_free(val);
+    json_value_free(reparsed);
+    free(str);
+
+    /* Control characters */
+    val = json_string_create("\b\f");
+    str = json_stringify(val);
+    ASSERT(str != NULL);
+    ASSERT(strstr(str, "\\b") != NULL);
+    ASSERT(strstr(str, "\\f") != NULL);
+    json_value_free(val);
+    free(str);
+
+    PASS();
+}
+
+/* Test JSON stringify object key escaping */
+void test_json_stringify_key_escape(void) {
+    TEST("json_stringify (key escaping)");
+
+    json_value_t *obj = json_object_create();
+    ASSERT(obj != NULL);
+    json_object_set(obj, "key\"with\"quotes", json_string_create("value"));
+    char *str = json_stringify(obj);
+    ASSERT(str != NULL);
+    /* Key should be escaped */
+    ASSERT(strstr(str, "key\\\"with\\\"quotes") != NULL);
+    json_value_free(obj);
+    free(str);
+
+    PASS();
+}
+
+/* Test JSON rejects unterminated containers */
+void test_json_unterminated(void) {
+    TEST("json_parse (unterminated)");
+
+    /* Unterminated object */
+    json_value_t *val = json_parse("{\"key\": \"value\"");
+    ASSERT(val == NULL);
+
+    /* Unterminated array */
+    val = json_parse("[1, 2, 3");
+    ASSERT(val == NULL);
+
+    /* Unterminated string */
+    val = json_parse("\"hello");
+    ASSERT(val == NULL);
+
+    /* Properly terminated ones should work */
+    val = json_parse("{\"key\": \"value\"}");
+    ASSERT(val != NULL);
+    json_value_free(val);
+
+    val = json_parse("[1, 2, 3]");
+    ASSERT(val != NULL);
+    json_value_free(val);
+
+    PASS();
+}
+
+/* Test JSON rejects trailing garbage */
+void test_json_trailing_garbage(void) {
+    TEST("json_parse (trailing garbage)");
+
+    /* Trailing garbage after valid JSON */
+    json_value_t *val = json_parse("123 garbage");
+    ASSERT(val == NULL);
+
+    val = json_parse("true extra");
+    ASSERT(val == NULL);
+
+    val = json_parse("{} more");
+    ASSERT(val == NULL);
+
+    /* Trailing whitespace is OK */
+    val = json_parse("123   ");
+    ASSERT(val != NULL);
+    json_value_free(val);
+
+    PASS();
+}
+
+/* Test JSON bool/null termination verification */
+void test_json_keyword_termination(void) {
+    TEST("json_parse (keyword termination)");
+
+    /* "trueness" should not parse as true */
+    json_value_t *val = json_parse("trueness");
+    ASSERT(val == NULL);
+
+    /* "nullable" should not parse as null */
+    val = json_parse("nullable");
+    ASSERT(val == NULL);
+
+    /* "falsehood" should not parse as false */
+    val = json_parse("falsehood");
+    ASSERT(val == NULL);
+
+    /* Proper values work */
+    val = json_parse("true");
+    ASSERT(val != NULL);
+    ASSERT(val->type == JSON_BOOL);
+    json_value_free(val);
+
+    val = json_parse("null");
+    ASSERT(val != NULL);
+    ASSERT(val->type == JSON_NULL);
+    json_value_free(val);
+
+    PASS();
+}
+
+/* Test json_null_create */
+void test_json_null_create(void) {
+    TEST("json_null_create");
+
+    json_value_t *val = json_null_create();
+    ASSERT(val != NULL);
+    ASSERT(val->type == JSON_NULL);
+
+    char *str = json_stringify(val);
+    ASSERT(str != NULL);
+    ASSERT(strcmp(str, "null") == 0);
+    free(str);
+
+    json_value_free(val);
+
+    PASS();
+}
+
+/* Test JSON deep nesting protection */
+void test_json_depth_limit(void) {
+    TEST("json_parse (depth limit)");
+
+    /* Build a deeply nested array: [[[[...]]]] */
+    char deep[1200];
+    memset(deep, '[', 600);
+    memset(deep + 600, ']', 600);
+    deep[1200 - 1] = '\0';
+
+    json_value_t *val = json_parse(deep);
+    /* Should be rejected due to depth limit */
+    ASSERT(val == NULL);
+
+    /* Moderate nesting should work */
+    val = json_parse("[[[[1]]]]");
+    ASSERT(val != NULL);
+    json_value_free(val);
+
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -1562,6 +1805,16 @@ int main(void) {
     /* Phase 6: Database connection pool tests */
     test_db_pool_create_destroy();
     test_db_pool_acquire_release();
+
+    /* Phase 6.5: Bug fix regression tests */
+    test_json_escape_decode();
+    test_json_stringify_escapes();
+    test_json_stringify_key_escape();
+    test_json_unterminated();
+    test_json_trailing_garbage();
+    test_json_keyword_termination();
+    test_json_null_create();
+    test_json_depth_limit();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

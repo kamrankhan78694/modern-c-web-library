@@ -151,6 +151,10 @@ db_pool_t *db_pool_create(const db_pool_config_t *config) {
     
     pool->config = *config;
     pool->config.connection_string = strdup(config->connection_string);
+    if (!pool->config.connection_string) {
+        free(pool);
+        return NULL;
+    }
     
     pool->capacity = config->max_connections;
     pool->connections = (db_connection_t **)calloc(pool->capacity, sizeof(db_connection_t *));

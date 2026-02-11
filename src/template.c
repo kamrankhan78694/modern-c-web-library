@@ -66,8 +66,12 @@ void template_context_set(template_context_t *ctx, const char *key, const char *
     while (entry) {
         if (strcmp(entry->key, key) == 0) {
             /* Update existing value */
+            char *new_value = strdup(value);
+            if (!new_value) {
+                return; /* Keep old value on allocation failure */
+            }
             free(entry->value);
-            entry->value = strdup(value);
+            entry->value = new_value;
             return;
         }
         entry = entry->next;
