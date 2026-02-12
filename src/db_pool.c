@@ -359,6 +359,32 @@ void db_pool_destroy(db_pool_t *pool) {
     pool->shutdown = true;
     pthread_cond_broadcast(&pool->cond);
     
+    /* Wait for in-use connections to be released before destroying */
+    {
+        bool has_in_use = true;
+        int wait_rounds = 0;
+        while (has_in_use && wait_rounds < 50) {
+            has_in_use = false;
+            for (size_t i = 0; i < pool->size; i++) {
+                if (pool->connections[i]->state == DB_CONN_IN_USE) {
+                    has_in_use = true;
+                    break;
+                }
+            }
+            if (has_in_use) {
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_nsec += 100000000; /* 100ms */
+                if (ts.tv_nsec >= 1000000000) {
+                    ts.tv_sec++;
+                    ts.tv_nsec -= 1000000000;
+                }
+                pthread_cond_timedwait(&pool->cond, &pool->mutex, &ts);
+                wait_rounds++;
+            }
+        }
+    }
+    
     for (size_t i = 0; i < pool->size; i++) {
         close_connection(pool, pool->connections[i]);
     }

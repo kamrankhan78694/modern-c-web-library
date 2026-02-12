@@ -195,8 +195,14 @@ session_t *session_get(session_store_t *store, const char *session_id) {
         if (store->sessions[i].in_use && 
             strcmp(store->sessions[i].session_id, session_id) == 0) {
             
-            /* Check if expired */
+            /* Check if expired - auto-cleanup to prevent slot exhaustion */
             if (session_is_expired(&store->sessions[i])) {
+                free_session_data(store->sessions[i].data);
+                store->sessions[i].data = NULL;
+                store->sessions[i].in_use = false;
+                if (store->session_count > 0) {
+                    store->session_count--;
+                }
                 return NULL;
             }
             

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <unistd.h>
 
 /* Test counter */
 static int tests_run = 0;
@@ -13,6 +14,13 @@ static int tests_passed = 0;
 static void dummy_handler(http_request_t *req, http_response_t *res) {
     (void)req;
     (void)res;
+}
+
+/* Dummy event callback for testing */
+static void dummy_event_callback(int fd, int events, void *user_data) {
+    (void)fd;
+    (void)events;
+    (void)user_data;
 }
 
 /* Test macros */
@@ -1709,6 +1717,86 @@ void test_json_depth_limit(void) {
     PASS();
 }
 
+/* ===== Phase 6.5.2: Bug Fix Regression Tests (Phase 2) ===== */
+
+/* Test expired session auto-cleanup on access */
+void test_session_expired_cleanup_on_get(void) {
+    TEST("session (expired auto-cleanup on get)");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+
+    /* Create a session with very short max_age=1 */
+    char *sid = session_create(store, 1);
+    ASSERT(sid != NULL);
+
+    /* Session should exist immediately */
+    session_t *sess = session_get(store, sid);
+    ASSERT(sess != NULL);
+
+    /* Wait for expiry */
+    sleep(2);
+
+    /* Getting expired session should return NULL AND free the slot */
+    sess = session_get(store, sid);
+    ASSERT(sess == NULL);
+
+    /* The slot should now be free - create a new session should succeed */
+    char *sid2 = session_create(store, 3600);
+    ASSERT(sid2 != NULL);
+
+    free(sid);
+    free(sid2);
+    session_store_destroy(store);
+
+    PASS();
+}
+
+/* Test router handles NULL req->path safely */
+void test_router_null_path(void) {
+    TEST("router (null path safety)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    ASSERT(router_add_route(router, HTTP_GET, "/test", dummy_handler) == 0);
+
+    /* router_route with NULL should not crash - returns -1 */
+    ASSERT(router_route(router, NULL, NULL) == -1);
+
+    router_destroy(router);
+
+    PASS();
+}
+
+/* Test event loop timer ID safety and re-entrancy protection */
+void test_event_loop_timer_safety(void) {
+    TEST("event_loop (timer safety)");
+
+    event_loop_t *loop = event_loop_create();
+    ASSERT(loop != NULL);
+
+    /* Add and cancel multiple timers to exercise ID management */
+    int id1 = event_loop_add_timeout(loop, 1000, dummy_event_callback, NULL);
+    ASSERT(id1 > 0);
+    int id2 = event_loop_add_timeout(loop, 2000, dummy_event_callback, NULL);
+    ASSERT(id2 > 0);
+    ASSERT(id1 != id2);
+
+    /* Cancel first timer */
+    ASSERT(event_loop_cancel_timeout(loop, id1) == 0);
+
+    /* Cancel already-cancelled timer should fail */
+    ASSERT(event_loop_cancel_timeout(loop, id1) == -1);
+
+    /* Second timer should still be cancellable */
+    ASSERT(event_loop_cancel_timeout(loop, id2) == 0);
+
+    event_loop_destroy(loop);
+
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -1815,6 +1903,11 @@ int main(void) {
     test_json_keyword_termination();
     test_json_null_create();
     test_json_depth_limit();
+
+    /* Phase 6.5.2: Bug fix regression tests (Phase 2) */
+    test_session_expired_cleanup_on_get();
+    test_router_null_path();
+    test_event_loop_timer_safety();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

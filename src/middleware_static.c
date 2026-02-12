@@ -217,8 +217,8 @@ static char *_read_file(const char *filepath, size_t *out_size) {
         return NULL;
     }
     
-    /* Allocate buffer */
-    char *buffer = malloc((size_t)size);
+    /* Allocate buffer (+1 to handle zero-length files where malloc(0) may return NULL) */
+    char *buffer = malloc((size_t)size + 1);
     if (!buffer) {
         fclose(file);
         return NULL;
@@ -289,7 +289,7 @@ static bool _static_file_handler(http_request_t *req, http_response_t *res) {
     
     /* Check file size */
     if (st.st_size > MAX_FILE_SIZE) {
-        http_response_send_text(res, HTTP_BAD_REQUEST, "File too large");
+        http_response_send_text(res, HTTP_INTERNAL_ERROR, "File too large");
         return false;
     }
     

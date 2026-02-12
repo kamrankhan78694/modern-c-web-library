@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <time.h>
 
 /* ===== Base64 Decoding (RFC 4648) ===== */
 
@@ -522,6 +523,9 @@ static bool parse_basic_auth(const char *auth_header,
     memcpy(password, colon + 1, password_len);
     password[password_len] = '\0';
 
+    /* Clear decoded credentials from stack to prevent memory disclosure */
+    memset(decoded, 0, sizeof(decoded));
+
     return true;
 }
 
@@ -788,7 +792,31 @@ static bool parse_jwt_token(const char *token,
     hmac_sha256(secret, secret_len, (uint8_t *)signing_input, signing_input_len, computed_signature);
 
     /* Constant-time comparison to prevent timing attacks */
-    return secure_compare(signature_decoded, computed_signature, SHA256_DIGEST_SIZE);
+    if (!secure_compare(signature_decoded, computed_signature, SHA256_DIGEST_SIZE)) {
+        return false;
+    }
+
+    /* Validate expiration claim if present */
+    {
+        const char *exp_str = strstr((const char *)payload_decoded, "\"exp\"");
+        if (exp_str) {
+            /* Skip to the value: past "exp" and any whitespace/colon */
+            exp_str += 5; /* skip "exp"" */
+            while (*exp_str == ' ' || *exp_str == ':' || *exp_str == '\t') {
+                exp_str++;
+            }
+            char *endptr = NULL;
+            long exp_val = strtol(exp_str, &endptr, 10);
+            if (endptr != exp_str && exp_val > 0) {
+                time_t now = time(NULL);
+                if ((time_t)exp_val < now) {
+                    return false; /* Token expired */
+                }
+            }
+        }
+    }
+
+    return true;
 }
 
 /**

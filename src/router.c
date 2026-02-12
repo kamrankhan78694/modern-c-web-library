@@ -84,7 +84,7 @@ int router_use_middleware(router_t *router, middleware_fn_t middleware) {
 
 /* Route request */
 int router_route(router_t *router, http_request_t *req, http_response_t *res) {
-    if (!router || !req || !res) {
+    if (!router || !req || !res || !req->path) {
         return -1;
     }
     
@@ -92,6 +92,10 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res) {
     for (size_t i = 0; i < router->middleware_count; i++) {
         if (!router->middlewares[i](req, res)) {
             /* Middleware stopped the chain */
+            return 0;
+        }
+        /* If middleware already sent a response, stop */
+        if (res->sent) {
             return 0;
         }
     }
@@ -164,8 +168,8 @@ static bool match_route(const char *pattern, const char *path) {
     bool match = true;
     
     while (pattern_token && path_token) {
-        /* If pattern segment starts with ':', it's a parameter - matches anything */
-        if (pattern_token[0] != ':') {
+        /* If pattern segment starts with ':' and has a name, it's a parameter - matches anything */
+        if (pattern_token[0] != ':' || pattern_token[1] == '\0') {
             if (strcmp(pattern_token, path_token) != 0) {
                 match = false;
                 break;
