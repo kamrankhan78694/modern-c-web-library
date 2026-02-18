@@ -23,7 +23,7 @@ Before planning, we analyzed every major C/C++ web framework:
 | **libmicrohttpd** | LGPL      | GnuTLS      | No     | No        | Both     | No          | No         | No           | No            | No            |
 | **Kore**        | ISC          | Built-in    | No     | Yes       | Workers  | No          | No         | No           | No            | Modules       |
 | **lwan**        | GPL          | mbedTLS     | No     | No        | Event    | No          | No         | No           | No            | No            |
-| **MCWL (Ours)** | MIT          | Planned     | No     | Yes       | Both     | No          | No         | No           | No            | No            |
+| **MCWL (Ours)** | MIT          | Planned     | No     | Yes       | Both     | Pool only   | No         | No           | No            | No            |
 
 **Key Finding**: No C web framework offers auto-generated API documentation, built-in observability, coroutine-style async, runtime plugin loading, structured logging, or self-describing APIs. These are gaps we can own.
 
@@ -1208,12 +1208,19 @@ After Phase 7, MCWL will be the **only** web framework in any language that comb
 
 ## Notes for Contributors
 
-1. **Phase 6 should be completed first** — Phase 7 builds on stable SSL/TLS, sessions, and auth from Phase 6
+1. **Phase 6 is complete** ✅ — Sessions, template engine, auth middleware (Basic/API Key/JWT), DB pooling, and API docs are all implemented. Phase 7 builds on this stable foundation.
 2. **Branch naming**: Use `feature/phase7-api-docs`, `feature/phase7-logging`, etc.
 3. **Commit messages**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat(docs): add self-documenting API endpoint`)
 4. **Testing**: Every feature must have unit tests. Integration tests for cross-feature synergies.
 5. **Pure C only**: All implementations must use standard C library + platform APIs. No external libraries.
 6. **Platform coverage**: Features must work on Linux and macOS. Windows support where feasible (except 7.8).
+7. **Remaining from earlier phases** (can be tackled alongside Phase 7):
+   - SSL/TLS support (custom pure C implementation)
+   - HTTP/2 and HTTP/3/QUIC protocol support
+   - Async WebSocket mode (event loop integration)
+   - Complete HTTP parser hardening
+   - Response compression (gzip, deflate, brotli)
+   - Graceful shutdown & thread management
 
 ---
 
@@ -1223,12 +1230,13 @@ After Phase 7, MCWL will be the **only** web framework in any language that comb
 |---------|------|---------|
 | 1.0 | 2026-02-11 | Initial Phase 7 competitive edge roadmap (7.1–7.8) |
 | 1.1 | 2026-02-11 | Added cross-ecosystem competitive gap features (7.9–7.15): request recording & replay, chaos testing, API versioning & drift detection, per-route resource budgets, idempotency, shadow/canary testing, diagnostic REPL |
+| 1.2 | 2026-02-18 | Updated for Phase 6 completion; resolved merge conflicts with main; added remaining items documentation |
 
 ---
 
 **Maintained by**: MCWL Core Team  
-**Last Updated**: 2026-02-11  
-**Status**: Planning  
+**Last Updated**: 2026-02-18  
+**Status**: Planning — Ready for Implementation  
 **License**: MIT (see LICENSE file)
 
 For questions or discussions about this roadmap, please open an issue on GitHub or contact the maintainers.

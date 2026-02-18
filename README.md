@@ -74,9 +74,18 @@ This policy emphasizes **C craftsmanship** over convenience through other ecosys
 - **Event Loop**: High-performance non-blocking I/O for handling thousands of concurrent connections
 - **Routing**: Flexible routing with support for route parameters (e.g., `/users/:id`)
 - **Middleware**: Chain middleware functions for request processing
-- **JSON Support**: Built-in JSON parser and serializer
+- **JSON Support**: Built-in JSON parser and serializer with array support
+- **Session Management**: Cookie-based server-side sessions with expiration and cleanup
+- **Template Engine**: `{{ variable }}` syntax with context-based rendering and file loading
+- **Authentication**: Basic Auth, API Key, and JWT (HMAC-SHA256) middleware — all in pure C
+- **Database Connection Pool**: Thread-safe pooling with configurable min/max, validation, and stats
+- **Body Parsing**: URL-encoded and multipart form data with file uploads
+- **Cookie Handling**: RFC 6265 cookies with Secure, HttpOnly, SameSite support
+- **CORS Middleware**: Configurable cross-origin resource sharing
+- **Rate Limiting**: IP-based rate limiting with token bucket algorithm
+- **Static File Serving**: MIME detection, ETag, path traversal prevention
 - **Cross-Platform**: Works on Linux, macOS, and Windows
-- **Modern C Patterns**: Clean, modular API design
+- **Modern C Patterns**: Clean, modular API design with zero external dependencies
 
 ## Quick Start
 
@@ -632,9 +641,9 @@ For a list of planned features and enhancements, check out [TODO.md](TODO.md).
 
 **Current Status**: ✅ Production-ready with 100% test pass rate
 
-- **Tests**: 21/21 passing
+- **Tests**: 60/60 passing
 - **Code Quality**: Zero compiler warnings (1 informational about string literal length)
-- **Security**: All buffer operations bounds-checked
+- **Security**: All buffer operations bounds-checked, HMAC-SHA256 with constant-time comparison
 - **Debugging**: Full IDE integration with LLDB/GDB
 - **WebSocket**: RFC 6455 compliant implementation
 
@@ -647,14 +656,19 @@ For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMEN
 - [x] Security improvements (safe string operations)
 - [x] Comprehensive debugging setup
 - [x] WebSocket support (RFC 6455)
-- [ ] SSL/TLS support
-- [ ] Request body parsing (form data, multipart)
-- [ ] Cookie handling
-- [ ] Session management
-- [ ] Template engine
-- [ ] Database connection pooling
-- [ ] Rate limiting
-- [ ] Static file serving
+- [x] Request body parsing (form data, multipart)
+- [x] Cookie handling (RFC 6265)
+- [x] CORS middleware
+- [x] Rate limiting (token bucket)
+- [x] Static file serving (MIME, ETag, path traversal prevention)
+- [x] Session management (cookie-based, expiration, cleanup)
+- [x] Template engine (`{{ variable }}` syntax)
+- [x] Authentication middleware (Basic Auth, API Key, JWT/HMAC-SHA256)
+- [x] Database connection pooling (thread-safe, configurable)
+- [x] API documentation (`docs/api/`)
+- [ ] SSL/TLS support (pure C implementation)
+- [ ] HTTP/2 support
+- [ ] WebSocket async mode (event loop integration)
 
 ## Community & Support
 
