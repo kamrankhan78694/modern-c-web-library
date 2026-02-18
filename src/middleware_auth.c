@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <time.h>
 
 /* ===== Base64 Decoding (RFC 4648) ===== */
 
@@ -522,6 +523,9 @@ static bool parse_basic_auth(const char *auth_header,
     memcpy(password, colon + 1, password_len);
     password[password_len] = '\0';
 
+    /* Clear decoded credentials from stack to prevent memory disclosure */
+    memset(decoded, 0, sizeof(decoded));
+
     return true;
 }
 
@@ -580,6 +584,9 @@ middleware_fn_t basic_auth_middleware_create(const basic_auth_config_t *config)
         return NULL;
     }
 
+    /* Destroy existing config if any */
+    basic_auth_middleware_destroy();
+
     /* Allocate and store configuration */
     g_basic_auth_config = malloc(sizeof(basic_auth_config_t));
     if (!g_basic_auth_config) {
@@ -591,6 +598,11 @@ middleware_fn_t basic_auth_middleware_create(const basic_auth_config_t *config)
     /* Duplicate realm string if provided */
     if (config->realm) {
         g_basic_auth_config->realm = strdup(config->realm);
+        if (!g_basic_auth_config->realm) {
+            free(g_basic_auth_config);
+            g_basic_auth_config = NULL;
+            return NULL;
+        }
     }
 
     return basic_auth_handler;
@@ -654,6 +666,9 @@ middleware_fn_t apikey_auth_middleware_create(const apikey_auth_config_t *config
         return NULL;
     }
 
+    /* Destroy existing config if any */
+    apikey_auth_middleware_destroy();
+
     /* Allocate and store configuration */
     g_apikey_auth_config = malloc(sizeof(apikey_auth_config_t));
     if (!g_apikey_auth_config) {
@@ -665,6 +680,11 @@ middleware_fn_t apikey_auth_middleware_create(const apikey_auth_config_t *config
     /* Duplicate header name if provided */
     if (config->header_name) {
         g_apikey_auth_config->header_name = strdup(config->header_name);
+        if (!g_apikey_auth_config->header_name) {
+            free(g_apikey_auth_config);
+            g_apikey_auth_config = NULL;
+            return NULL;
+        }
     }
 
     return apikey_auth_handler;
@@ -772,7 +792,31 @@ static bool parse_jwt_token(const char *token,
     hmac_sha256(secret, secret_len, (uint8_t *)signing_input, signing_input_len, computed_signature);
 
     /* Constant-time comparison to prevent timing attacks */
-    return secure_compare(signature_decoded, computed_signature, SHA256_DIGEST_SIZE);
+    if (!secure_compare(signature_decoded, computed_signature, SHA256_DIGEST_SIZE)) {
+        return false;
+    }
+
+    /* Validate expiration claim if present */
+    {
+        const char *exp_str = strstr((const char *)payload_decoded, "\"exp\"");
+        if (exp_str) {
+            /* Skip to the value: past "exp" and any whitespace/colon */
+            exp_str += 5; /* skip "exp"" */
+            while (*exp_str == ' ' || *exp_str == ':' || *exp_str == '\t') {
+                exp_str++;
+            }
+            char *endptr = NULL;
+            long exp_val = strtol(exp_str, &endptr, 10);
+            if (endptr != exp_str && exp_val > 0) {
+                time_t now = time(NULL);
+                if ((time_t)exp_val < now) {
+                    return false; /* Token expired */
+                }
+            }
+        }
+    }
+
+    return true;
 }
 
 /**
@@ -843,6 +887,9 @@ middleware_fn_t jwt_auth_middleware_create(const jwt_auth_config_t *config)
         return NULL;
     }
 
+    /* Destroy existing config if any */
+    jwt_auth_middleware_destroy();
+
     /* Allocate and store configuration */
     g_jwt_auth_config = malloc(sizeof(jwt_auth_config_t));
     if (!g_jwt_auth_config) {
@@ -863,6 +910,12 @@ middleware_fn_t jwt_auth_middleware_create(const jwt_auth_config_t *config)
     /* Duplicate header name if provided */
     if (config->header_name) {
         g_jwt_auth_config->header_name = strdup(config->header_name);
+        if (!g_jwt_auth_config->header_name) {
+            free((void *)g_jwt_auth_config->secret);
+            free(g_jwt_auth_config);
+            g_jwt_auth_config = NULL;
+            return NULL;
+        }
     }
 
     return jwt_auth_handler;

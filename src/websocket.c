@@ -7,9 +7,11 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <ctype.h>
+#include <stdint.h>
 
 /* Case-insensitive substring search (portable implementation) */
 static const char *_strcasestr(const char *haystack, const char *needle) {
+    if (!haystack) return NULL;
     if (!needle || !*needle) return haystack;
     
     size_t needle_len = strlen(needle);
@@ -316,6 +318,11 @@ websocket_connection_t *websocket_connection_create(int fd) {
 void websocket_connection_destroy(websocket_connection_t *conn) {
     if (!conn) return;
     
+    if (conn->fd >= 0) {
+        close(conn->fd);
+        conn->fd = -1;
+    }
+    
     if (conn->buffer) {
         free(conn->buffer);
     }
@@ -352,9 +359,28 @@ static int ws_parse_frame_header(const uint8_t *data, size_t len, ws_frame_t *fr
         for (int i = 0; i < 8; i++) {
             frame->payload_length = (frame->payload_length << 8) | data[2 + i];
         }
+        /* RFC 6455 §5.2: most significant bit MUST be 0 */
+        if (frame->payload_length & ((uint64_t)1 << 63)) {
+            return -1;
+        }
         header_size = 10;
     } else {
         frame->payload_length = payload_len;
+    }
+    
+    /* Reject control frames with payload > 125 (RFC 6455 §5.5) */
+    if (frame->opcode >= 0x8 && frame->payload_length > 125) {
+        return -1;
+    }
+    
+    /* Reject control frames that are fragmented (RFC 6455 §5.5) */
+    if (frame->opcode >= 0x8 && !frame->fin) {
+        return -1;
+    }
+    
+    /* Reject frames with RSV bits set (no extensions negotiated) */
+    if (frame->rsv1 || frame->rsv2 || frame->rsv3) {
+        return -1;
     }
     
     if (frame->masked) {
@@ -371,6 +397,23 @@ static void ws_unmask_payload(uint8_t *payload, size_t len, const uint8_t mask[4
     for (size_t i = 0; i < len; i++) {
         payload[i] ^= mask[i % 4];
     }
+}
+
+/* Helper: send all bytes, handling partial writes */
+static int ws_send_all(int fd, const void *buf, size_t len) {
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t remaining = len;
+    while (remaining > 0) {
+        ssize_t sent = send(fd, p, remaining, 0);
+        if (sent < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (sent == 0) return -1;
+        p += sent;
+        remaining -= (size_t)sent;
+    }
+    return 0;
 }
 
 /* Send WebSocket frame */
@@ -396,9 +439,11 @@ int websocket_send(websocket_connection_t *conn, ws_message_type_t type, const v
         header[3] = len & 0xFF;
         header_len = 4;
     } else {
+        uint64_t len64 = (uint64_t)len;
         header[1] = 127;
         for (int i = 7; i >= 0; i--) {
-            header[2 + i] = (len >> (8 * (7 - i))) & 0xFF;
+            header[2 + i] = (uint8_t)(len64 & 0xFF);
+            len64 >>= 8;
         }
         header_len = 10;
     }
@@ -406,15 +451,13 @@ int websocket_send(websocket_connection_t *conn, ws_message_type_t type, const v
     /* Server-to-client frames are not masked */
     
     /* Send header */
-    ssize_t sent = send(conn->fd, header, header_len, 0);
-    if (sent < 0) {
+    if (ws_send_all(conn->fd, header, header_len) < 0) {
         return -1;
     }
     
     /* Send payload */
-    if (len > 0) {
-        sent = send(conn->fd, data, len, 0);
-        if (sent < 0) {
+    if (len > 0 && data) {
+        if (ws_send_all(conn->fd, data, len) < 0) {
             return -1;
         }
     }
@@ -424,6 +467,7 @@ int websocket_send(websocket_connection_t *conn, ws_message_type_t type, const v
 
 /* Send WebSocket text message */
 int websocket_send_text(websocket_connection_t *conn, const char *text) {
+    if (!text) return -1;
     return websocket_send(conn, WS_MESSAGE_TEXT, text, strlen(text));
 }
 
@@ -438,13 +482,22 @@ int websocket_send_ping(websocket_connection_t *conn, const void *data, size_t l
         return -1;
     }
     
+    /* RFC 6455 §5.5: control frame payload max 125 bytes */
+    if (len > 125) {
+        return -1;
+    }
+    
     uint8_t header[2];
     header[0] = 0x80 | WS_OPCODE_PING;
     header[1] = (uint8_t)len;
     
-    send(conn->fd, header, 2, 0);
-    if (len > 0) {
-        send(conn->fd, data, len, 0);
+    if (ws_send_all(conn->fd, header, 2) < 0) {
+        return -1;
+    }
+    if (len > 0 && data) {
+        if (ws_send_all(conn->fd, data, len) < 0) {
+            return -1;
+        }
     }
     
     return 0;
@@ -456,13 +509,22 @@ int websocket_send_pong(websocket_connection_t *conn, const void *data, size_t l
         return -1;
     }
     
+    /* RFC 6455 §5.5: control frame payload max 125 bytes */
+    if (len > 125) {
+        return -1;
+    }
+    
     uint8_t header[2];
     header[0] = 0x80 | WS_OPCODE_PONG;
     header[1] = (uint8_t)len;
     
-    send(conn->fd, header, 2, 0);
-    if (len > 0) {
-        send(conn->fd, data, len, 0);
+    if (ws_send_all(conn->fd, header, 2) < 0) {
+        return -1;
+    }
+    if (len > 0 && data) {
+        if (ws_send_all(conn->fd, data, len) < 0) {
+            return -1;
+        }
     }
     
     return 0;
@@ -474,9 +536,20 @@ int websocket_close(websocket_connection_t *conn, uint16_t code, const char *rea
         return -1;
     }
     
+    /* If already closing, just finish the close */
+    if (conn->state == WS_STATE_CLOSING) {
+        conn->state = WS_STATE_CLOSED;
+        if (conn->fd >= 0) {
+            close(conn->fd);
+            conn->fd = -1;
+        }
+        return 0;
+    }
+    
     conn->state = WS_STATE_CLOSING;
     
-    uint8_t close_frame[125];
+    /* 2 bytes header + 2 bytes status code + up to 123 bytes reason = 127 max */
+    uint8_t close_frame[127];
     close_frame[0] = 0x80 | WS_OPCODE_CLOSE;
     
     size_t payload_len = 2;
@@ -492,24 +565,36 @@ int websocket_close(websocket_connection_t *conn, uint16_t code, const char *rea
     
     close_frame[1] = (uint8_t)payload_len;
     
-    send(conn->fd, close_frame, payload_len + 2, 0);
+    ws_send_all(conn->fd, close_frame, payload_len + 2);
     
     conn->state = WS_STATE_CLOSED;
-    close(conn->fd);
+    if (conn->fd >= 0) {
+        close(conn->fd);
+        conn->fd = -1;
+    }
     
     return 0;
 }
 
 /* Process incoming WebSocket data */
 int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, size_t len) {
-    if (!conn || conn->state != WS_STATE_OPEN) {
+    if (!conn || (conn->state != WS_STATE_OPEN && conn->state != WS_STATE_CLOSING)) {
+        return -1;
+    }
+    
+    /* Check for overflow before adding */
+    if (len > SIZE_MAX - conn->buffer_len) {
         return -1;
     }
     
     /* Add data to buffer */
     if (conn->buffer_len + len > conn->buffer_capacity) {
-        size_t new_capacity = conn->buffer_capacity * 2;
-        while (new_capacity < conn->buffer_len + len) {
+        size_t new_capacity = conn->buffer_capacity;
+        size_t needed = conn->buffer_len + len;
+        while (new_capacity < needed) {
+            if (new_capacity > SIZE_MAX / 2) {
+                return -1;
+            }
             new_capacity *= 2;
         }
         
@@ -535,16 +620,27 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
             break;
         }
         
-        size_t frame_size = header_size + frame.payload_length;
+        /* Check for overflow: header_size + payload_length */
+        if (frame.payload_length > SIZE_MAX - (size_t)header_size) {
+            return -1;
+        }
+        
+        size_t frame_size = (size_t)header_size + (size_t)frame.payload_length;
         if (conn->buffer_len < frame_size) {
             /* Need more data */
             break;
         }
         
+        /* RFC 6455 §5.1: client-to-server frames MUST be masked */
+        if (!frame.masked) {
+            websocket_close(conn, 1002, "Protocol error: unmasked frame");
+            return -1;
+        }
+        
         /* Extract payload */
         frame.payload = conn->buffer + header_size;
         
-        /* Unmask if needed (client-to-server frames must be masked) */
+        /* Unmask payload */
         if (frame.masked) {
             ws_unmask_payload(frame.payload, frame.payload_length, frame.masking_key);
         }
@@ -553,6 +649,15 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
         switch (frame.opcode) {
             case WS_OPCODE_TEXT:
             case WS_OPCODE_BINARY:
+                if (conn->fragment_buffer) {
+                    /* Protocol error: new data frame while fragmentation in progress */
+                    free(conn->fragment_buffer);
+                    conn->fragment_buffer = NULL;
+                    conn->fragment_len = 0;
+                    conn->fragment_capacity = 0;
+                    websocket_close(conn, 1002, "Protocol error");
+                    return -1;
+                }
                 if (frame.fin) {
                     /* Complete message */
                     if (conn->on_message) {
@@ -564,7 +669,14 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
                     /* Start of fragmented message */
                     conn->fragment_opcode = frame.opcode;
                     conn->fragment_len = frame.payload_length;
-                    conn->fragment_capacity = frame.payload_length * 2;
+                    size_t init_cap;
+                    if (frame.payload_length > SIZE_MAX / 2) {
+                        init_cap = frame.payload_length;
+                    } else {
+                        init_cap = frame.payload_length * 2;
+                    }
+                    if (init_cap < 256) init_cap = 256;
+                    conn->fragment_capacity = init_cap;
                     conn->fragment_buffer = (uint8_t *)malloc(conn->fragment_capacity);
                     if (conn->fragment_buffer) {
                         memcpy(conn->fragment_buffer, frame.payload, frame.payload_length);
@@ -573,33 +685,47 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
                 break;
                 
             case WS_OPCODE_CONTINUATION:
-                if (conn->fragment_buffer) {
-                    /* Append to fragmented message */
-                    if (conn->fragment_len + frame.payload_length > conn->fragment_capacity) {
-                        size_t new_cap = conn->fragment_capacity * 2;
-                        uint8_t *new_buf = (uint8_t *)realloc(conn->fragment_buffer, new_cap);
-                        if (new_buf) {
-                            conn->fragment_buffer = new_buf;
-                            conn->fragment_capacity = new_cap;
+                if (!conn->fragment_buffer) {
+                    /* Protocol error: continuation without start frame */
+                    websocket_close(conn, 1002, "Protocol error: unexpected continuation");
+                    return -1;
+                }
+                /* Append to fragmented message */
+                if (conn->fragment_len + frame.payload_length > conn->fragment_capacity) {
+                    size_t new_cap = conn->fragment_capacity;
+                    size_t needed = conn->fragment_len + frame.payload_length;
+                    while (new_cap < needed) {
+                        if (new_cap > SIZE_MAX / 2) {
+                            free(conn->fragment_buffer);
+                            conn->fragment_buffer = NULL;
+                            return -1;
                         }
+                        new_cap *= 2;
                     }
-                    
-                    if (conn->fragment_len + frame.payload_length <= conn->fragment_capacity) {
-                        memcpy(conn->fragment_buffer + conn->fragment_len, frame.payload, frame.payload_length);
-                        conn->fragment_len += frame.payload_length;
-                    }
-                    
-                    if (frame.fin && conn->on_message) {
-                        /* Complete fragmented message */
-                        ws_message_type_t msg_type = (conn->fragment_opcode == WS_OPCODE_TEXT) 
-                            ? WS_MESSAGE_TEXT : WS_MESSAGE_BINARY;
-                        conn->on_message(conn, msg_type, conn->fragment_buffer, conn->fragment_len);
-                        
+                    uint8_t *new_buf = (uint8_t *)realloc(conn->fragment_buffer, new_cap);
+                    if (new_buf) {
+                        conn->fragment_buffer = new_buf;
+                        conn->fragment_capacity = new_cap;
+                    } else {
                         free(conn->fragment_buffer);
                         conn->fragment_buffer = NULL;
-                        conn->fragment_len = 0;
-                        conn->fragment_capacity = 0;
+                        return -1;
                     }
+                }
+                
+                memcpy(conn->fragment_buffer + conn->fragment_len, frame.payload, frame.payload_length);
+                conn->fragment_len += frame.payload_length;
+                
+                if (frame.fin && conn->on_message) {
+                    /* Complete fragmented message */
+                    ws_message_type_t msg_type = (conn->fragment_opcode == WS_OPCODE_TEXT) 
+                        ? WS_MESSAGE_TEXT : WS_MESSAGE_BINARY;
+                    conn->on_message(conn, msg_type, conn->fragment_buffer, conn->fragment_len);
+                    
+                    free(conn->fragment_buffer);
+                    conn->fragment_buffer = NULL;
+                    conn->fragment_len = 0;
+                    conn->fragment_capacity = 0;
                 }
                 break;
                 
@@ -613,7 +739,10 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
                     conn->on_close(conn, code);
                 }
                 websocket_close(conn, 1000, "Normal closure");
-                break;
+                /* Remove processed frame before returning */
+                memmove(conn->buffer, conn->buffer + frame_size, conn->buffer_len - frame_size);
+                conn->buffer_len -= frame_size;
+                return 0;
                 
             case WS_OPCODE_PING:
                 /* Respond with pong */
@@ -629,7 +758,8 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
                 if (conn->on_error) {
                     conn->on_error(conn, "Unknown opcode");
                 }
-                break;
+                websocket_close(conn, 1002, "Unknown opcode");
+                return -1;
         }
         
         /* Remove processed frame from buffer */

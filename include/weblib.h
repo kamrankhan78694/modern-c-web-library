@@ -33,7 +33,10 @@ typedef enum {
     HTTP_FORBIDDEN = 403,
     HTTP_NOT_FOUND = 404,
     HTTP_METHOD_NOT_ALLOWED = 405,
+    HTTP_PAYLOAD_TOO_LARGE = 413,
+    HTTP_URI_TOO_LONG = 414,
     HTTP_TOO_MANY_REQUESTS = 429,
+    HTTP_HEADER_FIELDS_TOO_LARGE = 431,
     HTTP_INTERNAL_ERROR = 500,
     HTTP_NOT_IMPLEMENTED = 501,
     HTTP_BAD_GATEWAY = 502,
@@ -356,6 +359,12 @@ json_value_t *json_number_create(double num);
  * @return JSON boolean value
  */
 json_value_t *json_bool_create(bool val);
+
+/**
+ * Create JSON null value
+ * @return JSON null value
+ */
+json_value_t *json_null_create(void);
 
 /**
  * Create JSON array value

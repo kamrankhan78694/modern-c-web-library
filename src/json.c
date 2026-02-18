@@ -16,16 +16,20 @@ typedef struct json_array_item {
     struct json_array_item *next;
 } json_array_item_t;
 
+/* Maximum nesting depth to prevent stack overflow */
+#define JSON_MAX_DEPTH 512
+
 /* Internal functions */
 static void skip_whitespace(const char **str);
-static json_value_t *parse_value(const char **str);
-static json_value_t *parse_object(const char **str);
-static json_value_t *parse_array(const char **str);
+static json_value_t *parse_value(const char **str, int depth);
+static json_value_t *parse_object(const char **str, int depth);
+static json_value_t *parse_array(const char **str, int depth);
 static json_value_t *parse_string(const char **str);
 static json_value_t *parse_number(const char **str);
 static json_value_t *parse_bool(const char **str);
 static json_value_t *parse_null(const char **str);
 static bool stringify_value(json_value_t *value, char **output, size_t *capacity, size_t *length);
+static bool ensure_stringify_capacity(char **output, size_t *capacity, size_t length, size_t needed);
 
 /* Parse JSON string */
 json_value_t *json_parse(const char *json_str) {
@@ -36,7 +40,29 @@ json_value_t *json_parse(const char *json_str) {
     const char *ptr = json_str;
     skip_whitespace(&ptr);
     
-    return parse_value(&ptr);
+    json_value_t *result = parse_value(&ptr, 0);
+    if (!result) {
+        return NULL;
+    }
+
+    /* Reject trailing garbage */
+    skip_whitespace(&ptr);
+    if (*ptr != '\0') {
+        json_value_free(result);
+        return NULL;
+    }
+
+    return result;
+}
+
+/* Create JSON null value */
+json_value_t *json_null_create(void) {
+    json_value_t *value = (json_value_t *)calloc(1, sizeof(json_value_t));
+    if (!value) {
+        return NULL;
+    }
+    value->type = JSON_NULL;
+    return value;
 }
 
 /* Create JSON object */
@@ -298,17 +324,21 @@ void http_response_send_json(http_response_t *res, http_status_t status, json_va
         }
         res->body = json_str;
         res->body_length = strlen(json_str);
+        http_response_set_header(res, "Content-Type", "application/json; charset=utf-8");
     }
 }
 
 /* Internal parsing functions */
 static void skip_whitespace(const char **str) {
-    while (**str && isspace(**str)) {
+    while (**str && isspace((unsigned char)**str)) {
         (*str)++;
     }
 }
 
-static json_value_t *parse_value(const char **str) {
+static json_value_t *parse_value(const char **str, int depth) {
+    if (depth > JSON_MAX_DEPTH) {
+        return NULL;
+    }
     skip_whitespace(str);
     
     if (!**str) {
@@ -317,9 +347,9 @@ static json_value_t *parse_value(const char **str) {
     
     switch (**str) {
         case '{':
-            return parse_object(str);
+            return parse_object(str, depth);
         case '[':
-            return parse_array(str);
+            return parse_array(str, depth);
         case '"':
             return parse_string(str);
         case 't':
@@ -328,14 +358,14 @@ static json_value_t *parse_value(const char **str) {
         case 'n':
             return parse_null(str);
         default:
-            if (**str == '-' || isdigit(**str)) {
+            if (**str == '-' || isdigit((unsigned char)**str)) {
                 return parse_number(str);
             }
             return NULL;
     }
 }
 
-static json_value_t *parse_object(const char **str) {
+static json_value_t *parse_object(const char **str, int depth) {
     json_value_t *obj = json_object_create();
     if (!obj) {
         return NULL;
@@ -374,7 +404,7 @@ static json_value_t *parse_object(const char **str) {
         (*str)++;
         
         /* Parse value */
-        json_value_t *value = parse_value(str);
+        json_value_t *value = parse_value(str, depth + 1);
         if (!value) {
             json_value_free(key_val);
             json_value_free(obj);
@@ -390,17 +420,19 @@ static json_value_t *parse_object(const char **str) {
             (*str)++;
         } else if (**str == '}') {
             (*str)++;
-            break;
+            return obj;
         } else {
             json_value_free(obj);
             return NULL;
         }
     }
     
-    return obj;
+    /* Unterminated object - missing closing '}' */
+    json_value_free(obj);
+    return NULL;
 }
 
-static json_value_t *parse_array(const char **str) {
+static json_value_t *parse_array(const char **str, int depth) {
     json_value_t *arr = json_array_create();
     if (!arr) {
         return NULL;
@@ -415,7 +447,7 @@ static json_value_t *parse_array(const char **str) {
     }
 
     while (**str) {
-        json_value_t *value = parse_value(str);
+        json_value_t *value = parse_value(str, depth + 1);
         if (!value) {
             json_value_free(arr);
             return NULL;
@@ -434,45 +466,118 @@ static json_value_t *parse_array(const char **str) {
             skip_whitespace(str);
         } else if (**str == ']') {
             (*str)++;
-            break;
+            return arr;
         } else {
             json_value_free(arr);
             return NULL;
         }
     }
 
-    return arr;
+    /* Unterminated array - missing closing ']' */
+    json_value_free(arr);
+    return NULL;
+}
+
+static int hex_digit_value(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
 }
 
 static json_value_t *parse_string(const char **str) {
     (*str)++; /* Skip opening quote */
     
     const char *start = *str;
-    while (**str && **str != '"') {
-        if (**str == '\\') {
-            (*str)++;
-            if (**str) {
-                (*str)++;
+    /* First pass: find end of string and compute max output length */
+    size_t raw_len = 0;
+    const char *p = *str;
+    while (*p && *p != '"') {
+        if (*p == '\\') {
+            p++;
+            if (!*p) return NULL;
+            if (*p == 'u') {
+                /* Need 4 hex digits after \u */
+                for (int i = 1; i <= 4; i++) {
+                    if (hex_digit_value(p[i]) < 0) return NULL;
+                }
+                p += 5; /* skip u + 4 hex digits */
+            } else {
+                /* Validate escape character */
+                switch (*p) {
+                    case '"': case '\\': case '/':
+                    case 'b': case 'f': case 'n': case 'r': case 't':
+                        p++;
+                        break;
+                    default:
+                        return NULL; /* Invalid escape */
+                }
             }
         } else {
-            (*str)++;
+            p++;
         }
     }
     
-    if (**str != '"') {
+    if (*p != '"') {
         return NULL;
     }
     
-    size_t len = *str - start;
-    char *string_val = (char *)malloc(len + 1);
+    raw_len = p - start;
+    /* Allocate output buffer: raw_len + 1 is always sufficient because decoding
+     * can only shrink or maintain the length. Every escape sequence (\X = 2 raw
+     * chars → 1 output char, \uXXXX = 6 raw chars → 1-3 UTF-8 output bytes). */
+    char *string_val = (char *)malloc(raw_len + 1);
     if (!string_val) {
         return NULL;
     }
     
-    strncpy(string_val, start, len);
-    string_val[len] = '\0';
+    /* Second pass: decode escape sequences */
+    size_t out_idx = 0;
+    p = start;
+    while (p < start + raw_len) {
+        if (*p == '\\') {
+            p++;
+            switch (*p) {
+                case '"':  string_val[out_idx++] = '"'; break;
+                case '\\': string_val[out_idx++] = '\\'; break;
+                case '/':  string_val[out_idx++] = '/'; break;
+                case 'b':  string_val[out_idx++] = '\b'; break;
+                case 'f':  string_val[out_idx++] = '\f'; break;
+                case 'n':  string_val[out_idx++] = '\n'; break;
+                case 'r':  string_val[out_idx++] = '\r'; break;
+                case 't':  string_val[out_idx++] = '\t'; break;
+                case 'u': {
+                    unsigned int codepoint = 0;
+                    for (int i = 1; i <= 4; i++) {
+                        codepoint = (codepoint << 4) | (unsigned)hex_digit_value(p[i]);
+                    }
+                    p += 4; /* skip 4 hex digits (the 'u' is skipped by outer p++) */
+                    /* Encode as UTF-8 */
+                    if (codepoint <= 0x7F) {
+                        string_val[out_idx++] = (char)codepoint;
+                    } else if (codepoint <= 0x7FF) {
+                        string_val[out_idx++] = (char)(0xC0 | (codepoint >> 6));
+                        string_val[out_idx++] = (char)(0x80 | (codepoint & 0x3F));
+                    } else {
+                        string_val[out_idx++] = (char)(0xE0 | (codepoint >> 12));
+                        string_val[out_idx++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                        string_val[out_idx++] = (char)(0x80 | (codepoint & 0x3F));
+                    }
+                    break;
+                }
+                default:
+                    /* Should not happen due to first pass validation */
+                    string_val[out_idx++] = *p;
+                    break;
+            }
+            p++;
+        } else {
+            string_val[out_idx++] = *p++;
+        }
+    }
+    string_val[out_idx] = '\0';
     
-    (*str)++; /* Skip closing quote */
+    *str = start + raw_len + 1; /* Skip past closing quote */
     
     json_value_t *value = (json_value_t *)calloc(1, sizeof(json_value_t));
     if (!value) {
@@ -500,10 +605,10 @@ static json_value_t *parse_number(const char **str) {
 }
 
 static json_value_t *parse_bool(const char **str) {
-    if (strncmp(*str, "true", 4) == 0) {
+    if (strncmp(*str, "true", 4) == 0 && !isalnum((unsigned char)(*str)[4])) {
         *str += 4;
         return json_bool_create(true);
-    } else if (strncmp(*str, "false", 5) == 0) {
+    } else if (strncmp(*str, "false", 5) == 0 && !isalnum((unsigned char)(*str)[5])) {
         *str += 5;
         return json_bool_create(false);
     }
@@ -512,16 +617,68 @@ static json_value_t *parse_bool(const char **str) {
 }
 
 static json_value_t *parse_null(const char **str) {
-    if (strncmp(*str, "null", 4) == 0) {
+    if (strncmp(*str, "null", 4) == 0 && !isalnum((unsigned char)(*str)[4])) {
         *str += 4;
-        json_value_t *value = (json_value_t *)calloc(1, sizeof(json_value_t));
-        if (value) {
-            value->type = JSON_NULL;
-        }
-        return value;
+        return json_null_create();
     }
     
     return NULL;
+}
+
+static bool ensure_stringify_capacity(char **output, size_t *capacity, size_t length, size_t needed) {
+    if (length + needed <= *capacity) {
+        return true;
+    }
+    size_t new_cap = *capacity;
+    while (new_cap < length + needed) {
+        new_cap *= 2;
+    }
+    char *new_output = (char *)realloc(*output, new_cap);
+    if (!new_output) {
+        return false;
+    }
+    *output = new_output;
+    *capacity = new_cap;
+    return true;
+}
+
+static bool stringify_string(const char *str, char **output, size_t *capacity, size_t *length) {
+    if (!ensure_stringify_capacity(output, capacity, *length, 2)) return false;
+    (*output)[(*length)++] = '"';
+
+    if (str) {
+        while (*str) {
+            /* Ensure space for worst case: \uXXXX = 6 chars */
+            if (!ensure_stringify_capacity(output, capacity, *length, 8)) return false;
+
+            unsigned char c = (unsigned char)*str;
+            switch (*str) {
+                case '"':  (*output)[(*length)++] = '\\'; (*output)[(*length)++] = '"'; break;
+                case '\\': (*output)[(*length)++] = '\\'; (*output)[(*length)++] = '\\'; break;
+                case '\b': (*output)[(*length)++] = '\\'; (*output)[(*length)++] = 'b'; break;
+                case '\f': (*output)[(*length)++] = '\\'; (*output)[(*length)++] = 'f'; break;
+                case '\n': (*output)[(*length)++] = '\\'; (*output)[(*length)++] = 'n'; break;
+                case '\r': (*output)[(*length)++] = '\\'; (*output)[(*length)++] = 'r'; break;
+                case '\t': (*output)[(*length)++] = '\\'; (*output)[(*length)++] = 't'; break;
+                default:
+                    if (c < 0x20) {
+                        /* Escape control characters as \u00XX (exactly 6 chars) */
+                        int written = snprintf(*output + *length, *capacity - *length, "\\u%04x", c);
+                        if (written < 0 || (size_t)written >= *capacity - *length) return false;
+                        *length += (size_t)written;
+                    } else {
+                        (*output)[(*length)++] = *str;
+                    }
+                    break;
+            }
+            str++;
+        }
+    }
+
+    if (!ensure_stringify_capacity(output, capacity, *length, 2)) return false;
+    (*output)[(*length)++] = '"';
+    (*output)[*length] = '\0';
+    return true;
 }
 
 static bool stringify_value(json_value_t *value, char **output, size_t *capacity, size_t *length) {
@@ -529,105 +686,77 @@ static bool stringify_value(json_value_t *value, char **output, size_t *capacity
         return false;
     }
     
-    /* Ensure capacity */
-    while (*length + 256 > *capacity) {
-        *capacity *= 2;
-        char *new_output = (char *)realloc(*output, *capacity);
-        if (!new_output) {
-            return false;
-        }
-        *output = new_output;
-    }
-    
     switch (value->type) {
         case JSON_NULL:
-            *length += snprintf(*output + *length, *capacity - *length, "null");
+            if (!ensure_stringify_capacity(output, capacity, *length, 8)) return false;
+            memcpy(*output + *length, "null", 4);
+            *length += 4;
+            (*output)[*length] = '\0';
             break;
             
-        case JSON_BOOL:
-            *length += snprintf(*output + *length, *capacity - *length, "%s", value->data.bool_val ? "true" : "false");
+        case JSON_BOOL: {
+            const char *s = value->data.bool_val ? "true" : "false";
+            size_t slen = strlen(s);
+            if (!ensure_stringify_capacity(output, capacity, *length, slen + 1)) return false;
+            memcpy(*output + *length, s, slen);
+            *length += slen;
+            (*output)[*length] = '\0';
             break;
+        }
             
-        case JSON_NUMBER:
-            *length += snprintf(*output + *length, *capacity - *length, "%g", value->data.number_val);
+        case JSON_NUMBER: {
+            if (!ensure_stringify_capacity(output, capacity, *length, 64)) return false;
+            int written = snprintf(*output + *length, *capacity - *length, "%g", value->data.number_val);
+            if (written < 0) return false;
+            if ((size_t)written >= *capacity - *length) {
+                if (!ensure_stringify_capacity(output, capacity, *length, (size_t)written + 1)) return false;
+                written = snprintf(*output + *length, *capacity - *length, "%g", value->data.number_val);
+                if (written < 0) return false;
+            }
+            *length += (size_t)written;
             break;
+        }
             
         case JSON_STRING: {
-            /* Simple escaping for JSON strings */
-            *length += snprintf(*output + *length, *capacity - *length, "\"");
-            const char *str = value->data.string_val;
-            while (*str) {
-                /* Ensure enough space for escaped character */
-                if (*length + 10 > *capacity) {
-                    *capacity *= 2;
-                    char *new_output = (char *)realloc(*output, *capacity);
-                    if (!new_output) {
-                        return false;
-                    }
-                    *output = new_output;
-                }
-                
-                switch (*str) {
-                    case '"':
-                        *length += snprintf(*output + *length, *capacity - *length, "\\\"");
-                        break;
-                    case '\\':
-                        *length += snprintf(*output + *length, *capacity - *length, "\\\\");
-                        break;
-                    case '\n':
-                        *length += snprintf(*output + *length, *capacity - *length, "\\n");
-                        break;
-                    case '\r':
-                        *length += snprintf(*output + *length, *capacity - *length, "\\r");
-                        break;
-                    case '\t':
-                        *length += snprintf(*output + *length, *capacity - *length, "\\t");
-                        break;
-                    default:
-                        (*output)[(*length)++] = *str;
-                        break;
-                }
-                str++;
-            }
-            *length += snprintf(*output + *length, *capacity - *length, "\"");
+            if (!stringify_string(value->data.string_val, output, capacity, length)) return false;
             break;
         }
             
         case JSON_OBJECT: {
-            *length += snprintf(*output + *length, *capacity - *length, "{");
+            if (!ensure_stringify_capacity(output, capacity, *length, 2)) return false;
+            (*output)[(*length)++] = '{';
             json_object_entry_t *entry = (json_object_entry_t *)value->data.object_val;
             bool first = true;
             while (entry) {
                 if (!first) {
-                    *length += snprintf(*output + *length, *capacity - *length, ",");
+                    if (!ensure_stringify_capacity(output, capacity, *length, 2)) return false;
+                    (*output)[(*length)++] = ',';
                 }
-                *length += snprintf(*output + *length, *capacity - *length, "\"%s\":", entry->key);
+                /* Escape key properly */
+                if (!stringify_string(entry->key, output, capacity, length)) return false;
+                if (!ensure_stringify_capacity(output, capacity, *length, 2)) return false;
+                (*output)[(*length)++] = ':';
                 if (!stringify_value(entry->value, output, capacity, length)) {
                     return false;
                 }
                 entry = entry->next;
                 first = false;
             }
-            *length += snprintf(*output + *length, *capacity - *length, "}");
+            if (!ensure_stringify_capacity(output, capacity, *length, 2)) return false;
+            (*output)[(*length)++] = '}';
+            (*output)[*length] = '\0';
             break;
         }
             
         case JSON_ARRAY: {
-            *length += snprintf(*output + *length, *capacity - *length, "[");
+            if (!ensure_stringify_capacity(output, capacity, *length, 2)) return false;
+            (*output)[(*length)++] = '[';
             json_array_item_t *item = (json_array_item_t *)value->data.array_val;
             bool first = true;
             while (item) {
                 if (!first) {
-                    /* Ensure capacity for comma */
-                    if (*length + 2 > *capacity) {
-                        *capacity *= 2;
-                        char *new_output = (char *)realloc(*output, *capacity);
-                        if (!new_output) {
-                            return false;
-                        }
-                        *output = new_output;
-                    }
-                    *length += snprintf(*output + *length, *capacity - *length, ",");
+                    if (!ensure_stringify_capacity(output, capacity, *length, 2)) return false;
+                    (*output)[(*length)++] = ',';
                 }
                 if (!stringify_value(item->value, output, capacity, length)) {
                     return false;
@@ -635,16 +764,9 @@ static bool stringify_value(json_value_t *value, char **output, size_t *capacity
                 item = item->next;
                 first = false;
             }
-            /* Ensure capacity for closing bracket */
-            if (*length + 2 > *capacity) {
-                *capacity *= 2;
-                char *new_output = (char *)realloc(*output, *capacity);
-                if (!new_output) {
-                    return false;
-                }
-                *output = new_output;
-            }
-            *length += snprintf(*output + *length, *capacity - *length, "]");
+            if (!ensure_stringify_capacity(output, capacity, *length, 2)) return false;
+            (*output)[(*length)++] = ']';
+            (*output)[*length] = '\0';
             break;
         }
     }

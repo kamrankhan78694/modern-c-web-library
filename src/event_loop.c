@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/time.h>
+#include <limits.h>
 
 #ifdef __linux__
 #include <sys/epoll.h>
@@ -223,8 +224,6 @@ int event_loop_modify_fd(event_loop_t *loop, int fd, int events) {
         return -1;
     }
     
-    loop->handlers[idx].events = events;
-    
 #ifdef USE_EPOLL
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
@@ -270,6 +269,9 @@ int event_loop_modify_fd(event_loop_t *loop, int fd, int events) {
         }
     }
 #endif
+    
+    /* Update handler only after backend succeeds */
+    loop->handlers[idx].events = events;
     
     return 0;
 }
@@ -461,7 +463,9 @@ int event_loop_add_timeout(event_loop_t *loop, int timeout_ms, event_callback_t 
     }
     
     event_timer_t *timer = &loop->timers[loop->timer_count];
-    timer->id = loop->next_timer_id++;
+    timer->id = loop->next_timer_id;
+    /* Wrap to 1 on overflow to avoid collision with -1 error sentinel */
+    if (++loop->next_timer_id <= 0) loop->next_timer_id = 1;
     timer->callback = callback;
     timer->user_data = user_data;
     timer->active = true;
@@ -516,21 +520,27 @@ static void process_timers(event_loop_t *loop) {
     struct timeval now;
     gettimeofday(&now, NULL);
     
-    for (int i = 0; i < loop->timer_count; i++) {
+    /* Snapshot count to avoid processing timers added during callbacks */
+    int count = loop->timer_count;
+    for (int i = 0; i < count && i < loop->timer_count; i++) {
         if (!loop->timers[i].active) continue;
         
         if (now.tv_sec > loop->timers[i].expiry.tv_sec ||
             (now.tv_sec == loop->timers[i].expiry.tv_sec && 
              now.tv_usec >= loop->timers[i].expiry.tv_usec)) {
-            /* Timer expired */
-            loop->timers[i].callback(-1, EVENT_TIMEOUT, loop->timers[i].user_data);
+            /* Timer expired - save callback info and deactivate BEFORE invoking */
+            event_callback_t cb = loop->timers[i].callback;
+            void *ud = loop->timers[i].user_data;
             loop->timers[i].active = false;
             /* Compact timers array */
             if (i < loop->timer_count - 1) {
                 loop->timers[i] = loop->timers[loop->timer_count - 1];
-                i--; /* Re-check this position */
             }
             loop->timer_count--;
+            count--;
+            i--; /* Re-check this position */
+            /* Now invoke callback (safe - timer already removed) */
+            cb(-1, EVENT_TIMEOUT, ud);
         }
     }
 }
@@ -549,13 +559,15 @@ static int get_next_timeout(event_loop_t *loop) {
     for (int i = 0; i < loop->timer_count; i++) {
         if (!loop->timers[i].active) continue;
         
-        int timeout_ms = (loop->timers[i].expiry.tv_sec - now.tv_sec) * 1000 +
-                        (loop->timers[i].expiry.tv_usec - now.tv_usec) / 1000;
+        /* Use long to avoid integer overflow before clamping to int */
+        long timeout_ms = (long)(loop->timers[i].expiry.tv_sec - now.tv_sec) * 1000 +
+                         (long)(loop->timers[i].expiry.tv_usec - now.tv_usec) / 1000;
         
         if (timeout_ms < 0) timeout_ms = 0;
+        int clamped = (timeout_ms > INT_MAX) ? INT_MAX : (int)timeout_ms;
         
-        if (min_timeout < 0 || timeout_ms < min_timeout) {
-            min_timeout = timeout_ms;
+        if (min_timeout < 0 || clamped < min_timeout) {
+            min_timeout = clamped;
         }
     }
     

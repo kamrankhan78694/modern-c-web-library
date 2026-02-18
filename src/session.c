@@ -195,8 +195,14 @@ session_t *session_get(session_store_t *store, const char *session_id) {
         if (store->sessions[i].in_use && 
             strcmp(store->sessions[i].session_id, session_id) == 0) {
             
-            /* Check if expired */
+            /* Check if expired - auto-cleanup to prevent slot exhaustion */
             if (session_is_expired(&store->sessions[i])) {
+                free_session_data(store->sessions[i].data);
+                store->sessions[i].data = NULL;
+                store->sessions[i].in_use = false;
+                if (store->session_count > 0) {
+                    store->session_count--;
+                }
                 return NULL;
             }
             
@@ -379,8 +385,9 @@ static char *extract_session_id_from_cookies(const char *cookie_header) {
     /* Search for the cookie name, ensuring it's at the start or after "; " */
     while ((found = strstr(start, search_pattern)) != NULL) {
         /* Check if this is at the beginning or preceded by "; " */
-        if (found == cookie_header || (found > cookie_header + 1 && 
-            found[-1] == ' ' && found[-2] == ';')) {
+        if (found == cookie_header || 
+            (found > cookie_header && found[-1] == ';') ||
+            (found > cookie_header + 1 && found[-1] == ' ' && found[-2] == ';')) {
             /* Valid match found */
             break;
         }

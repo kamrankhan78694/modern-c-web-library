@@ -151,6 +151,10 @@ db_pool_t *db_pool_create(const db_pool_config_t *config) {
     
     pool->config = *config;
     pool->config.connection_string = strdup(config->connection_string);
+    if (!pool->config.connection_string) {
+        free(pool);
+        return NULL;
+    }
     
     pool->capacity = config->max_connections;
     pool->connections = (db_connection_t **)calloc(pool->capacity, sizeof(db_connection_t *));
@@ -220,6 +224,7 @@ db_connection_t *db_pool_acquire(db_pool_t *pool) {
                 } else {
                     close_connection(pool, conn);
                     pool->connections[i] = pool->connections[--pool->size];
+                    i--;  /* Re-check this index after compaction */
                     conn = NULL;
                 }
             }
@@ -352,6 +357,33 @@ void db_pool_destroy(db_pool_t *pool) {
     
     pthread_mutex_lock(&pool->mutex);
     pool->shutdown = true;
+    pthread_cond_broadcast(&pool->cond);
+    
+    /* Wait for in-use connections to be released before destroying */
+    {
+        bool has_in_use = true;
+        int wait_rounds = 0;
+        while (has_in_use && wait_rounds < 50) {
+            has_in_use = false;
+            for (size_t i = 0; i < pool->size; i++) {
+                if (pool->connections[i]->state == DB_CONN_IN_USE) {
+                    has_in_use = true;
+                    break;
+                }
+            }
+            if (has_in_use) {
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_nsec += 100000000; /* 100ms */
+                if (ts.tv_nsec >= 1000000000) {
+                    ts.tv_sec++;
+                    ts.tv_nsec -= 1000000000;
+                }
+                pthread_cond_timedwait(&pool->cond, &pool->mutex, &ts);
+                wait_rounds++;
+            }
+        }
+    }
     
     for (size_t i = 0; i < pool->size; i++) {
         close_connection(pool, pool->connections[i]);

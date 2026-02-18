@@ -70,8 +70,14 @@ static void _set_cors_headers(http_response_t *res, const char *origin, bool is_
 
     /* Set Access-Control-Allow-Origin */
     if (g_cors_config->allowed_origins == NULL) {
-        /* Wildcard - allow all origins */
-        http_response_set_header(res, "Access-Control-Allow-Origin", "*");
+        /* Wildcard mode: when credentials are allowed, must echo specific origin
+         * (browsers reject Access-Control-Allow-Origin: * with credentials) */
+        if (g_cors_config->allow_credentials && origin != NULL) {
+            http_response_set_header(res, "Access-Control-Allow-Origin", origin);
+            http_response_set_header(res, "Vary", "Origin");
+        } else {
+            http_response_set_header(res, "Access-Control-Allow-Origin", "*");
+        }
     } else if (origin != NULL) {
         /* Specific origin is allowed */
         http_response_set_header(res, "Access-Control-Allow-Origin", origin);
@@ -144,11 +150,11 @@ static bool _cors_middleware_handler(http_request_t *req, http_response_t *res) 
         return true;
     }
 
-    /* Check if this is a preflight OPTIONS request */
-    /* Note: We need to check the request method. Since we don't have direct access,
-     * we'll check for the Access-Control-Request-Method header which indicates preflight */
+    /* Check if this is a preflight OPTIONS request.
+     * Per CORS spec, preflight requires both OPTIONS method and
+     * the Access-Control-Request-Method header. */
     const char *request_method = http_request_get_header(req, "Access-Control-Request-Method");
-    bool is_preflight = !_is_empty(request_method);
+    bool is_preflight = (req->method == HTTP_OPTIONS && !_is_empty(request_method));
 
     if (is_preflight) {
         /* This is a preflight request */
@@ -236,6 +242,12 @@ middleware_fn_t cors_middleware_create(const cors_options_t *options) {
 
     /* Deep copy the configuration */
     g_cors_config->allowed_origins = _copy_string_array(options->allowed_origins);
+    if (options->allowed_origins != NULL && g_cors_config->allowed_origins == NULL) {
+        /* Memory allocation failure - don't silently degrade to wildcard CORS */
+        free(g_cors_config);
+        g_cors_config = NULL;
+        return NULL;
+    }
     g_cors_config->allowed_methods = _strdup_optional(options->allowed_methods);
     g_cors_config->allowed_headers = _strdup_optional(options->allowed_headers);
     g_cors_config->expose_headers = _strdup_optional(options->expose_headers);

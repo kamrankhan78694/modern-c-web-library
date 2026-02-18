@@ -29,6 +29,8 @@
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
 #include <threads.h>
 static thread_local char _cookie_value_buffer[MAX_COOKIE_VALUE_SIZE];
+#elif defined(__GNUC__) || defined(__clang__)
+static __thread char _cookie_value_buffer[MAX_COOKIE_VALUE_SIZE];
 #else
 static char _cookie_value_buffer[MAX_COOKIE_VALUE_SIZE];
 #endif
@@ -175,9 +177,36 @@ const char *http_request_get_cookie(http_request_t *req, const char *name) {
  *       http_response_set_header directly with unique header keys.
  *       A future enhancement will support multiple Set-Cookie headers properly.
  */
+static bool _is_valid_cookie_name(const char *name) {
+    for (const char *p = name; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c <= 32 || c == 127 || c == '(' || c == ')' || c == '<' || c == '>' ||
+            c == '@' || c == ',' || c == ';' || c == '\\' || c == '"' ||
+            c == '/' || c == '[' || c == ']' || c == '?' || c == '=' ||
+            c == '{' || c == '}' || c == '\t') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool _is_valid_cookie_value(const char *value) {
+    for (const char *p = value; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == ';' || c == '\\' || c == '"' || c == '\r' || c == '\n') {
+            return false;
+        }
+    }
+    return true;
+}
+
 void http_response_set_cookie(http_response_t *res, const char *name,
                               const char *value, const cookie_options_t *options) {
     if (!res || !name || !*name || !value) {
+        return;
+    }
+
+    if (!_is_valid_cookie_name(name) || !_is_valid_cookie_value(value)) {
         return;
     }
 

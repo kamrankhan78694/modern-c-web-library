@@ -171,6 +171,12 @@ static void _add_form_field(body_parser_data_t *data, const char *name, const ch
 
     field->name = strdup(name);
     field->value = strdup(value);
+    if (!field->name || !field->value) {
+        free(field->name);
+        free(field->value);
+        free(field);
+        return;
+    }
     field->next = data->fields;
     data->fields = field;
 }
@@ -199,6 +205,11 @@ static void _trim_whitespace(char *str) {
     char *start = str;
     while (*start && isspace((unsigned char)*start)) {
         start++;
+    }
+
+    if (*start == '\0') {
+        str[0] = '\0';
+        return;
     }
 
     /* Trim trailing */
@@ -316,7 +327,8 @@ static char *_extract_boundary(const char *content_type) {
 }
 
 /*
- * Extract a quoted parameter value from a header string
+ * Extract a quoted parameter value from a header string.
+ * Ensures word-boundary matching to avoid matching "name=" inside "filename=".
  */
 static char *_extract_quoted_value(const char *str, const char *param) {
     if (!str || !param) {
@@ -325,13 +337,25 @@ static char *_extract_quoted_value(const char *str, const char *param) {
 
     char search[128];
     snprintf(search, sizeof(search), "%s=", param);
+    size_t search_len = strlen(search);
     
-    const char *start = strstr(str, search);
+    const char *start = str;
+    while ((start = strstr(start, search)) != NULL) {
+        /* Verify word boundary: must be at start or preceded by space/semicolon */
+        if (start != str) {
+            char prev = *(start - 1);
+            if (prev != ' ' && prev != ';' && prev != '\t') {
+                start += search_len;
+                continue;
+            }
+        }
+        break;
+    }
     if (!start) {
         return NULL;
     }
     
-    start += strlen(search);
+    start += search_len;
     
     /* Handle quoted value */
     if (*start == '"') {
@@ -387,6 +411,9 @@ static char *_parse_multipart_headers(const uint8_t *data, size_t size,
     if (filename) *filename = NULL;
 
     /* Find end of headers (double CRLF) */
+    if (size < 4) {
+        return NULL;
+    }
     for (size_t i = 0; i < size - 3; i++) {
         if (data[i] == '\r' && data[i+1] == '\n' &&
             data[i+2] == '\r' && data[i+3] == '\n') {

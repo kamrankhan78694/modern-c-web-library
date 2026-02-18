@@ -66,8 +66,12 @@ void template_context_set(template_context_t *ctx, const char *key, const char *
     while (entry) {
         if (strcmp(entry->key, key) == 0) {
             /* Update existing value */
+            char *new_value = strdup(value);
+            if (!new_value) {
+                return; /* Keep old value on allocation failure */
+            }
             free(entry->value);
-            entry->value = strdup(value);
+            entry->value = new_value;
             return;
         }
         entry = entry->next;
@@ -81,6 +85,12 @@ void template_context_set(template_context_t *ctx, const char *key, const char *
     
     new_entry->key = strdup(key);
     new_entry->value = strdup(value);
+    if (!new_entry->key || !new_entry->value) {
+        free(new_entry->key);
+        free(new_entry->value);
+        free(new_entry);
+        return;
+    }
     new_entry->next = map[idx];
     map[idx] = new_entry;
     ctx->var_count++;
@@ -203,13 +213,13 @@ static char *extract_var_name(const char *start, const char *end) {
     start += 2;
     
     /* Skip whitespace */
-    while (start < end && isspace(*start)) {
+    while (start < end && isspace((unsigned char)*start)) {
         start++;
     }
     
     /* Find end (before }}) */
     const char *var_end = end - 2;
-    while (var_end > start && isspace(*(var_end - 1))) {
+    while (var_end > start && isspace((unsigned char)*(var_end - 1))) {
         var_end--;
     }
     

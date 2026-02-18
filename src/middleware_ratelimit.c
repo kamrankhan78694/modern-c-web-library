@@ -20,6 +20,7 @@
     #include <netinet/in.h>
     #include <arpa/inet.h>
     #include <unistd.h>
+    #include <pthread.h>
 #endif
 
 /* Configuration */
@@ -47,6 +48,7 @@ typedef struct {
     ratelimit_config_t config;
     hash_bucket_t table[HASH_TABLE_SIZE];
     unsigned long request_count;
+    pthread_mutex_t mutex;
 } ratelimiter_t;
 
 /* Global rate limiter instance */
@@ -251,10 +253,13 @@ static bool _ratelimit_middleware(http_request_t *req, http_response_t *res) {
         return true;
     }
     
+    pthread_mutex_lock(&limiter->mutex);
+    
     /* Find or create bucket entry for this IP */
     bucket_entry_t *entry = _find_or_create_entry(limiter, client_ip);
     if (entry == NULL) {
         /* Memory allocation failed, allow request (fail open) */
+        pthread_mutex_unlock(&limiter->mutex);
         return true;
     }
     
@@ -279,6 +284,7 @@ static bool _ratelimit_middleware(http_request_t *req, http_response_t *res) {
         http_response_set_header(res, "Retry-After", retry_after);
         http_response_send_text(res, HTTP_TOO_MANY_REQUESTS, 
                                "Rate limit exceeded. Please try again later.");
+        pthread_mutex_unlock(&limiter->mutex);
         return false;
     }
     
@@ -288,6 +294,7 @@ static bool _ratelimit_middleware(http_request_t *req, http_response_t *res) {
         _cleanup_expired_entries(limiter);
     }
     
+    pthread_mutex_unlock(&limiter->mutex);
     return true;
 }
 
@@ -328,6 +335,12 @@ middleware_fn_t ratelimit_middleware_create(const ratelimit_config_t *config) {
         return NULL;
     }
     
+    if (pthread_mutex_init(&g_ratelimiter->mutex, NULL) != 0) {
+        free(g_ratelimiter);
+        g_ratelimiter = NULL;
+        return NULL;
+    }
+    
     /* Copy configuration */
     g_ratelimiter->config = *config;
     g_ratelimiter->request_count = 0;
@@ -344,6 +357,8 @@ void ratelimit_middleware_destroy(void) {
     if (g_ratelimiter == NULL) {
         return;
     }
+    
+    pthread_mutex_destroy(&g_ratelimiter->mutex);
     
     /* Free all bucket entries */
     for (int i = 0; i < HASH_TABLE_SIZE; i++) {
