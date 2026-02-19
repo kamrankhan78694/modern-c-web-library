@@ -8,6 +8,7 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 /* HTTP Methods */
 typedef enum {
@@ -1089,6 +1090,166 @@ middleware_fn_t jwt_auth_middleware_create(const jwt_auth_config_t *config);
  * Destroy JWT auth middleware and free resources
  */
 void jwt_auth_middleware_destroy(void);
+
+/* ===== Logging Middleware API (Phase 8) ===== */
+
+/**
+ * Log levels in ascending severity order
+ */
+typedef enum {
+    LOG_LEVEL_DEBUG = 0,
+    LOG_LEVEL_INFO  = 1,
+    LOG_LEVEL_WARN  = 2,
+    LOG_LEVEL_ERROR = 3
+} log_level_t;
+
+/**
+ * Logging middleware configuration
+ */
+typedef struct log_config {
+    log_level_t level;   /* Minimum log level to emit (default: LOG_LEVEL_INFO) */
+    FILE *output;        /* Output stream; NULL defaults to stderr */
+} log_config_t;
+
+/**
+ * Create a logging middleware that emits one line per request.
+ * Format: [YYYY-MM-DD HH:MM:SS] LEVEL  METHOD /path
+ * @param config Logging configuration (NULL for defaults)
+ * @return Middleware function or NULL on failure
+ */
+middleware_fn_t log_middleware_create(const log_config_t *config);
+
+/**
+ * Destroy logging middleware and free resources
+ */
+void log_middleware_destroy(void);
+
+/* ===== Error Handler Middleware API (Phase 8) ===== */
+
+/**
+ * Custom error handler callback
+ * @param req  Incoming request
+ * @param res  Response to populate
+ * @param status HTTP status code that triggered the error
+ */
+typedef void (*error_handler_fn_t)(http_request_t *req, http_response_t *res,
+                                    http_status_t status);
+
+/**
+ * Error handler middleware configuration
+ */
+typedef struct error_handler_config {
+    error_handler_fn_t handler; /* Custom handler; NULL → built-in JSON error body */
+} error_handler_config_t;
+
+/**
+ * Create an error-handler middleware.
+ * When the response status is 4xx or 5xx and the body has not been set,
+ * the middleware fills in a standard JSON error body:
+ *   {"error": "<reason phrase>", "status": <code>}
+ * @param config Configuration (NULL for defaults)
+ * @return Middleware function or NULL on failure
+ */
+middleware_fn_t error_handler_middleware_create(const error_handler_config_t *config);
+
+/**
+ * Destroy error handler middleware and free resources
+ */
+void error_handler_middleware_destroy(void);
+
+/**
+ * Apply the error handler to a response that has an error status.
+ * No-op when status < 400.  Can be called directly from route handlers.
+ * @param req Request object (may be NULL)
+ * @param res Response object to inspect and potentially populate
+ */
+void error_handler_apply(http_request_t *req, http_response_t *res);
+
+/* ===== CSRF Middleware API (Phase 8) ===== */
+
+/**
+ * CSRF middleware configuration
+ */
+typedef struct csrf_config {
+    const char *cookie_name; /* Cookie that carries the token (default: "csrf_token") */
+    const char *header_name; /* Request header the client must echo (default: "X-CSRF-Token") */
+    int token_length;        /* Token bytes before hex-encoding (default: 16, min: 8, max: 32) */
+} csrf_config_t;
+
+/**
+ * Create a CSRF protection middleware (double-submit cookie pattern).
+ *
+ * On the first request (no cookie present) a random token is generated and
+ * written into a cookie on the response.  For state-changing methods
+ * (POST / PUT / PATCH / DELETE) the token found in the cookie must also appear
+ * in the X-CSRF-Token request header (or the configured header_name).
+ * Constant-time comparison is used to resist timing attacks.
+ *
+ * Safe methods (GET, HEAD, OPTIONS) are passed through unconditionally.
+ *
+ * @param config Configuration (NULL for defaults)
+ * @return Middleware function or NULL on failure
+ */
+middleware_fn_t csrf_middleware_create(const csrf_config_t *config);
+
+/**
+ * Destroy CSRF middleware and free resources
+ */
+void csrf_middleware_destroy(void);
+
+/* ===== Input Validation API (Phase 8) ===== */
+
+/**
+ * Validate string length
+ * @param str      String to validate
+ * @param min_len  Minimum length (inclusive)
+ * @param max_len  Maximum length (inclusive)
+ * @return true if str length is within [min_len, max_len]
+ */
+bool input_validate_length(const char *str, size_t min_len, size_t max_len);
+
+/**
+ * Validate that a string contains only characters from an allowed set
+ * @param str           String to validate
+ * @param allowed_chars Null-terminated string of allowed characters
+ * @return true if every character of str appears in allowed_chars
+ */
+bool input_validate_charset(const char *str, const char *allowed_chars);
+
+/**
+ * Parse a decimal integer and validate it falls within a range.
+ * Rejects leading/trailing whitespace and non-numeric characters.
+ * @param str     String representation of an integer
+ * @param min_val Minimum acceptable value (inclusive)
+ * @param max_val Maximum acceptable value (inclusive)
+ * @param out_val If non-NULL and validation passes, receives the parsed value
+ * @return true if str is a valid integer within [min_val, max_val]
+ */
+bool input_validate_integer(const char *str, long long min_val, long long max_val,
+                             long long *out_val);
+
+/**
+ * Validate basic e-mail format: non-empty local-part, '@', non-empty domain
+ * with at least one '.'.  Does not perform DNS or RFC 5321 full validation.
+ * @param str String to validate
+ * @return true if str looks like a plausible e-mail address
+ */
+bool input_validate_email(const char *str);
+
+/**
+ * Check whether a string is composed entirely of ASCII alphanumeric chars
+ * @param str String to check
+ * @return true if every character is [A-Za-z0-9] (empty string → false)
+ */
+bool input_is_alphanumeric(const char *str);
+
+/**
+ * Escape HTML special characters to prevent XSS.
+ * Replaces & " ' < > with their named HTML entities.
+ * @param str Input string
+ * @return Newly allocated escaped string (caller must free), or NULL on error
+ */
+char *input_sanitize_html(const char *str);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(ModernCWebLibrary VERSION 0.6.0 LANGUAGES C)
+project(ModernCWebLibrary VERSION 0.8.0 LANGUAGES C)
 
 # Set C standard
 set(CMAKE_C_STANDARD 11)
@@ -45,6 +45,10 @@ set(WEBLIB_SOURCES
     src/middleware_auth.c
     src/db_pool.c
     src/thread_pool.c
+    src/middleware_log.c
+    src/middleware_error.c
+    src/middleware_csrf.c
+    src/input_validation.c
 )
 
 # Create static library

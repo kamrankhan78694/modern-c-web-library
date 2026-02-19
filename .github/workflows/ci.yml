@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }} / ${{ matrix.compiler }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+            c_compiler: gcc
+          - os: ubuntu-latest
+            compiler: clang
+            c_compiler: clang
+          - os: macos-latest
+            compiler: clang
+            c_compiler: clang
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q cmake build-essential valgrind
+
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake
+
+      - name: Configure (cmake)
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. \
+            -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -pedantic"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run unit tests
+        run: |
+          cd build
+          ./tests/test_weblib
+
+      - name: Valgrind memory check (Linux gcc only)
+        if: runner.os == 'Linux' && matrix.compiler == 'gcc'
+        run: |
+          cd build
+          valgrind \
+            --leak-check=full \
+            --error-exitcode=1 \
+            --show-leak-kinds=definite,indirect \
+            ./tests/test_weblib

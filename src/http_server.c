@@ -52,6 +52,7 @@ typedef enum {
 typedef enum {
     PARSER_INCOMPLETE = 0,
     PARSER_COMPLETE,
+    PARSER_EXPECT_CONTINUE, /* headers done; Expect: 100-continue must be honoured */
     PARSER_ERROR
 } parser_result_t;
 
@@ -67,6 +68,8 @@ typedef struct http_parser {
     size_t body_received;
     size_t body_capacity;
     bool chunked;
+    bool seen_transfer_encoding; /* detect duplicate Transfer-Encoding headers */
+    bool expect_continue;        /* Expect: 100-continue was present */
     size_t current_chunk_size;
     size_t current_chunk_received;
     bool keep_alive;
@@ -144,6 +147,7 @@ static void handle_websocket_connection(int client_fd, http_request_t *req);
 static bool response_forces_close(http_response_t *res);
 static void send_response(int client_fd, http_response_t *res, bool keep_alive);
 static void send_error_response(int client_fd, http_status_t status, const char *message);
+static int send_all(int fd, const char *buf, size_t len);
 static http_request_t *http_request_create(void);
 static void http_request_destroy(http_request_t *req);
 static http_response_t *http_response_create(void);
@@ -577,7 +581,14 @@ static void *handle_connection(void *arg) {
             result = http_parser_execute(&conn->parser, NULL, 0);
         }
 
-        while (result == PARSER_INCOMPLETE) {
+        while (result == PARSER_INCOMPLETE || result == PARSER_EXPECT_CONTINUE) {
+            if (result == PARSER_EXPECT_CONTINUE) {
+                /* RFC 7231 §5.1.1: send 100 Continue before waiting for body */
+                static const char CONTINUE_RESP[] = "HTTP/1.1 100 Continue\r\n\r\n";
+                send_all(client_fd, CONTINUE_RESP, sizeof(CONTINUE_RESP) - 1);
+                result = PARSER_INCOMPLETE;
+                continue;
+            }
             ssize_t bytes_read = recv(client_fd, read_buf, sizeof(read_buf), 0);
             if (bytes_read < 0) {
                 if (errno == EINTR) {
@@ -1326,9 +1337,20 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
         }
         parser->content_length = (size_t)val;
     } else if (strcasecmp(name_buf, "transfer-encoding") == 0) {
+        if (parser->seen_transfer_encoding) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Duplicate Transfer-Encoding header");
+            return -1;
+        }
+        parser->seen_transfer_encoding = true;
         if (strstr(value_buf, "chunked") != NULL) {
             parser->chunked = true;
             parser->content_length = 0;
+        }
+    } else if (strcasecmp(name_buf, "expect") == 0) {
+        if (strcasecmp(value_buf, "100-continue") == 0) {
+            parser->expect_continue = true;
         }
     } else if (strcasecmp(name_buf, "connection") == 0) {
         if (strcasestr(value_buf, "close")) {
@@ -1407,6 +1429,13 @@ static int parse_headers(http_parser_t *parser) {
                 parser->state = PARSE_STATE_BODY;
             } else {
                 parser->state = PARSE_STATE_COMPLETE;
+            }
+            /* Signal to caller that 100 Continue must be sent before body is read */
+            if (parser->expect_continue &&
+                (parser->state == PARSE_STATE_BODY ||
+                 parser->state == PARSE_STATE_CHUNK_SIZE)) {
+                parser->expect_continue = false; /* one-shot */
+                return 2; /* caller must send 100 Continue */
             }
             return 1;
         }
@@ -1549,6 +1578,8 @@ static void http_parser_reset(http_parser_t *parser, http_request_t *req, bool p
     parser->body_received = 0;
     parser->body_capacity = 0;
     parser->chunked = false;
+    parser->seen_transfer_encoding = false;
+    parser->expect_continue = false;
     parser->current_chunk_size = 0;
     parser->current_chunk_received = 0;
     parser->keep_alive = false;
@@ -1594,6 +1625,11 @@ static parser_result_t http_parser_execute(http_parser_t *parser, const char *da
                 }
                 if (result == 0) {
                     return PARSER_INCOMPLETE;
+                }
+                if (result == 2) {
+                    /* Expect: 100-continue — caller must send "100 Continue"
+                       before more body data arrives */
+                    return PARSER_EXPECT_CONTINUE;
                 }
                 break;
             }
