@@ -1147,6 +1147,9 @@ typedef struct error_handler_config {
  * When the response status is 4xx or 5xx and the body has not been set,
  * the middleware fills in a standard JSON error body:
  *   {"error": "<reason phrase>", "status": <code>}
+ * This is applied automatically when the middleware runs (e.g., when a prior
+ * middleware has set an error status).  For errors produced by the route
+ * handler itself, call error_handler_apply() explicitly from user code.
  * @param config Configuration (NULL for defaults)
  * @return Middleware function or NULL on failure
  */

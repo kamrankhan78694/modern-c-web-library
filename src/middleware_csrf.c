@@ -46,11 +46,19 @@ static csrf_state_t g_csrf_state;
 /* ── Random token generation ─────────────────────────────────────────────── */
 
 /**
- * @brief Fill buf with len random bytes.
- *        Tries /dev/urandom first; falls back to rand() seeded from time.
+ * @brief Fill buf with len cryptographically random bytes.
+ *        POSIX: /dev/urandom.  Windows: BCryptGenRandom.
+ *        Falls back to seeded rand() only when no OS CSPRNG is available.
  */
 static void _fill_random(unsigned char *buf, size_t len) {
-#ifndef _WIN32
+#ifdef _WIN32
+    /* Windows: use BCryptGenRandom (available since Vista / Server 2008) */
+#   include <bcrypt.h>  /* requires linking with bcrypt.lib */
+    if (BCryptGenRandom(NULL, buf, (ULONG)len,
+                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0) {
+        return; /* STATUS_SUCCESS == 0 */
+    }
+#else
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd >= 0) {
         size_t got = 0;
@@ -63,10 +71,11 @@ static void _fill_random(unsigned char *buf, size_t len) {
         if (got == len) return;
     }
 #endif
-    /* Fallback: weak PRNG — acceptable only when /dev/urandom is unavailable */
+    /* Last-resort fallback: weak PRNG — only when no OS CSPRNG is available.
+       This path should never be reached on modern Linux/macOS/Windows. */
     static unsigned long seed_state = 0;
     if (seed_state == 0) {
-        seed_state = (unsigned long)time(NULL);
+        seed_state = (unsigned long)time(NULL) ^ (unsigned long)(size_t)buf;
         srand((unsigned int)seed_state);
     }
     for (size_t i = 0; i < len; i++) {

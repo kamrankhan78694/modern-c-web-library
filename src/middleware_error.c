@@ -104,16 +104,20 @@ void error_handler_apply(http_request_t *req, http_response_t *res) {
 /**
  * @brief Middleware handler function
  *
- * Runs before the route handler.  When a prior middleware has already set an
- * error status (e.g., rate limiter → 429, auth → 401) and marked the response
- * as sent, the chain has already stopped.  If the chain is still running we
- * continue it; error normalisation is applied at response-send time via
- * error_handler_apply().
+ * Runs before the route handler. When a prior middleware has already set an
+ * error status (e.g., rate limiter → 429, auth → 401) but allowed the chain
+ * to continue, this middleware will normalise that error via
+ * error_handler_apply(). If an earlier middleware both sets the error and
+ * marks the response as sent, the chain will have stopped before we run.
+ *
+ * Note: Errors produced by the route handler itself still require an explicit
+ * call to error_handler_apply() from user code or from server-side send logic.
  */
 static bool _error_handler_middleware(http_request_t *req, http_response_t *res) {
-    (void)req;
-    (void)res;
-    /* Always continue; error_handler_apply() is the active API */
+    if (res != NULL) {
+        error_handler_apply(req, res);
+    }
+    /* Always continue; this middleware never short-circuits the chain */
     return true;
 }
 

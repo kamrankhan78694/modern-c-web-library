@@ -585,8 +585,18 @@ static void *handle_connection(void *arg) {
             if (result == PARSER_EXPECT_CONTINUE) {
                 /* RFC 7231 §5.1.1: send 100 Continue before waiting for body */
                 static const char CONTINUE_RESP[] = "HTTP/1.1 100 Continue\r\n\r\n";
-                send_all(client_fd, CONTINUE_RESP, sizeof(CONTINUE_RESP) - 1);
-                result = PARSER_INCOMPLETE;
+                if (send_all(client_fd, CONTINUE_RESP, sizeof(CONTINUE_RESP) - 1) < 0) {
+                    perror("send 100 Continue failed");
+                    send_error_response(client_fd, HTTP_INTERNAL_ERROR, "Socket write error");
+                    connection_open = false;
+                    goto iteration_cleanup;
+                }
+
+                /*
+                 * After sending 100 Continue, let the parser consume any
+                 * already-buffered body bytes (e.g., headers + body in one packet).
+                 */
+                result = http_parser_execute(&conn->parser, NULL, 0);
                 continue;
             }
             ssize_t bytes_read = recv(client_fd, read_buf, sizeof(read_buf), 0);

@@ -62,9 +62,8 @@ static bool _log_middleware_handler(http_request_t *req, http_response_t *res) {
 #ifndef _WIN32
     tm_info = gmtime_r(&now, &tm_buf);
 #else
-    tm_info = gmtime(&now);
-    if (tm_info) {
-        tm_buf = *tm_info;
+    /* Use thread-safe variant on Windows */
+    if (gmtime_s(&tm_buf, &now) == 0) {
         tm_info = &tm_buf;
     }
 #endif

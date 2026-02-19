@@ -12,6 +12,30 @@
 static int tests_run = 0;
 static int tests_passed = 0;
 
+/*
+ * Test-local helper: free an http_header_node linked list.
+ * Mirrors the internal header_list_free() in http_server.c so that tests
+ * using stack-allocated http_response_t can clean up header allocations.
+ */
+typedef struct _test_hdr_node {
+    char *name;
+    char *raw_name;
+    char *value;
+    struct _test_hdr_node *next;
+} _test_hdr_node_t;
+
+static void _test_free_header_list(void *headers) {
+    _test_hdr_node_t *h = (_test_hdr_node_t *)headers;
+    while (h) {
+        _test_hdr_node_t *next = h->next;
+        free(h->name);
+        free(h->raw_name);
+        free(h->value);
+        free(h);
+        h = next;
+    }
+}
+
 /* Dummy handler for testing */
 static void dummy_handler(http_request_t *req, http_response_t *res) {
     (void)req;
@@ -741,6 +765,8 @@ void test_cookie_set(void) {
     http_response_set_cookie(&res, "session", "abc123", &opts);
     /* The Set-Cookie header should be set (verified by the fact it doesn't crash) */
 
+    _test_free_header_list(res.headers);
+
     PASS();
 }
 
@@ -758,6 +784,8 @@ void test_cookie_delete(void) {
     /* Delete a cookie */
     http_response_delete_cookie(&res, "session");
     /* Should set Set-Cookie: session=; Path=/; Max-Age=0 */
+
+    _test_free_header_list(res.headers);
 
     PASS();
 }
@@ -929,6 +957,7 @@ void test_static_file_serve(void) {
 
     free(req.path);
     free(res.body);
+    _test_free_header_list(res.headers);
 
     /* Clean up test file */
     remove("/tmp/test_weblib_static.txt");
@@ -1214,6 +1243,8 @@ void test_session_cookie_set(void) {
 
     /* Delete session cookie */
     session_set_cookie(&res, "abc123", -1, "/");
+
+    _test_free_header_list(res.headers);
 
     PASS();
 }
@@ -1994,11 +2025,11 @@ void test_log_middleware_create_destroy(void) {
 void test_log_middleware_invoke(void) {
     TEST("log_middleware (invoke)");
 
-    /* Route to /dev/null so log output doesn't clutter test output */
-    FILE *dev_null = fopen("/dev/null", "w");
-    ASSERT(dev_null != NULL);
+    /* tmpfile() is portable across POSIX and Windows */
+    FILE *sink = tmpfile();
+    ASSERT(sink != NULL);
 
-    log_config_t cfg = {LOG_LEVEL_INFO, dev_null};
+    log_config_t cfg = {LOG_LEVEL_INFO, sink};
     middleware_fn_t fn = log_middleware_create(&cfg);
     ASSERT(fn != NULL);
 
@@ -2020,7 +2051,7 @@ void test_log_middleware_invoke(void) {
     ASSERT(cont == true);
 
     log_middleware_destroy();
-    fclose(dev_null);
+    fclose(sink);
 
     PASS();
 }
@@ -2060,6 +2091,7 @@ void test_error_handler_apply(void) {
     ASSERT(strstr(res.body, "404") != NULL || strstr(res.body, "Not Found") != NULL);
 
     free(res.body);
+    _test_free_header_list(res.headers);
 
     /* Non-error status → no change */
     http_response_t ok_res;
@@ -2119,19 +2151,8 @@ void test_csrf_safe_methods(void) {
 
     csrf_middleware_destroy();
 
-    /* Free any allocated cookie header */
-    if (res.headers) {
-        typedef struct h { char *name; char *raw_name; char *value; struct h *next; } hdr_t;
-        hdr_t *h = (hdr_t *)res.headers;
-        while (h) {
-            hdr_t *nx = h->next;
-            free(h->name);
-            free(h->raw_name);
-            free(h->value);
-            free(h);
-            h = nx;
-        }
-    }
+    /* Free any allocated cookie/header nodes */
+    _test_free_header_list(res.headers);
 
     PASS();
 }
@@ -2251,16 +2272,101 @@ void test_input_sanitize_html(void) {
 
 /* ===== Phase 7: Parser Hardening Tests ===== */
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+/* Helper: connect to localhost:port, send raw bytes, read response into buf.
+ * Returns bytes read or -1 on error. */
+static ssize_t _send_raw_request(uint16_t port, const char *raw, size_t raw_len,
+                                  char *buf, size_t buf_size) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    /* Send the raw request bytes */
+    ssize_t sent = send(fd, raw, raw_len, 0);
+    if (sent < 0) {
+        close(fd);
+        return -1;
+    }
+
+    /* Shutdown write side so server knows we're done sending */
+    shutdown(fd, SHUT_WR);
+
+    /* Read response */
+    ssize_t total = 0;
+    while ((size_t)total < buf_size - 1) {
+        ssize_t n = recv(fd, buf + total, buf_size - 1 - (size_t)total, 0);
+        if (n <= 0) break;
+        total += n;
+    }
+    buf[total] = '\0';
+
+    close(fd);
+    return total;
+}
+
 void test_parser_duplicate_transfer_encoding(void) {
     TEST("parser (duplicate Transfer-Encoding → 400)");
 
-    /* We test the parser directly by creating an http_server and checking that
-       a request with duplicate TE headers yields the right error.
-       Since we can't easily spin up a full server in a unit test, we validate
-       the documented behaviour via the public HTTP status enum values. */
+    /* Start a real server on an ephemeral port */
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
 
-    /* Verify the status code used for bad request exists */
-    ASSERT(HTTP_BAD_REQUEST == 400);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/ok", dummy_handler);
+    http_server_set_router(server, router);
+
+    /* Use a high port to avoid conflicts */
+    uint16_t port = 18787;
+    int listen_result = http_server_listen(server, port);
+    ASSERT(listen_result == 0);
+
+    /* Allow the accept thread to start */
+    usleep(50000); /* 50ms */
+
+    /* 1. Duplicate Transfer-Encoding → expect "400" in response */
+    const char *dup_te_request =
+        "GET /ok HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n";
+
+    char resp_buf[2048];
+    ssize_t nread = _send_raw_request(port, dup_te_request, strlen(dup_te_request),
+                                       resp_buf, sizeof(resp_buf));
+    ASSERT(nread > 0);
+    ASSERT(strstr(resp_buf, "400") != NULL);
+
+    /* 2. Sanity: a valid request on the same server should succeed */
+    const char *good_request =
+        "GET /ok HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+
+    nread = _send_raw_request(port, good_request, strlen(good_request),
+                               resp_buf, sizeof(resp_buf));
+    ASSERT(nread > 0);
+    /* Should be a 200 or 404 (dummy_handler doesn't set body, but route matches) */
+    ASSERT(strstr(resp_buf, "HTTP/1.1") != NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
 
     PASS();
 }
