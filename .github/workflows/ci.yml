@@ -10,6 +10,8 @@ jobs:
   build-and-test:
     name: ${{ matrix.os }} / ${{ matrix.compiler }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
