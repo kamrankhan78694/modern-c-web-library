@@ -1,9 +1,11 @@
 #include "weblib.h"
+#include "thread_pool.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,13 +75,33 @@ typedef struct http_parser {
     const char *error_message;
 } http_parser_t;
 
+/* Server state for graceful shutdown */
+typedef enum {
+    SERVER_STOPPED = 0,
+    SERVER_RUNNING,
+    SERVER_DRAINING
+} server_state_t;
+
+/* Default timeouts in seconds */
+#define DEFAULT_READ_TIMEOUT_SEC 30
+#define DEFAULT_WRITE_TIMEOUT_SEC 30
+
 /* Internal server structure */
 struct http_server {
     int socket_fd;
     uint16_t port;
     router_t *router;
-    bool running;
+    volatile sig_atomic_t running;
+    volatile sig_atomic_t state;
     pthread_t accept_thread;
+    
+    /* Socket timeouts */
+    int read_timeout_sec;
+    int write_timeout_sec;
+    
+    /* Thread pool (threaded mode) */
+    thread_pool_t *pool;
+    int thread_count;
     
     /* Async I/O support */
     bool async_mode;
@@ -157,9 +179,14 @@ http_server_t *http_server_create(void) {
     
     server->socket_fd = -1;
     server->running = false;
+    server->state = SERVER_STOPPED;
     server->router = NULL;
     server->async_mode = false;
     server->event_loop = NULL;
+    server->read_timeout_sec = DEFAULT_READ_TIMEOUT_SEC;
+    server->write_timeout_sec = DEFAULT_WRITE_TIMEOUT_SEC;
+    server->pool = NULL;
+    server->thread_count = THREAD_POOL_DEFAULT_SIZE;
     
     return server;
 }
@@ -206,6 +233,7 @@ int http_server_listen(http_server_t *server, uint16_t port) {
     
     server->port = port;
     server->running = true;
+    server->state = SERVER_RUNNING;
     
     if (server->async_mode) {
         /* Async mode - use event loop */
@@ -229,8 +257,15 @@ int http_server_listen(http_server_t *server, uint16_t port) {
         /* Run event loop in main thread */
         event_loop_run(server->event_loop);
     } else {
-        /* Traditional threaded mode */
-        printf("HTTP server listening on port %d (threaded mode)\n", port);
+        /* Traditional threaded mode — create thread pool */
+        server->pool = thread_pool_create(server->thread_count, 0);
+        if (!server->pool) {
+            fprintf(stderr, "Failed to create thread pool\n");
+            close(server->socket_fd);
+            return -1;
+        }
+        
+        printf("HTTP server listening on port %d (threaded mode, pool=%d)\n", port, server->thread_count);
         
         /* Start accept thread */
         if (pthread_create(&server->accept_thread, NULL, accept_connections, server) != 0) {
@@ -250,6 +285,7 @@ void http_server_stop(http_server_t *server) {
         return;
     }
     
+    server->state = SERVER_DRAINING;
     server->running = false;
     
     if (server->async_mode) {
@@ -265,6 +301,12 @@ void http_server_stop(http_server_t *server) {
             server->socket_fd = -1;
         }
         pthread_join(server->accept_thread, NULL);
+        
+        /* Drain and destroy thread pool */
+        if (server->pool) {
+            thread_pool_destroy(server->pool);
+            server->pool = NULL;
+        }
     }
     
     if (server->socket_fd >= 0) {
@@ -272,7 +314,57 @@ void http_server_stop(http_server_t *server) {
         server->socket_fd = -1;
     }
     
+    server->state = SERVER_STOPPED;
     printf("HTTP server stopped\n");
+}
+
+/* Graceful shutdown with timeout */
+int http_server_shutdown(http_server_t *server, int timeout_sec) {
+    if (!server) {
+        return -1;
+    }
+    if (!server->running) {
+        return 0;
+    }
+    
+    server->state = SERVER_DRAINING;
+    
+    /* Stop accepting new connections */
+    if (server->socket_fd >= 0) {
+        shutdown(server->socket_fd, SHUT_RDWR);
+        close(server->socket_fd);
+        server->socket_fd = -1;
+    }
+    
+    /* Wait for pending work to drain (up to timeout) */
+    if (!server->async_mode && server->pool) {
+        time_t start = time(NULL);
+        while (thread_pool_pending(server->pool) > 0) {
+            if (timeout_sec > 0 && (time(NULL) - start) >= timeout_sec) {
+                break; /* Timeout reached */
+            }
+            usleep(10000); /* 10ms poll interval */
+        }
+    }
+    
+    /* Now fully stop */
+    server->running = false;
+    
+    if (server->async_mode) {
+        if (server->event_loop) {
+            event_loop_stop(server->event_loop);
+        }
+    } else {
+        pthread_join(server->accept_thread, NULL);
+        if (server->pool) {
+            thread_pool_destroy(server->pool);
+            server->pool = NULL;
+        }
+    }
+    
+    server->state = SERVER_STOPPED;
+    printf("HTTP server shut down gracefully\n");
+    return 0;
 }
 
 /* Destroy server */
@@ -283,6 +375,11 @@ void http_server_destroy(http_server_t *server) {
     
     if (server->running) {
         http_server_stop(server);
+    }
+    
+    if (server->pool) {
+        thread_pool_destroy(server->pool);
+        server->pool = NULL;
     }
     
     if (server->event_loop) {
@@ -298,6 +395,27 @@ void http_server_set_router(http_server_t *server, router_t *router) {
     if (server) {
         server->router = router;
     }
+}
+
+/* Set socket timeouts on accepted client fd */
+static void apply_socket_timeouts(int fd, int read_sec, int write_sec) {
+    if (read_sec > 0) {
+        struct timeval tv;
+        tv.tv_sec = read_sec;
+        tv.tv_usec = 0;
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    }
+    if (write_sec > 0) {
+        struct timeval tv;
+        tv.tv_sec = write_sec;
+        tv.tv_usec = 0;
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+}
+
+/* Thread pool work wrapper — handle_connection expects void* and frees conn */
+static void connection_work(void *arg) {
+    handle_connection(arg);
 }
 
 /* Accept connections thread */
@@ -316,19 +434,38 @@ static void *accept_connections(void *arg) {
             continue;
         }
         
-        /* Create connection handler thread */
+        /* Reject new connections when draining */
+        if (server->state == SERVER_DRAINING) {
+            close(client_fd);
+            continue;
+        }
+        
+        /* Apply socket timeouts */
+        apply_socket_timeouts(client_fd, server->read_timeout_sec, server->write_timeout_sec);
+        
+        /* Submit to thread pool */
         connection_t *conn = (connection_t *)calloc(1, sizeof(connection_t));
         if (conn) {
             conn->client_fd = client_fd;
             conn->server = server;
             
-            pthread_t thread;
-            if (pthread_create(&thread, NULL, handle_connection, conn) != 0) {
-                perror("pthread_create for connection failed");
-                close(client_fd);
-                free(conn);
+            if (server->pool) {
+                if (thread_pool_submit(server->pool, connection_work, conn) != 0) {
+                    /* Pool full or shutting down — reject connection */
+                    send_error_response(client_fd, HTTP_SERVICE_UNAVAILABLE, "Server Busy");
+                    close(client_fd);
+                    free(conn);
+                }
             } else {
-                pthread_detach(thread);
+                /* Fallback: thread-per-connection (shouldn't happen normally) */
+                pthread_t thread;
+                if (pthread_create(&thread, NULL, handle_connection, conn) != 0) {
+                    perror("pthread_create for connection failed");
+                    close(client_fd);
+                    free(conn);
+                } else {
+                    pthread_detach(thread);
+                }
             }
         } else {
             close(client_fd);
@@ -1550,6 +1687,58 @@ event_loop_t *http_server_get_event_loop(http_server_t *server) {
         return NULL;
     }
     return server->event_loop;
+}
+
+/* Set socket timeouts for client connections */
+int http_server_set_timeout(http_server_t *server, int read_sec, int write_sec) {
+    if (!server) {
+        return -1;
+    }
+    if (read_sec < 0 || write_sec < 0) {
+        return -1;
+    }
+    server->read_timeout_sec = read_sec;
+    server->write_timeout_sec = write_sec;
+    return 0;
+}
+
+/* Get read timeout */
+int http_server_get_read_timeout(http_server_t *server) {
+    if (!server) {
+        return -1;
+    }
+    return server->read_timeout_sec;
+}
+
+/* Get write timeout */
+int http_server_get_write_timeout(http_server_t *server) {
+    if (!server) {
+        return -1;
+    }
+    return server->write_timeout_sec;
+}
+
+/* Set thread pool size (must be called before http_server_listen) */
+int http_server_set_thread_count(http_server_t *server, int count) {
+    if (!server) {
+        return -1;
+    }
+    if (count < THREAD_POOL_MIN_SIZE) {
+        count = THREAD_POOL_MIN_SIZE;
+    }
+    if (count > THREAD_POOL_MAX_SIZE) {
+        count = THREAD_POOL_MAX_SIZE;
+    }
+    server->thread_count = count;
+    return 0;
+}
+
+/* Get current server state */
+int http_server_get_state(http_server_t *server) {
+    if (!server) {
+        return SERVER_STOPPED;
+    }
+    return (int)server->state;
 }
 
 /* Set non-blocking mode on a file descriptor */

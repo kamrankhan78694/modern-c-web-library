@@ -26,7 +26,7 @@ elseif(APPLE)
 endif()
 
 # Include directories
-include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 
 # Library source files
 set(WEBLIB_SOURCES
@@ -44,6 +44,7 @@ set(WEBLIB_SOURCES
     src/template.c
     src/middleware_auth.c
     src/db_pool.c
+    src/thread_pool.c
 )
 
 # Create static library
