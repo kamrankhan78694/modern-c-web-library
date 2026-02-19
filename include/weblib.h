@@ -516,6 +516,65 @@ int http_server_set_async(http_server_t *server, bool enable);
  */
 event_loop_t *http_server_get_event_loop(http_server_t *server);
 
+/* ===== Server Hardening API ===== */
+
+/**
+ * Server lifecycle states
+ */
+typedef enum {
+    HTTP_SERVER_STOPPED = 0,
+    HTTP_SERVER_RUNNING = 1,
+    HTTP_SERVER_DRAINING = 2
+} http_server_state_t;
+
+/**
+ * Set socket timeouts for accepted client connections
+ * Must be called before http_server_listen(). A value of 0 disables the timeout.
+ * @param server Server instance
+ * @param read_sec Read timeout in seconds (default: 30, 0 = no timeout)
+ * @param write_sec Write timeout in seconds (default: 30, 0 = no timeout)
+ * @return 0 on success, -1 on failure (NULL server or negative values)
+ */
+int http_server_set_timeout(http_server_t *server, int read_sec, int write_sec);
+
+/**
+ * Get current read timeout setting
+ * @param server Server instance
+ * @return Read timeout in seconds, or -1 if server is NULL
+ */
+int http_server_get_read_timeout(http_server_t *server);
+
+/**
+ * Get current write timeout setting
+ * @param server Server instance
+ * @return Write timeout in seconds, or -1 if server is NULL
+ */
+int http_server_get_write_timeout(http_server_t *server);
+
+/**
+ * Set thread pool size for threaded mode
+ * Must be called before http_server_listen(). Clamped to [1, 256].
+ * @param server Server instance
+ * @param count Number of worker threads (default: 16)
+ * @return 0 on success, -1 on failure
+ */
+int http_server_set_thread_count(http_server_t *server, int count);
+
+/**
+ * Graceful shutdown: stop accepting new connections and drain in-flight requests
+ * @param server Server instance
+ * @param timeout_sec Maximum seconds to wait for drain (0 = immediate)
+ * @return 0 on success, -1 on failure
+ */
+int http_server_shutdown(http_server_t *server, int timeout_sec);
+
+/**
+ * Get current server lifecycle state
+ * @param server Server instance
+ * @return HTTP_SERVER_STOPPED, HTTP_SERVER_RUNNING, or HTTP_SERVER_DRAINING
+ */
+int http_server_get_state(http_server_t *server);
+
 /* ===== WebSocket API ===== */
 
 /**

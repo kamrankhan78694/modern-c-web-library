@@ -169,10 +169,13 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Server Lifecycle
 
-- [ ] 🎯 **Graceful Shutdown & Thread Management** - Reliable server teardown
+- [x] ✅ **Graceful Shutdown & Thread Management** - Reliable server teardown
   - Close listening sockets before joining worker threads
-  - Introduce bounded thread pool or async-only execution mode
-  - Platform-specific guards for POSIX-only paths vs. Windows
+  - Bounded thread pool with configurable worker count (default 16)
+  - Server state machine: STOPPED → RUNNING → DRAINING → STOPPED
+  - `http_server_shutdown()` API with drain timeout
+  - Socket timeouts (`SO_RCVTIMEO`/`SO_SNDTIMEO`) with configurable values
+  - `http_server_set_timeout()` and `http_server_set_thread_count()` APIs
 
 ### Performance
 
@@ -309,6 +312,9 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - ✅ **Authentication Middleware** - Basic Auth, API Key, JWT (HMAC-SHA256) — pure C
 - ✅ **Database Connection Pool** - Thread-safe pooling with configurable lifecycle
 - ✅ **API Documentation** - Comprehensive API reference in `docs/api/`
+- ✅ **Thread Pool** - Bounded thread pool replacing thread-per-connection model
+- ✅ **Socket Timeouts** - Configurable SO_RCVTIMEO/SO_SNDTIMEO on client connections
+- ✅ **Graceful Shutdown** - Server state machine with drain timeout and thread pool cleanup
 
 ## Community Requests
 
@@ -323,7 +329,7 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 - **Phase 4 (v0.4.0)**: ✅ HTTP Foundation Hardening — parser, headers, connections, JSON arrays, graceful shutdown
 - **Phase 5 (v0.5.0)**: ✅ Request Processing & Security — body parsing, cookies, CORS, rate limiting, static files
 - **Phase 6 (v0.6.0)**: ✅ Production Readiness — sessions, template engine, auth middleware, db pooling, API docs
-- **Phase 7 (v0.7.0)**: Server Hardening & CI — socket timeouts, thread pool, graceful shutdown, CI pipeline, integration tests, parser hardening
+- **Phase 7 (v0.7.0)**: 🚧 Server Hardening & CI — socket timeouts ✅, thread pool ✅, graceful shutdown ✅, CI pipeline, integration tests, parser hardening
 - **Phase 8 (v0.8.0)**: Security & Observability — pure C TLS 1.2, CSRF middleware, logging, error handler, input validation
 - **Phase 9 (v0.9.0)**: Performance & Protocol — HTTP/2, response compression, caching layer, async WebSocket, benchmarks
 - **Phase 10 (v1.0.0)**: Release Readiness — tutorials, examples, Windows IOCP, BSD testing, health checks, release automation

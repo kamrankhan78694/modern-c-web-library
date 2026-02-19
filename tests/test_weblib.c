@@ -1,10 +1,12 @@
 #include "weblib.h"
 #include "db_pool.h"
+#include "thread_pool.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
+#include <pthread.h>
 
 /* Test counter */
 static int tests_run = 0;
@@ -1797,6 +1799,174 @@ void test_event_loop_timer_safety(void) {
     PASS();
 }
 
+/* ===== Phase 7: Thread Pool Tests ===== */
+
+/* Counter and mutex for thread pool completion test */
+static int tp_counter = 0;
+static pthread_mutex_t tp_counter_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void increment_counter(void *arg) {
+    (void)arg;
+    pthread_mutex_lock(&tp_counter_mutex);
+    tp_counter++;
+    pthread_mutex_unlock(&tp_counter_mutex);
+}
+
+void test_thread_pool_create_destroy(void) {
+    TEST("thread_pool (create/destroy)");
+
+    thread_pool_t *pool = thread_pool_create(4, 32);
+    ASSERT(pool != NULL);
+    ASSERT(thread_pool_pending(pool) == 0);
+
+    thread_pool_destroy(pool);
+
+    PASS();
+}
+
+void test_thread_pool_null_handling(void) {
+    TEST("thread_pool (null handling)");
+
+    /* NULL pool returns 0 pending */
+    ASSERT(thread_pool_pending(NULL) == 0);
+
+    /* Submit to NULL pool fails */
+    ASSERT(thread_pool_submit(NULL, increment_counter, NULL) == -1);
+
+    /* Destroy NULL is safe */
+    thread_pool_destroy(NULL);
+
+    /* NULL work function rejected */
+    thread_pool_t *pool = thread_pool_create(2, 8);
+    ASSERT(pool != NULL);
+    ASSERT(thread_pool_submit(pool, NULL, NULL) == -1);
+    thread_pool_destroy(pool);
+
+    PASS();
+}
+
+void test_thread_pool_submit_and_complete(void) {
+    TEST("thread_pool (submit 100 items)");
+
+    tp_counter = 0;
+    thread_pool_t *pool = thread_pool_create(4, 256);
+    ASSERT(pool != NULL);
+
+    /* Submit 100 work items */
+    for (int i = 0; i < 100; i++) {
+        int result = thread_pool_submit(pool, increment_counter, NULL);
+        ASSERT(result == 0);
+    }
+
+    /* Destroy waits for all work to complete */
+    thread_pool_destroy(pool);
+
+    ASSERT(tp_counter == 100);
+
+    PASS();
+}
+
+void test_thread_pool_clamp_limits(void) {
+    TEST("thread_pool (clamp limits)");
+
+    /* Thread count below minimum gets clamped to 1 */
+    thread_pool_t *pool1 = thread_pool_create(0, 8);
+    ASSERT(pool1 != NULL);
+    thread_pool_destroy(pool1);
+
+    /* Thread count above maximum gets clamped to 256 */
+    thread_pool_t *pool2 = thread_pool_create(999, 8);
+    ASSERT(pool2 != NULL);
+    thread_pool_destroy(pool2);
+
+    /* Default queue size when 0 is passed */
+    thread_pool_t *pool3 = thread_pool_create(2, 0);
+    ASSERT(pool3 != NULL);
+    thread_pool_destroy(pool3);
+
+    PASS();
+}
+
+/* ===== Phase 7: Socket Timeout Tests ===== */
+
+void test_server_set_timeout(void) {
+    TEST("http_server_set_timeout");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+
+    /* Default timeouts are 30s */
+    ASSERT(http_server_get_read_timeout(server) == 30);
+    ASSERT(http_server_get_write_timeout(server) == 30);
+
+    /* Set custom timeouts */
+    ASSERT(http_server_set_timeout(server, 10, 15) == 0);
+    ASSERT(http_server_get_read_timeout(server) == 10);
+    ASSERT(http_server_get_write_timeout(server) == 15);
+
+    /* Zero disables timeout */
+    ASSERT(http_server_set_timeout(server, 0, 0) == 0);
+    ASSERT(http_server_get_read_timeout(server) == 0);
+    ASSERT(http_server_get_write_timeout(server) == 0);
+
+    /* Negative values rejected */
+    ASSERT(http_server_set_timeout(server, -1, 5) == -1);
+    ASSERT(http_server_set_timeout(server, 5, -1) == -1);
+
+    /* NULL server handling */
+    ASSERT(http_server_set_timeout(NULL, 10, 10) == -1);
+    ASSERT(http_server_get_read_timeout(NULL) == -1);
+    ASSERT(http_server_get_write_timeout(NULL) == -1);
+
+    http_server_destroy(server);
+
+    PASS();
+}
+
+/* ===== Phase 7: Thread Count Configuration Tests ===== */
+
+void test_server_set_thread_count(void) {
+    TEST("http_server_set_thread_count");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+
+    /* Set valid thread count */
+    ASSERT(http_server_set_thread_count(server, 8) == 0);
+
+    /* Minimum clamped */
+    ASSERT(http_server_set_thread_count(server, 0) == 0);
+
+    /* Maximum clamped */
+    ASSERT(http_server_set_thread_count(server, 999) == 0);
+
+    /* NULL server rejected */
+    ASSERT(http_server_set_thread_count(NULL, 8) == -1);
+
+    http_server_destroy(server);
+
+    PASS();
+}
+
+/* ===== Phase 7: Server State Tests ===== */
+
+void test_server_state(void) {
+    TEST("http_server_get_state");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+
+    /* Initial state is STOPPED */
+    ASSERT(http_server_get_state(server) == HTTP_SERVER_STOPPED);
+
+    /* NULL server returns STOPPED */
+    ASSERT(http_server_get_state(NULL) == HTTP_SERVER_STOPPED);
+
+    http_server_destroy(server);
+
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -1908,6 +2078,21 @@ int main(void) {
     test_session_expired_cleanup_on_get();
     test_router_null_path();
     test_event_loop_timer_safety();
+
+    /* Phase 7: Thread pool tests */
+    test_thread_pool_create_destroy();
+    test_thread_pool_null_handling();
+    test_thread_pool_submit_and_complete();
+    test_thread_pool_clamp_limits();
+
+    /* Phase 7: Socket timeout tests */
+    test_server_set_timeout();
+
+    /* Phase 7: Thread count configuration tests */
+    test_server_set_thread_count();
+
+    /* Phase 7: Server state tests */
+    test_server_state();
     
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
