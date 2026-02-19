@@ -1,520 +1,427 @@
-# Next Phase Roadmap - Modern C Web Library v0.4.0+
+# Next Phase Roadmap — Modern C Web Library v0.7.0+
 
-## Overview
-
-The Modern C Web Library (MCWL) has successfully reached **v0.6.0 (Production Ready)** with a comprehensive feature set:
-- Production-ready HTTP server with threaded and async I/O modes
-- Cross-platform event loop (epoll/kqueue/poll)
-- Advanced routing with path parameters
-- Middleware chain architecture
-- JSON parser/serializer with full array support
-- RFC 6455 compliant WebSocket support (threaded mode)
-- Request body parsing (URL-encoded, multipart)
-- Cookie handling (RFC 6265)
-- CORS, rate limiting, and static file serving middleware
-- Session management with cookie-based transport
-- Template engine with `{{ variable }}` syntax
-- Authentication middleware (Basic Auth, API Key, JWT/HMAC-SHA256)
-- Database connection pooling (thread-safe)
-- Comprehensive test suite (60/60 passing)
-
-**Status**: Phase 6 is **complete**. All planned production-readiness features have been implemented while maintaining our commitment to **pure C with zero external dependencies**.
+> **Methodology**: First-principles engineering workflow.
+> Every decision below traces back to a verifiable technical constraint, not convention.
 
 ---
 
-## Phase 4: HTTP Foundation Hardening (v0.4.0 Target)
+## 1. Idea Intake
 
-**Goal**: Strengthen the HTTP protocol implementation and core server reliability. These are foundational improvements that unlock all subsequent features.
-
-### 4.1 Complete HTTP Parser
-
-**Why First**: A robust parser is the gatekeeper for all incoming requests. Without proper method validation, header parsing, and malformed request rejection, the server is vulnerable to crashes and security issues.
-
-**Implementation**:
-- Extend HTTP method support beyond GET/POST (PUT, DELETE, PATCH, OPTIONS, HEAD, TRACE)
-- Implement RFC-compliant header parsing with multi-line header support
-- Chunked transfer encoding (`Transfer-Encoding: chunked`) for request bodies
-- Malformed request detection and rejection with appropriate 4xx responses
-- Request line parsing hardening (validate HTTP version, URI length limits)
-
-**Files Affected**:
-- `src/http_server.c` - Core parsing logic
-- `include/weblib.h` - New `http_method_t` enum, `http_header_t` struct
-- `tests/test_weblib.c` - Parser edge case tests
-
-**Acceptance Criteria**:
-- Parse all standard HTTP methods
-- Handle headers up to 8KB total size
-- Reject invalid requests with 400 Bad Request
-- Support chunked request bodies up to configurable limit
+**Core problem in one sentence**: The library has shipped a feature-rich v0.6.0 but lacks the connection-level hardening, transport security, CI automation, and observability required for unsupervised production deployment.
 
 ---
 
-### 4.2 Header & Parameter Storage
+## 2. Crystallized Brief
 
-**Why First**: Current implementation lacks persistent storage for parsed headers and route parameters. This forces middleware and handlers to re-parse data or lose context.
+| Dimension | Detail |
+|-----------|--------|
+| **Target users** | C developers building HTTP/WebSocket backends who refuse external dependencies |
+| **Desired outcomes** | A server that survives hostile network conditions, encrypts traffic, shuts down without data loss, and proves correctness through automated CI on every commit |
+| **Non-goals** | HTTP/3 / QUIC (premature without TLS); framework-level ORM; language bindings; GUI tooling |
 
-**Implementation**:
-- Request header storage: dynamic key-value map accessible via `http_request_get_header(req, "Content-Type")`
-- Header mutation API: `http_request_set_header()`, `http_request_remove_header()`
-- Route parameter persistence: store `:param` values in request context
-- Response header management: `http_response_set_header()`, `http_response_add_header()`
-- Header serialization for HTTP response formatting
+---
 
-**Files Affected**:
-- `src/http_server.c` - Header storage in `http_request_t` / `http_response_t`
-- `include/weblib.h` - New header management APIs
-- `src/router.c` - Route parameter extraction and storage
-- `tests/test_weblib.c` - Header CRUD tests
+## 3. Completed Phases (Reference)
 
-**Data Structures**:
-```c
-typedef struct {
-    char *key;
-    char *value;
-} http_header_t;
+| Phase | Version | Status | Highlights |
+|-------|---------|--------|------------|
+| Phase 4 | v0.4.0 | ✅ Complete | HTTP parser hardening, header storage, JSON arrays, connection handling |
+| Phase 5 | v0.5.0 | ✅ Complete | Body parsing, cookies, CORS, rate limiting, static file serving |
+| Phase 6 | v0.6.0 | ✅ Complete | Sessions, template engine, auth middleware (Basic/JWT/API-Key), DB pooling, API docs |
 
-// In http_request_t / http_response_t:
-http_header_t *headers;
-size_t header_count;
-size_t header_capacity;
+**Current state**: 71/71 unit tests passing · zero compiler warnings · 14 source modules · 4 example servers
+
+---
+
+## 4. Grounded First-Principles Design
+
+### What makes a network server production-safe?
+
+Working from the socket up, not from features down:
+
+1. **Timeout enforcement** — A server without socket timeouts is vulnerable to Slowloris and connection exhaustion. The current `recv()` call in the connection loop blocks indefinitely.
+2. **Transport encryption** — Plaintext HTTP is rejected by browsers and load balancers. TLS 1.2+ is non-negotiable for production.
+3. **Graceful lifecycle** — Crash-stopping drops in-flight requests. A state machine (running → draining → stopped) with connection drain timeout is required.
+4. **Automated proof** — Without CI running tests on every push, regressions ship undetected. GitHub Actions with build + test + Valgrind is the minimum.
+5. **Observability** — A server without structured logging is a black box under incident. Logging middleware feeds debugging and monitoring.
+6. **Defensive parsing** — Edge cases in chunked encoding, duplicate headers, and request smuggling need targeted hardening.
+
+### Architecture Decision Records
+
+| Decision | Rationale |
+|----------|-----------|
+| Socket timeouts via `setsockopt(SO_RCVTIMEO/SO_SNDTIMEO)` | Portable POSIX, no extra threads, prevents indefinite blocking |
+| Pure C TLS (not OpenSSL) | Aligns with zero-dependency principle; vendor `src/tls/` subdirectory |
+| Thread pool instead of thread-per-connection | Bounded resource usage; prevents fork-bomb under load |
+| Structured logging to `FILE *` stream | Zero-allocation hot path; configurable destination (stderr, file, custom) |
+| GitHub Actions CI matrix: Linux + macOS | Covers epoll + kqueue backends; Windows IOCP deferred to Phase 10 |
+
+---
+
+## 5. Adversarial Review
+
+| Attack Vector / Failure Mode | Current Exposure | Mitigation (Phase) |
+|------------------------------|-----------------|---------------------|
+| **Slowloris** (slow headers) | CRITICAL: `recv()` blocks forever | Socket read timeout (Phase 7) |
+| **Slow POST** (slow body) | CRITICAL: body read has no deadline | Body read timeout (Phase 7) |
+| **Connection exhaustion** | HIGH: thread-per-connection, no cap | Thread pool with bounded queue (Phase 7) |
+| **Plaintext credentials** | HIGH: no TLS | Pure C TLS 1.2+ (Phase 8) |
+| **CSRF** | MEDIUM: no token validation | CSRF middleware with double-submit cookie (Phase 8) |
+| **Request smuggling** | LOW: Content-Length + Transfer-Encoding conflict checked | Add duplicate Transfer-Encoding detection (Phase 7) |
+| **Memory leaks under error paths** | LOW: parser malloc on line 1046 may leak on early return | Valgrind CI gate (Phase 7) |
+| **No regression detection** | HIGH: no CI pipeline | GitHub Actions on every push (Phase 7) |
+| **Silent failures** | MEDIUM: errors go to fprintf(stderr) | Structured logging middleware (Phase 8) |
+| **Stale connections after shutdown** | MEDIUM: no drain phase | Graceful shutdown state machine (Phase 7) |
+
+---
+
+## 6. Design Iteration (Refined Architecture)
+
+Based on adversarial review, the phases are ordered by **blast radius** — the damage caused if the gap is not closed:
+
+```
+Phase 7 (v0.7.0): Server Hardening & CI
+   ├── Socket timeouts (blocks Slowloris/Slow-POST)
+   ├── Thread pool (bounds resource usage)
+   ├── Graceful shutdown (drain + timeout)
+   ├── Connection hardening (keep-alive limits, partial I/O loops)
+   ├── GitHub Actions CI (build + test + Valgrind on Linux/macOS)
+   └── Networking integration tests
+
+Phase 8 (v0.8.0): Security & Observability
+   ├── Pure C TLS 1.2 (AES-GCM, SHA-256, RSA/ECDSA)
+   ├── CSRF middleware (double-submit cookie)
+   ├── Logging middleware (structured, configurable levels)
+   ├── Error handler middleware (centralized 4xx/5xx responses)
+   └── Input validation helpers (sanitization, length checks)
+
+Phase 9 (v0.9.0): Performance & Protocol
+   ├── HTTP/2 binary framing + stream multiplexing
+   ├── Response compression (gzip/deflate, pure C)
+   ├── In-memory caching layer (LRU, TTL)
+   ├── Async WebSocket mode (event loop integration)
+   └── Benchmarking suite
+
+Phase 10 (v1.0.0): Release Readiness
+   ├── Tutorial series (REST API, WebSocket chat, file upload)
+   ├── REST API example application
+   ├── Windows IOCP support
+   ├── BSD platform testing
+   ├── Health check endpoint
+   └── CHANGELOG + semantic versioning enforcement
 ```
 
 ---
 
-### 4.3 Robust Connection Handling
+## 7. Milestone Roadmap (1–2 Week Slices)
 
-**Why First**: Current implementation may not fully drain socket buffers or properly implement HTTP/1.1 keep-alive, leading to connection leaks and client timeouts.
+### Phase 7: Server Hardening & CI — v0.7.0 (4 weeks)
 
-**Implementation**:
-- Looping read/write operations with partial I/O handling
-- HTTP/1.1 persistent connections (`Connection: keep-alive` support)
-- Proper connection state machine (idle → reading → processing → writing → closed)
-- Deterministic socket teardown (graceful close with `SO_LINGER`)
-- Timeout handling for slow clients (read/write timeouts)
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W1** | Socket Timeouts & Connection Hardening | `setsockopt(SO_RCVTIMEO)` on accept; partial-I/O `recv()`/`send()` loops; keep-alive request limit (100 req/conn default) | None |
+| **W2** | Thread Pool & Graceful Shutdown | Bounded thread pool (configurable size, default 16); server state machine (running→draining→stopped); `http_server_shutdown()` API; SIGTERM/SIGINT handler | W1 (timeout feeds drain logic) |
+| **W3** | GitHub Actions CI + Integration Tests | `.github/workflows/ci.yml` (Linux gcc + macOS clang); Valgrind memcheck gate; `tests/integration/` with raw-socket HTTP client; malformed input + concurrent connection tests | W1+W2 (stable server to test against) |
+| **W4** | Parser Hardening & Stabilization | Duplicate Transfer-Encoding detection; `Expect: 100-continue` handling; chunked-size overflow clamping; comprehensive edge-case unit tests; full regression pass | W1-W3 (CI catches regressions) |
 
-**Files Affected**:
-- `src/http_server.c` - Connection lifecycle management
-- `src/event_loop.c` - Timeout tracking integration
-- `include/weblib.h` - Connection state enums
+### Phase 8: Security & Observability — v0.8.0 (5 weeks)
 
-**Key Improvements**:
-- Loop on `recv()` until full request received or timeout
-- Loop on `send()` until full response transmitted
-- Respect `Connection: close` header
-- Default to keep-alive for HTTP/1.1 clients
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W5** | Crypto Primitives | `src/tls/crypto_sha256.c` (SHA-256); `src/tls/crypto_aes_gcm.c` (AES-128/256-GCM); `src/tls/crypto_rsa.c` (RSA PKCS#1 v1.5 + OAEP) | None (standalone modules) |
+| **W6** | TLS Record Layer & Handshake (Part 1) | `src/tls/tls_record.c` (record framing); `src/tls/tls_handshake.c` (ClientHello/ServerHello); PEM certificate parser; key loading | W5 (crypto primitives) |
+| **W7** | TLS Handshake (Part 2) & Integration | Complete handshake state machine; `http_server_enable_tls(server, cert, key)` API; HTTPS example server; TLS unit tests with test vectors | W6 |
+| **W8** | Logging & Error Handler Middleware | `src/middleware_log.c` (configurable log levels: DEBUG/INFO/WARN/ERROR; format: timestamp, method, path, status, duration); `src/middleware_error.c` (centralized error pages, custom error callbacks) | None |
+| **W9** | CSRF Middleware & Input Validation | `src/middleware_csrf.c` (double-submit cookie, per-request token generation, constant-time comparison); `src/input_validation.c` (string length check, allowed-character filter, integer range validation) | Phase 7 CI (validates correctness) |
+
+### Phase 9: Performance & Protocol — v0.9.0 (5 weeks)
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W10** | HTTP/2 Framing & Streams | `src/http2/` directory; binary frame parser; stream multiplexing; HPACK header compression (static + dynamic tables); settings frame handling | Phase 7 (hardened connection layer) |
+| **W11** | HTTP/2 Integration | Server push; stream prioritization; integration with existing router; `http_server_enable_http2()` API; HTTP/2 unit tests | W10 |
+| **W12** | Response Compression | Pure C gzip (DEFLATE + gzip header, based on RFC 1951/1952); `Accept-Encoding` negotiation; `Content-Encoding: gzip` header; minimum size threshold (default 1KB) | None |
+| **W13** | Caching Layer & Async WebSocket | `src/cache.c` (LRU eviction, TTL, configurable max size); async WebSocket frame processing in event loop; non-blocking WebSocket sends with write queue | Phase 7 (event loop stability) |
+| **W14** | Benchmarking Suite | `tests/benchmark/` directory; throughput test (requests/sec); latency percentiles (p50/p95/p99); memory usage tracking; comparison scripts; CI integration for regression detection | All prior phases |
+
+### Phase 10: Release Readiness — v1.0.0 (3 weeks)
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W15** | Examples & Tutorials | `examples/rest_api_server.c` (full CRUD); `examples/websocket_chat.c`; `examples/file_upload.c`; step-by-step tutorial docs in `docs/tutorials/` | All features complete |
+| **W16** | Platform Hardening | Windows IOCP event loop backend; BSD (FreeBSD/OpenBSD) CI testing; platform-specific CI matrix expansion; `docs/PLATFORM.md` compatibility matrix | Phase 7 CI infrastructure |
+| **W17** | Release Engineering | Semantic versioning enforcement; `CHANGELOG.md` finalization; health check endpoint (`/healthz`); release automation in GitHub Actions; v1.0.0 tag and release | All prior phases |
 
 ---
 
-### 4.4 Complete JSON Support
+## 8. Atomic Task Breakdown
 
-**Why First**: Current JSON parser lacks array support and has edge cases in string escaping. This blocks advanced API responses and request body parsing.
+### Phase 7 — Server Hardening & CI
 
-**Implementation**:
-- JSON array parsing: `json_array_get(json, index)`, `json_array_length(json)`
-- Array serialization: `json_array_create()`, `json_array_append()`
-- Unicode escape sequence handling (`\uXXXX`)
-- Standard escape sequences (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`)
-- Number parsing hardening (exponent notation, overflow detection)
-- Nested object/array support (recursive descent parser)
+#### 7.1 Socket Timeouts
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 7.1.1 | Add `setsockopt(SO_RCVTIMEO)` on accepted client sockets | `src/http_server.c` | Read timeout triggers after configurable seconds (default 30s) | 2h |
+| 7.1.2 | Add `setsockopt(SO_SNDTIMEO)` on accepted client sockets | `src/http_server.c` | Write timeout triggers after configurable seconds (default 30s) | 1h |
+| 7.1.3 | Add `http_server_set_timeout(server, read_sec, write_sec)` API | `include/weblib.h`, `src/http_server.c` | API documented, validated (rejects negative values) | 2h |
+| 7.1.4 | Handle `EAGAIN`/`EWOULDBLOCK` in recv/send loops | `src/http_server.c` | Partial reads/writes retried; timeout returns error code | 3h |
+| 7.1.5 | Unit tests for timeout behavior | `tests/test_weblib.c` | Test verifies server rejects slow client simulation | 2h |
 
-**Files Affected**:
-- `src/json.c` - Parser/serializer enhancements
-- `include/weblib.h` - Array API functions
-- `tests/test_weblib.c` - JSON edge case tests (nested arrays, Unicode, large numbers)
+#### 7.2 Thread Pool
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 7.2.1 | Implement `thread_pool_t` with work queue | `src/thread_pool.c` (new), `src/thread_pool.h` (new) | Create/destroy; submit work items; bounded queue (default 256) | 4h |
+| 7.2.2 | Mutex + condition variable synchronization | `src/thread_pool.c` | No data races under concurrent submit; Valgrind clean | 3h |
+| 7.2.3 | Integrate thread pool into `http_server_t` | `src/http_server.c` | Threaded mode uses pool instead of thread-per-connection | 3h |
+| 7.2.4 | Add `http_server_set_thread_count(server, n)` API | `include/weblib.h`, `src/http_server.c` | Configurable thread count; default 16; min 1, max 256 | 1h |
+| 7.2.5 | Unit tests for thread pool | `tests/test_weblib.c` | Create/destroy; submit 100 items; all complete; no leaks | 2h |
 
-**API Extensions**:
-```c
-json_value_t* json_array_create(void);
-json_value_t* json_array_get(json_value_t *arr, size_t index);
-bool json_array_append(json_value_t *arr, json_value_t *val);
-size_t json_array_length(json_value_t *arr);
+#### 7.3 Graceful Shutdown
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 7.3.1 | Add server state enum (RUNNING, DRAINING, STOPPED) | `include/weblib.h`, `src/http_server.c` | State transitions are atomic (`sig_atomic_t`) | 1h |
+| 7.3.2 | Implement `http_server_shutdown(server, timeout_sec)` | `src/http_server.c`, `include/weblib.h` | Closes listening socket; waits for in-flight requests up to timeout | 3h |
+| 7.3.3 | SIGTERM/SIGINT handler (POSIX) | `src/http_server.c` | Signal triggers state → DRAINING; second signal → immediate exit | 2h |
+| 7.3.4 | Thread pool drain on shutdown | `src/thread_pool.c` | All queued work items complete or are cancelled; threads join | 2h |
+| 7.3.5 | Unit test: shutdown with active connections | `tests/test_weblib.c` | Server shuts down cleanly; no leaked sockets; Valgrind clean | 3h |
+
+#### 7.4 GitHub Actions CI
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 7.4.1 | Create `.github/workflows/ci.yml` | `.github/workflows/ci.yml` (new) | Triggers on push + PR to main; Linux (gcc) + macOS (clang) matrix | 2h |
+| 7.4.2 | Build step: cmake + make | `.github/workflows/ci.yml` | Zero warnings (`-Werror`); both static and shared lib | 1h |
+| 7.4.3 | Test step: run `test_weblib` | `.github/workflows/ci.yml` | All tests pass; non-zero exit on failure | 1h |
+| 7.4.4 | Valgrind memcheck step (Linux only) | `.github/workflows/ci.yml` | Zero errors, zero leaks; fail build on Valgrind error | 2h |
+| 7.4.5 | Cache cmake build directory | `.github/workflows/ci.yml` | Incremental builds use cache; CI time < 5 min | 1h |
+
+#### 7.5 Integration Tests
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 7.5.1 | Pure C test client (raw socket HTTP sender) | `tests/integration/test_client.c` (new) | Connect, send request, read response, verify status code | 4h |
+| 7.5.2 | HTTP protocol conformance tests | `tests/integration/test_http_protocol.c` (new) | GET/POST/PUT/DELETE; keep-alive; chunked encoding; correct headers | 4h |
+| 7.5.3 | Malformed request tests | `tests/integration/test_malformed.c` (new) | Oversized headers → 431; invalid method → 501; missing Host → 400 | 3h |
+| 7.5.4 | Concurrent connection tests | `tests/integration/test_concurrent.c` (new) | 100 simultaneous connections; all get correct responses; no crashes | 4h |
+| 7.5.5 | CMake integration test target | `CMakeLists.txt`, `tests/integration/CMakeLists.txt` (new) | `make integration_tests` builds and runs all integration tests | 2h |
+
+#### 7.6 Parser Hardening
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 7.6.1 | Detect duplicate `Transfer-Encoding` headers | `src/http_server.c` | Returns 400 on duplicate; test case added | 2h |
+| 7.6.2 | Handle `Expect: 100-continue` | `src/http_server.c` | Send `100 Continue` response before reading body | 2h |
+| 7.6.3 | Clamp chunked size to `MAX_BODY_BYTES` | `src/http_server.c` | `strtoul()` result checked against limit; returns 413 on overflow | 1h |
+| 7.6.4 | Add request line length validation | `src/http_server.c` | URI > 8192 bytes → 414 (already exists, verify edge cases) | 1h |
+| 7.6.5 | Edge-case unit tests (20+ cases) | `tests/test_weblib.c` | Empty body, zero-length chunks, trailing whitespace, null bytes | 4h |
+
+---
+
+### Phase 8 — Security & Observability (Summary)
+
+| # | Task | Est. |
+|---|------|------|
+| 8.1.1–8.1.5 | SHA-256 implementation + NIST test vectors | 3d |
+| 8.2.1–8.2.5 | AES-128/256-GCM implementation + NIST test vectors | 4d |
+| 8.3.1–8.3.4 | RSA PKCS#1 v1.5 sign/verify + test vectors | 3d |
+| 8.4.1–8.4.6 | TLS 1.2 record layer + handshake state machine | 5d |
+| 8.5.1–8.5.3 | PEM certificate parser + key loading | 2d |
+| 8.6.1–8.6.3 | `http_server_enable_tls()` API + integration | 2d |
+| 8.7.1–8.7.4 | Logging middleware (levels, format, destination) | 2d |
+| 8.8.1–8.8.3 | Error handler middleware (centralized 4xx/5xx) | 1d |
+| 8.9.1–8.9.4 | CSRF middleware (token gen, validation, cookie) | 2d |
+| 8.10.1–8.10.3 | Input validation helpers (length, charset, range) | 1d |
+
+### Phase 9 — Performance & Protocol (Summary)
+
+| # | Task | Est. |
+|---|------|------|
+| 9.1.1–9.1.6 | HTTP/2 binary framing + HPACK compression | 5d |
+| 9.2.1–9.2.4 | HTTP/2 stream multiplexing + server push | 4d |
+| 9.3.1–9.3.4 | Pure C DEFLATE/gzip compression | 4d |
+| 9.4.1–9.4.4 | LRU cache with TTL | 3d |
+| 9.5.1–9.5.4 | Async WebSocket event loop integration | 3d |
+| 9.6.1–9.6.3 | Benchmarking suite + CI regression tracking | 3d |
+
+### Phase 10 — Release Readiness (Summary)
+
+| # | Task | Est. |
+|---|------|------|
+| 10.1.1–10.1.3 | REST API example + WebSocket chat example | 3d |
+| 10.2.1–10.2.3 | Tutorial docs (getting started, REST API, real-time) | 3d |
+| 10.3.1–10.3.3 | Windows IOCP event loop backend | 4d |
+| 10.4.1–10.4.2 | BSD testing + CI matrix expansion | 2d |
+| 10.5.1–10.5.3 | Health check endpoint + release automation | 2d |
+
+---
+
+## 9. Parallel Build Strategy
+
+Tasks that share no data dependencies can be developed simultaneously:
+
+```
+PARALLEL GROUP A (Week 1-2):
+├── 7.1 Socket Timeouts       ← touches http_server.c (connection accept path)
+├── 7.4 GitHub Actions CI      ← touches .github/workflows/ only
+└── 7.6 Parser Hardening       ← touches http_server.c (parse path, non-overlapping)
+
+PARALLEL GROUP B (Week 2-3):
+├── 7.2 Thread Pool            ← new files (thread_pool.c/h)
+└── 7.5 Integration Tests      ← new files (tests/integration/)
+
+SEQUENTIAL:
+└── 7.3 Graceful Shutdown      ← depends on 7.1 (timeouts) + 7.2 (thread pool drain)
+
+PARALLEL GROUP C (Week 5-7):
+├── 8.1-8.3 Crypto Primitives  ← new files (src/tls/crypto_*)
+├── 8.7 Logging Middleware      ← new file (src/middleware_log.c)
+└── 8.8 Error Handler          ← new file (src/middleware_error.c)
+
+PARALLEL GROUP D (Week 10-13):
+├── 9.1-9.2 HTTP/2             ← new directory (src/http2/)
+├── 9.3 Compression            ← new file (src/compression.c)
+└── 9.4 Caching Layer          ← new file (src/cache.c)
 ```
 
 ---
 
-### 4.5 Graceful Shutdown & Thread Management
+## 10. Build Validation — Success Criteria per Module
 
-**Why First**: Production servers must shutdown cleanly without dropping in-flight requests or leaking resources.
+### Phase 7 Checkpoints
 
-**Implementation**:
-- Shutdown signal handling (SIGTERM, SIGINT on POSIX; Ctrl+C handler on Windows)
-- Close listening socket to stop accepting new connections
-- Drain existing connections (wait for handlers to complete with timeout)
-- Thread pool shutdown: signal worker threads, join all threads
-- Platform-specific guards for Windows vs. POSIX thread APIs
-- Server state machine (running → draining → stopped)
+| Module | Unit Test Gate | Integration Test Gate | Performance Gate |
+|--------|---------------|----------------------|-----------------|
+| Socket Timeouts | Slow-client simulation completes with timeout error | Server rejects Slowloris-style connections | Accept-to-timeout < 31s (default 30s + 1s tolerance) |
+| Thread Pool | 100 work items submitted and completed; zero leaks | 100 concurrent connections served correctly | Pool creation < 1ms; work item latency < 100μs overhead |
+| Graceful Shutdown | In-flight request completes before server exits | Integration test: send request during shutdown → 200 OK | Shutdown completes in < 1s with 50 idle connections |
+| CI Pipeline | All 71+ tests pass on Linux + macOS | Integration test suite green | CI total time < 5 minutes |
+| Integration Tests | N/A (these ARE the tests) | All protocol conformance tests pass | 100 concurrent connections, zero failures |
+| Parser Hardening | 20+ edge-case tests pass | Malformed requests return correct 4xx codes | Parser throughput ≥ 50,000 req/s (single-threaded) |
 
-**Files Affected**:
-- `src/http_server.c` - Shutdown orchestration
-- `include/weblib.h` - `http_server_shutdown()` API
-- `tests/test_weblib.c` - Shutdown test with in-flight request
+### Phase 8 Checkpoints
 
-**Implementation Notes**:
-- Use `sig_atomic_t` volatile flag for signal safety
-- Set socket option `SO_REUSEADDR` to allow quick restarts
-- Timeout for draining phase (default 30 seconds)
+| Module | Validation |
+|--------|-----------|
+| SHA-256 | NIST FIPS 180-4 test vectors pass (short msg, long msg, Monte Carlo) |
+| AES-GCM | NIST SP 800-38D test vectors pass (128-bit + 256-bit keys) |
+| RSA | PKCS#1 v1.5 sign/verify test vectors pass |
+| TLS 1.2 | `curl --tlsv1.2 https://localhost:8443/` returns 200; browser connects |
+| Logging | Log output matches format spec; level filtering works; file rotation |
+| CSRF | Double-submit cookie validates; missing token → 403; replay → 403 |
 
----
+### Phase 9 Checkpoints
 
-### 4.6 Networking Integration Tests
-
-**Why First**: Unit tests alone don't catch integration issues like race conditions, protocol violations, or resource leaks under load.
-
-**Implementation**:
-- Automated HTTP request/response tests (via `curl` or raw sockets)
-- Malformed input test suite (invalid methods, oversized headers, bad chunking)
-- Concurrent connection tests (100+ simultaneous clients)
-- Keep-alive and pipelining tests
-- Load test smoke test (1000 req/sec for 10 seconds)
-- Memory leak detection (Valgrind integration in CI)
-
-**Files Affected**:
-- `tests/integration/` (new directory)
-  - `test_http_protocol.c`
-  - `test_malformed_requests.c`
-  - `test_concurrent_clients.c`
-- `CMakeLists.txt` - Integration test target
-- `.github/workflows/` - CI integration
-
-**Test Framework**:
-- Pure C test client (no external dependencies)
-- Fork/spawn test server before each test suite
-- Validate response codes, headers, body content
+| Module | Validation |
+|--------|-----------|
+| HTTP/2 | `curl --http2 http://localhost:8080/` returns 200; multiplexed streams |
+| Compression | `Accept-Encoding: gzip` → compressed response; size < 50% of original |
+| Cache | Cache hit returns in < 1μs; LRU eviction correct; TTL expiry correct |
+| Async WebSocket | 1000 concurrent WebSocket connections; echo latency < 1ms |
 
 ---
 
-## Phase 5: Request Processing & Security (v0.5.0 Target)
+## 11. QA Pipeline
 
-**Goal**: Enable rich request handling and implement security layers essential for production APIs.
+### Automated Testing (Every Commit)
 
-### 5.1 Request Body Parsing
-
-**Description**: Parse and expose structured request bodies to handlers.
-
-**Features**:
-- `application/x-www-form-urlencoded` parsing → key-value map
-- `multipart/form-data` parsing (RFC 7578) with boundary detection
-- File upload handling: stream to disk, size limits, filename sanitization
-- Streaming body API for large payloads
-- Body size limits (configurable per-route)
-
-**Files Affected**:
-- `src/http_server.c` - Body parser dispatcher
-- `src/body_parser.c` (new) - Encoding-specific parsers
-- `include/weblib.h` - `http_request_get_form_field()`, `http_request_get_file()`
-
-**API Example**:
-```c
-const char *username = http_request_get_form_field(req, "username");
-http_uploaded_file_t *avatar = http_request_get_file(req, "avatar");
+```
+┌─────────────────────────────────────────────────────┐
+│  GitHub Actions CI Pipeline                          │
+│                                                      │
+│  1. Build (Linux gcc + macOS clang)                  │
+│     └── cmake -DCMAKE_C_FLAGS="-Werror" ..           │
+│                                                      │
+│  2. Unit Tests                                       │
+│     └── ./tests/test_weblib  (all must pass)         │
+│                                                      │
+│  3. Integration Tests                                │
+│     └── ./tests/integration/run_all  (protocol +     │
+│         malformed + concurrent)                      │
+│                                                      │
+│  4. Memory Safety (Linux only)                       │
+│     └── valgrind --leak-check=full --error-          │
+│         exitcode=1 ./tests/test_weblib               │
+│                                                      │
+│  5. Static Analysis (optional)                       │
+│     └── cppcheck --enable=all --error-exitcode=1     │
+│                                                      │
+│  6. Benchmark Regression (Phase 9+)                  │
+│     └── Compare req/s against baseline ±10%          │
+└─────────────────────────────────────────────────────┘
 ```
 
----
+### Manual Testing Checkpoints (Per Release)
 
-### 5.2 Cookie Handling
-
-**Description**: Full RFC 6265 cookie support for session management.
-
-**Features**:
-- Request cookie parsing: `http_request_get_cookie(req, "session_id")`
-- Response cookie setting: `http_response_set_cookie(res, name, value, options)`
-- Cookie attributes: `Secure`, `HttpOnly`, `SameSite`, `Domain`, `Path`, `Max-Age`, `Expires`
-- Cookie deletion helper: `http_response_delete_cookie(res, name)`
-
-**Files Affected**:
-- `src/http_server.c` - Cookie parsing/serialization
-- `include/weblib.h` - Cookie API and `cookie_options_t` struct
+| # | Test | Method | Pass Criteria |
+|---|------|--------|--------------|
+| M1 | Slow client resistance | `slowhttptest -c 1000` against server | Zero crashes; all slow connections timeout |
+| M2 | Large file upload | `curl -F "file=@100MB.bin" http://...` | Server accepts up to configured limit; rejects larger |
+| M3 | Browser TLS handshake | Chrome/Firefox navigate to `https://localhost:8443` | Green lock icon; certificate details visible |
+| M4 | Graceful shutdown under load | Send SIGTERM during `wrk` benchmark run | All in-flight requests complete; zero dropped |
+| M5 | Memory under sustained load | Run 1M requests via `wrk`; monitor RSS | RSS stable (no unbounded growth); Valgrind clean |
+| M6 | Cross-platform build | Build on Linux (gcc), macOS (clang), Windows (MSVC) | Zero errors, zero warnings on all platforms |
 
 ---
 
-### 5.3 CORS Support
+## 12. Security Review — Threat Model
 
-**Description**: Middleware for Cross-Origin Resource Sharing.
+### Assets Under Protection
 
-**Features**:
-- Configurable allowed origins (whitelist, wildcards)
-- Preflight request handling (OPTIONS method)
-- CORS headers: `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, etc.
-- Credentials support (`Access-Control-Allow-Credentials`)
-- Per-route CORS configuration override
+| Asset | Location | Sensitivity |
+|-------|----------|-------------|
+| HTTP request data | `http_request_t` in memory | Contains credentials (cookies, auth headers) |
+| Session store | `session_store_t` in-process memory | Session IDs = authentication tokens |
+| TLS private keys | Loaded from PEM file at startup | Compromise = full traffic decryption |
+| User file uploads | Temporary buffer in `body_parser_data_t` | User-supplied; potential malware |
 
-**Files Affected**:
-- `src/middleware_cors.c` (new)
-- `include/weblib.h` - `cors_middleware_create()`, `cors_options_t`
+### Threat Model (STRIDE)
 
-**Usage**:
-```c
-cors_options_t cors = {
-    .allowed_origins = (const char*[]){"https://app.example.com", NULL},
-    .allow_credentials = true
-};
-http_server_use(server, cors_middleware_create(&cors));
-```
+| Threat | Category | Target | Mitigation |
+|--------|----------|--------|-----------|
+| **Slowloris / Slow POST** | Denial of Service | Connection pool | Socket timeouts (Phase 7.1); thread pool bounds (Phase 7.2) |
+| **Request smuggling** | Tampering | HTTP parser | Duplicate header detection (Phase 7.6); strict parser mode |
+| **Path traversal** | Information Disclosure | Static file middleware | Already mitigated (`../` prevention in `middleware_static.c`); add canonicalization |
+| **Session hijacking** | Spoofing | Session cookies | `Secure` + `HttpOnly` + `SameSite=Strict` flags (already in v0.6.0); add CSRF tokens (Phase 8) |
+| **Credential exposure** | Information Disclosure | HTTP transport | TLS encryption (Phase 8); HSTS header |
+| **Buffer overflow** | Elevation of Privilege | All parsers | `MAX_HEADER_BYTES`, `MAX_BODY_BYTES` limits (already enforced); add fuzz testing (Phase 9) |
+| **Timing attacks** | Information Disclosure | Auth middleware | Constant-time comparison for JWT signature verification (verify in Phase 8) |
+| **Memory disclosure** | Information Disclosure | Error responses | Never include stack traces or internal paths in HTTP error bodies |
+| **TLS downgrade** | Tampering | TLS handshake | Reject protocols < TLS 1.2; no SSLv3/TLS 1.0/1.1 (Phase 8) |
+| **Private key theft** | Information Disclosure | TLS key material | Zero key material in logs; `mlock()` key pages; zero on free (Phase 8) |
 
----
+### Vulnerability Checklist (Per-Phase Gate)
 
-### 5.4 Rate Limiting
+Each phase release MUST pass:
 
-**Description**: Protect APIs from abuse and DoS attacks.
+- [ ] No compiler warnings with `-Wall -Wextra -Werror -pedantic`
+- [ ] Valgrind memcheck: zero errors, zero leaks (definite + indirect)
+- [ ] No unbounded allocations from user input
+- [ ] All `malloc()` return values checked
+- [ ] All `sprintf()` replaced with `snprintf()` (bounded writes)
+- [ ] No `strcpy()` — only `strncpy()` or manual bounds-checked copies
+- [ ] Session IDs generated from `/dev/urandom` (or `CryptGenRandom` on Windows)
+- [ ] TLS key material zeroed with `explicit_bzero()` / `SecureZeroMemory()` before `free()`
+- [ ] All public APIs validate NULL pointers and return error codes
+- [ ] No information leakage in error responses (status code only, no internals)
 
-**Features**:
-- IP-based rate limiting (extract from socket peer address)
-- Token bucket algorithm (constant rate with burst allowance)
-- Sliding window log algorithm (precise but memory-intensive)
-- Per-route rate limit configuration
-- Response headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
-- 429 Too Many Requests response
+### Access Control Matrix
 
-**Files Affected**:
-- `src/middleware_ratelimit.c` (new)
-- `include/weblib.h` - `ratelimit_middleware_create()`, `ratelimit_config_t`
-
----
-
-### 5.5 Static File Serving
-
-**Description**: Efficient static asset delivery (HTML, CSS, JS, images).
-
-**Features**:
-- MIME type detection (by file extension)
-- `Accept-Ranges` and `Range` request support (byte ranges)
-- `ETag` generation (hash of file content or mtime)
-- Conditional requests: `If-None-Match`, `If-Modified-Since` → 304 Not Modified
-- Cache control headers: `Cache-Control`, `Expires`
-- Security: path traversal prevention (`../` attacks)
-
-**Files Affected**:
-- `src/middleware_static.c` (new)
-- `include/weblib.h` - `static_file_middleware_create(root_dir)`
-
-**API Example**:
-```c
-http_server_use(server, static_file_middleware_create("./public"));
-```
+| Component | Read Access | Write Access | Notes |
+|-----------|------------|-------------|-------|
+| `http_request_t` fields | Route handlers, middleware | Parser only (immutable after parse) | Enforce via const pointers in API |
+| Session data | `session_get_data()` only | `session_set_data()` only | Key-scoped; no bulk enumeration API |
+| TLS private key | TLS handshake module only | Loaded once at startup | Never exposed via any API |
+| Rate limit counters | Rate limit middleware | Rate limit middleware | IP-scoped; auto-expire |
 
 ---
 
-## Phase 6: Production Readiness (v0.6.0 Target)
+## 13. Risk Mitigation Notes
 
-**Goal**: Enterprise-grade features for secure, observable, and maintainable deployments.
-
-### 6.1 SSL/TLS Support (Custom Pure C Implementation)
-
-**Description**: HTTPS support without external dependencies (no OpenSSL).
-
-**Features**:
-- TLS 1.2 and TLS 1.3 support
-- Certificate parsing (X.509 PEM format)
-- RSA and ECDSA key support
-- Handshake state machine (ClientHello → ServerHello → Finished)
-- Cipher suites: `AES-GCM`, `ChaCha20-Poly1305`
-- Certificate verification (chain validation, hostname matching)
-
-**Files Affected**:
-- `src/tls/` (new directory)
-  - `tls_context.c` - TLS session management
-  - `tls_handshake.c` - Handshake protocol
-  - `crypto_aes.c` - AES block cipher
-  - `crypto_sha.c` - SHA-256/384 hash
-  - `crypto_rsa.c` - RSA signature/encryption
-- `include/weblib.h` - `http_server_enable_tls(server, cert_path, key_path)`
-
-**Note**: This is a **major** undertaking. Estimated 3-4 weeks of focused development. Alternative: Phase 6.1a could be "OpenSSL Integration" as a pragmatic first step, with pure C TLS in v0.7.0.
-
----
-
-### 6.2 Session Management
-
-**Description**: Server-side session storage with cookie-based session IDs.
-
-**Features**:
-- Session store: in-memory hash map (or pluggable backend interface)
-- Session creation: generate cryptographically secure session ID
-- Session middleware: automatically load session from cookie
-- Session API: `http_request_session_set()`, `http_request_session_get()`
-- Session expiration and cleanup (background thread or lazy eviction)
-
-**Files Affected**:
-- `src/session.c` (new)
-- `include/weblib.h` - Session API
-
----
-
-### 6.3 Authentication Middleware
-
-**Description**: Pre-built authentication strategies.
-
-**Features**:
-- **Basic Auth**: Parse `Authorization: Basic` header
-- **JWT**: Parse and verify JSON Web Tokens (HMAC-SHA256 signature)
-- **API Key**: Validate `X-API-Key` header against whitelist
-- Pluggable authentication callback for custom logic
-
-**Files Affected**:
-- `src/middleware_auth.c` (new)
-- `include/weblib.h` - `basic_auth_middleware()`, `jwt_auth_middleware()`, `apikey_auth_middleware()`
-
----
-
-### 6.4 Async WebSocket Mode
-
-**Description**: Integrate WebSocket into event loop (non-blocking mode).
-
-**Features**:
-- WebSocket frame parsing in async I/O callbacks
-- Non-blocking sends (queue frames if socket not writable)
-- Integration with existing event loop (epoll/kqueue)
-- Message fragmentation handling
-- Control frame handling (ping/pong, close) in async context
-
-**Files Affected**:
-- `src/websocket.c` - Async mode implementation
-- `src/event_loop.c` - WebSocket event registration
-- `include/weblib.h` - `ws_connection_set_async(conn, true)`
-
----
-
-### 6.5 API Documentation
-
-**Description**: Comprehensive developer documentation.
-
-**Deliverables**:
-- Function documentation in `include/weblib.h` (Doxygen-compatible comments)
-- Auto-generated HTML docs via Doxygen
-- API reference guide (markdown in `docs/api/`)
-- Tutorial: "Building Your First REST API" (step-by-step guide)
-- Architecture document (event loop, threading model, memory management)
-
-**Files Affected**:
-- `include/weblib.h` - Add `/** @brief ... */` comments
-- `docs/api/` (new directory)
-- `Doxyfile` (new) - Doxygen configuration
-- `README.md` - Link to docs
-
----
-
-### 6.6 Comprehensive Test Suite Expansion
-
-**Description**: Achieve >90% code coverage.
-
-**Additions**:
-- Edge case tests for all new features
-- Fuzz testing for parsers (HTTP, JSON, WebSocket, TLS)
-- Performance regression tests (benchmark suite)
-- Cross-platform tests (Linux, macOS, Windows CI)
-- Stress tests (high concurrency, memory pressure)
-
-**Files Affected**:
-- `tests/test_weblib.c` - Expand unit tests
-- `tests/fuzz/` (new) - Fuzzing harnesses
-- `tests/benchmark/` (new) - Performance tests
-
----
-
-## Implementation Guidelines
-
-All development must adhere to the following principles:
-
-### Language & Dependencies
-- **Pure C** (C99 minimum, C11 features allowed)
-- **Zero external libraries** (except standard C library and platform APIs: POSIX, Win32, BSD sockets)
-- Platform abstractions via `#ifdef _WIN32` / `#ifdef __linux__` / etc.
-
-### Code Organization
-- All public APIs declared in `include/weblib.h`
-- Internal APIs in `src/*.h` (not installed)
-- Implementation in `src/*.c`
-- Tests in `tests/test_weblib.c` and `tests/integration/*.c`
-
-### Naming Conventions
-- Functions: `snake_case` (e.g., `http_server_create`)
-- Types: `snake_case_t` (e.g., `http_request_t`)
-- Constants/Enums: `UPPER_SNAKE_CASE` (e.g., `HTTP_METHOD_GET`)
-- Private functions: `_snake_case` prefix (e.g., `_parse_http_header`)
-
-### Memory Management
-- Every `*_create()` must have a paired `*_destroy()`
-- Document ownership transfer in function comments
-- No naked `malloc()` in application code (use create functions)
-- Avoid memory leaks: Valgrind clean in tests
-
-### Error Handling
-- Return `NULL` or `-1` on error (consistent with C conventions)
-- Set `errno` where appropriate (platform-specific errors)
-- Log errors to stderr (use `fprintf(stderr, ...)` or logging abstraction)
-- Never crash on invalid input (validate everything)
-
-### Testing
-- Every new API must have unit tests
-- Integration tests for protocol-level behavior
-- Run tests before commit: `make test` must pass
-
----
-
-## Priority Matrix
-
-| Feature | Phase | Priority | Complexity | Est. Time |
-|---------|-------|----------|------------|-----------|
-| Complete HTTP Parser | 4 | 🎯 Critical | Medium | 3-5 days |
-| Header & Parameter Storage | 4 | 🎯 Critical | Medium | 4-6 days |
-| Robust Connection Handling | 4 | 🎯 Critical | High | 5-7 days |
-| Complete JSON Support | 4 | 🎯 Critical | Medium | 3-4 days |
-| Graceful Shutdown | 4 | 🎯 Critical | Medium | 2-3 days |
-| Networking Integration Tests | 4 | 🎯 Critical | Medium | 4-5 days |
-| **Phase 4 Total** | | | | **~3-4 weeks** |
-| Request Body Parsing | 5 | 🔧 High | High | 6-8 days |
-| Cookie Handling | 5 | 🔧 High | Low | 2-3 days |
-| CORS Support | 5 | 🔧 High | Low | 1-2 days |
-| Rate Limiting | 5 | 🔧 High | Medium | 3-4 days |
-| Static File Serving | 5 | 🔧 High | Medium | 4-5 days |
-| **Phase 5 Total** | | | | **~3 weeks** |
-| SSL/TLS Support | 6 | 💡 Nice-to-Have | Very High | 15-20 days |
-| Session Management | 6 | 🔧 High | Medium | 3-4 days |
-| Authentication Middleware | 6 | 🔧 High | Medium | 4-5 days |
-| Async WebSocket Mode | 6 | 💡 Nice-to-Have | High | 5-7 days |
-| API Documentation | 6 | 🔧 High | Low | 3-4 days |
-| Test Suite Expansion | 6 | 🎯 Critical | Medium | 5-6 days |
-| **Phase 6 Total** | | | | **~6-8 weeks** |
-
-**Legend**:
-- 🎯 **Critical**: Blocks other features or fixes production issues
-- 🔧 **High**: Important for production use but not blocking
-- 💡 **Nice-to-Have**: Enhances capabilities but can be deferred
-
----
-
-## Success Metrics
-
-### Phase 4 (v0.4.0)
-- ✅ All HTTP methods supported and tested
-- ✅ Header API covers 100% of use cases
-- ✅ 0 connection leaks in 1-hour load test
-- ✅ JSON parser handles all valid RFC 8259 inputs
-- ✅ Graceful shutdown completes in <30s with 100 active connections
-- ✅ Integration test suite runs in CI
-
-### Phase 5 (v0.5.0)
-- ✅ File uploads tested up to 100MB
-- ✅ CORS middleware passes W3C test suite
-- ✅ Rate limiter sustains 10,000 req/s with limits
-- ✅ Static file server matches Nginx performance (±20%)
-
-### Phase 6 (v0.6.0)
-- ✅ TLS 1.2/1.3 handshake completes with major browsers
-- ✅ JWT validation passes test vectors
-- ✅ API docs cover >95% of public functions
-- ✅ Code coverage >90% (measured via gcov)
-
----
-
-## Notes for Contributors
-
-1. **Start with Phase 4**: These are prerequisite improvements. Don't skip ahead.
-2. **Branch naming**: Use `feature/phase4-http-parser`, `feature/phase5-cors`, etc.
-3. **Commit messages**: Follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat(http): add chunked encoding support`)
-4. **Pull requests**: Reference this document (e.g., "Implements Phase 4.1 - Complete HTTP Parser")
-5. **Breaking changes**: Avoid when possible. If necessary, document in `CHANGELOG.md` and bump major version.
+| Risk | Probability | Impact | Mitigation Strategy |
+|------|------------|--------|-------------------|
+| Pure C TLS is insecure / buggy | HIGH | CRITICAL | Extensive test vector validation; optional compile-time flag to disable; security audit before v1.0 |
+| HTTP/2 complexity causes regressions | MEDIUM | HIGH | Feature-flag behind `http_server_enable_http2()`; default off; comprehensive integration tests |
+| Thread pool deadlock | LOW | HIGH | No nested locks; work items never wait on pool; timeout on condition variable wait |
+| Windows platform divergence | MEDIUM | MEDIUM | Abstract platform APIs behind `src/platform.h`; CI matrix validates Windows build |
+| Performance regression between versions | MEDIUM | MEDIUM | Benchmark suite in CI with ±10% tolerance gate |
+| API breaking changes | LOW | HIGH | Semantic versioning; deprecated API kept for one major version |
 
 ---
 
@@ -522,13 +429,14 @@ All development must adhere to the following principles:
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 1.0 | 2025-01-12 | Initial roadmap for v0.4.0-v0.6.0 |
+| 1.0 | 2025-01-12 | Initial roadmap (Phases 4–6) |
+| 2.0 | 2026-02-19 | Complete rewrite for Phases 7–10: first-principles design, adversarial review, atomic task breakdown, security threat model |
 
 ---
 
-**Maintained by**: MCWL Core Team  
-**Last Updated**: 2025-01-12  
-**Status**: Active Development  
+**Maintained by**: MCWL Core Team
+**Last Updated**: 2026-02-19
+**Status**: Active Development — Phase 7 next
 **License**: MIT (see LICENSE file)
 
 For questions or discussions about this roadmap, please open an issue on GitHub or contact the maintainers.
