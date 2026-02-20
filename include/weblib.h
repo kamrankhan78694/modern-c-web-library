@@ -1274,6 +1274,105 @@ bool input_is_alphanumeric(const char *str);
  */
 char *input_sanitize_html(const char *str);
 
+/* ===== In-Memory Cache API (Performance) ===== */
+
+/**
+ * Opaque cache type
+ */
+typedef struct cache cache_t;
+
+/**
+ * Create an in-memory LRU cache
+ * @param max_entries Maximum number of entries before LRU eviction
+ * @return Cache instance or NULL on failure
+ */
+cache_t *cache_create(size_t max_entries);
+
+/**
+ * Destroy cache and free all resources
+ * @param cache Cache instance
+ */
+void cache_destroy(cache_t *cache);
+
+/**
+ * Set or update a key-value pair in the cache
+ * Both key and value are copied internally.
+ * @param cache Cache instance
+ * @param key Entry key
+ * @param value Entry value
+ * @param ttl_seconds Time-to-live in seconds (0 = no expiry)
+ * @return 0 on success, -1 on failure
+ */
+int cache_set(cache_t *cache, const char *key, const char *value, int ttl_seconds);
+
+/**
+ * Get value by key
+ * Returns NULL if not found or expired. Expired entries are automatically removed.
+ * The returned pointer is internal; caller should copy if needed beyond immediate use.
+ * @param cache Cache instance
+ * @param key Entry key
+ * @return Entry value or NULL
+ */
+const char *cache_get(cache_t *cache, const char *key);
+
+/**
+ * Delete entry by key
+ * @param cache Cache instance
+ * @param key Entry key
+ * @return 0 if found and deleted, -1 if not found
+ */
+int cache_delete(cache_t *cache, const char *key);
+
+/**
+ * Remove all entries from the cache
+ * @param cache Cache instance
+ */
+void cache_clear(cache_t *cache);
+
+/**
+ * Get current number of entries in the cache
+ * @param cache Cache instance
+ * @return Number of entries
+ */
+size_t cache_count(cache_t *cache);
+
+/* ===== Metrics Middleware API (Observability) ===== */
+
+/**
+ * Create a metrics collection middleware.
+ * Tracks total requests, per-method counts, and status code ranges.
+ * @return Middleware function or NULL on failure
+ */
+middleware_fn_t metrics_middleware_create(void);
+
+/**
+ * Destroy metrics middleware and free resources
+ */
+void metrics_middleware_destroy(void);
+
+/**
+ * Record a response status code in metrics.
+ * Call after sending a response to track 2xx/3xx/4xx/5xx counts.
+ * @param status_code HTTP status code
+ */
+void metrics_record_status(int status_code);
+
+/**
+ * Route handler for GET /metrics
+ * Returns JSON with request counts, method breakdown, status codes, and uptime.
+ * @param req Request object
+ * @param res Response object
+ */
+void metrics_handler(http_request_t *req, http_response_t *res);
+
+/**
+ * Register the metrics endpoint on an existing router.
+ * Adds GET /metrics → metrics_handler.
+ * @param router Router instance
+ * @return 0 on success, -1 on failure
+ */
+int metrics_register(router_t *router);
+
 #ifdef __cplusplus
 }
 #endif

@@ -180,7 +180,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Performance
 
-- [ ] 🔧 **Caching Layer** - Performance optimization
+- [x] ✅ **Caching Layer** - Performance optimization
   - In-memory cache implementation
   - LRU eviction policy
   - Cache invalidation
@@ -203,7 +203,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - [x] ✅ **Logging Middleware** - Request/response logging
 - [x] ✅ **Body Parser Middleware** - Automatic body parsing
 - [x] ✅ **Error Handler Middleware** - Centralized error handling
-- [ ] 💡 **Metrics Middleware** - Request metrics collection
+- [x] ✅ **Metrics Middleware** - Request metrics collection
 
 ### Developer Experience
 
@@ -322,6 +322,8 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - ✅ **Health Check Endpoint** - GET /healthz with JSON status and uptime
 - ✅ **Networking Integration Tests** - Live socket tests for HTTP protocol conformance
 - ✅ **Deployment Documentation** - Production deployment guide with Docker, systemd, nginx patterns
+- ✅ **In-Memory Cache** - LRU eviction, TTL support, thread-safe hash table implementation
+- ✅ **Metrics Middleware** - Request counting, per-method tracking, status code ranges, JSON endpoint
 
 ## Community Requests
 
@@ -338,7 +340,7 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 - **Phase 6 (v0.6.0)**: ✅ Production Readiness — sessions, template engine, auth middleware, db pooling, API docs
 - **Phase 7 (v0.7.0)**: ✅ Server Hardening & CI — socket timeouts, thread pool, graceful shutdown, CI pipeline, integration tests, parser hardening
 - **Phase 8 (v0.8.0)**: 🚧 Security & Observability — CSRF middleware ✅, logging ✅, error handler ✅, input validation ✅, health check ✅, pure C TLS 1.2 (planned)
-- **Phase 9 (v0.9.0)**: Performance & Protocol — HTTP/2, response compression, caching layer, async WebSocket, benchmarks
+- **Phase 9 (v0.9.0)**: 🚧 Performance & Observability — caching layer ✅, metrics middleware ✅, HTTP/2, response compression, async WebSocket, benchmarks
 - **Phase 10 (v1.0.0)**: Release Readiness — tutorials, examples, Windows IOCP, BSD testing, release automation
 
 ## How to Contribute
@@ -365,5 +367,5 @@ Priorities may change based on community feedback and project direction.
 
 ---
 
-**Last Updated**: 2026-02-19  
+**Last Updated**: 2026-02-20  
 **Maintainer**: [@kamrankhan78694](https://github.com/kamrankhan78694)

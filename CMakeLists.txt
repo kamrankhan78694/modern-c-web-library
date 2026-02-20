@@ -50,6 +50,8 @@ set(WEBLIB_SOURCES
     src/middleware_csrf.c
     src/input_validation.c
     src/health_check.c
+    src/cache.c
+    src/middleware_metrics.c
 )
 
 # Create static library
