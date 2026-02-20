@@ -157,15 +157,16 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - JWT token validation (HMAC-SHA256)
   - API key authentication
 
-- [ ] 🔧 **CSRF Protection** - Cross-site request forgery prevention
+- [x] ✅ **CSRF Protection** - Cross-site request forgery prevention
   - Token generation
   - Token validation
-  - Cookie-based tokens
+  - Cookie-based tokens (double-submit pattern)
 
-- [ ] 💡 **Input Validation** - Request validation helpers
-  - Schema validation
-  - Sanitization functions
-  - Type checking
+- [x] ✅ **Input Validation** - Request validation helpers
+  - Length, charset, integer range validation
+  - Email format validation
+  - HTML sanitization (XSS prevention)
+  - Alphanumeric check
 
 ### Server Lifecycle
 
@@ -199,9 +200,9 @@ This document tracks planned features, enhancements, and improvements for the Mo
 ### Middleware
 
 - [x] ✅ **CORS Middleware** - Ready-to-use CORS handler
-- [ ] 🔧 **Logging Middleware** - Request/response logging
+- [x] ✅ **Logging Middleware** - Request/response logging
 - [x] ✅ **Body Parser Middleware** - Automatic body parsing
-- [ ] 🔧 **Error Handler Middleware** - Centralized error handling
+- [x] ✅ **Error Handler Middleware** - Centralized error handling
 - [ ] 💡 **Metrics Middleware** - Request metrics collection
 
 ### Developer Experience
@@ -240,10 +241,10 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Testing & Quality
 
-- [ ] 🎯 **Networking Integration Tests** - Exercise live socket workflows
-  - Automated sync/async request regression suite
-  - Coverage for malformed input, timeouts, and partial I/O
-  - Baseline load and concurrency smoke tests
+- [x] ✅ **Networking Integration Tests** - Exercise live socket workflows
+  - Automated sync request regression suite (GET, POST, JSON, 404, malformed)
+  - Coverage for malformed input and sequential connections
+  - Baseline concurrency smoke tests
 
 - [ ] 🔧 **Comprehensive Test Suite** - Expand test coverage
   - Unit tests for all modules
@@ -251,10 +252,10 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Performance tests
   - Stress tests
 
-- [ ] 🔧 **Continuous Integration** - Automated testing
-  - GitHub Actions setup
-  - Multi-platform testing
-  - Code coverage reports
+- [x] ✅ **Continuous Integration** - Automated testing
+  - GitHub Actions CI (Linux GCC, Linux Clang, macOS Clang)
+  - Valgrind memory check gate
+  - Multi-platform build matrix
 
 - [ ] 💡 **Benchmarking Suite** - Performance benchmarks
   - Throughput tests
@@ -280,10 +281,9 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Custom metrics
   - Metric labels
 
-- [ ] 💡 **Health Check Endpoint** - Service health monitoring
-  - Readiness checks
-  - Liveness checks
-  - System resource checks
+- [x] ✅ **Health Check Endpoint** - Service health monitoring
+  - GET /healthz with JSON status and uptime
+  - Suitable for load-balancer and Kubernetes probes
 
 - [ ] 💡 **OpenTelemetry Support** - Distributed tracing
   - Trace context propagation
@@ -315,6 +315,13 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - ✅ **Thread Pool** - Bounded thread pool replacing thread-per-connection model
 - ✅ **Socket Timeouts** - Configurable SO_RCVTIMEO/SO_SNDTIMEO on client connections
 - ✅ **Graceful Shutdown** - Server state machine with drain timeout and thread pool cleanup
+- ✅ **CSRF Protection** - Double-submit cookie pattern with constant-time comparison
+- ✅ **Input Validation** - Length, charset, integer, email validation and HTML sanitization
+- ✅ **Logging Middleware** - Configurable request logging with log levels
+- ✅ **Error Handler Middleware** - Automatic JSON error responses for 4xx/5xx status codes
+- ✅ **Health Check Endpoint** - GET /healthz with JSON status and uptime
+- ✅ **Networking Integration Tests** - Live socket tests for HTTP protocol conformance
+- ✅ **Deployment Documentation** - Production deployment guide with Docker, systemd, nginx patterns
 
 ## Community Requests
 
@@ -329,10 +336,10 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 - **Phase 4 (v0.4.0)**: ✅ HTTP Foundation Hardening — parser, headers, connections, JSON arrays, graceful shutdown
 - **Phase 5 (v0.5.0)**: ✅ Request Processing & Security — body parsing, cookies, CORS, rate limiting, static files
 - **Phase 6 (v0.6.0)**: ✅ Production Readiness — sessions, template engine, auth middleware, db pooling, API docs
-- **Phase 7 (v0.7.0)**: 🚧 Server Hardening & CI — socket timeouts ✅, thread pool ✅, graceful shutdown ✅, CI pipeline, integration tests, parser hardening
-- **Phase 8 (v0.8.0)**: Security & Observability — pure C TLS 1.2, CSRF middleware, logging, error handler, input validation
+- **Phase 7 (v0.7.0)**: ✅ Server Hardening & CI — socket timeouts, thread pool, graceful shutdown, CI pipeline, integration tests, parser hardening
+- **Phase 8 (v0.8.0)**: 🚧 Security & Observability — CSRF middleware ✅, logging ✅, error handler ✅, input validation ✅, health check ✅, pure C TLS 1.2 (planned)
 - **Phase 9 (v0.9.0)**: Performance & Protocol — HTTP/2, response compression, caching layer, async WebSocket, benchmarks
-- **Phase 10 (v1.0.0)**: Release Readiness — tutorials, examples, Windows IOCP, BSD testing, health checks, release automation
+- **Phase 10 (v1.0.0)**: Release Readiness — tutorials, examples, Windows IOCP, BSD testing, release automation
 
 ## How to Contribute
 

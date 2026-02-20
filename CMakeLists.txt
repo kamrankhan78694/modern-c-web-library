@@ -49,6 +49,7 @@ set(WEBLIB_SOURCES
     src/middleware_error.c
     src/middleware_csrf.c
     src/input_validation.c
+    src/health_check.c
 )
 
 # Create static library
