@@ -65,11 +65,12 @@ static void generate_session_id(char *buffer, size_t length) {
             buffer[i] = charset[random_bytes[i] % charset_len];
         }
     } else {
-        /* Fallback: use rand_r() with per-call seed for thread safety */
-        static unsigned int seed_state = 0;
+        /* Fallback: use rand_r() with thread-local seed for thread safety */
+        static __thread unsigned int seed_state = 0;
         if (seed_state == 0) {
             seed_state = (unsigned int)time(NULL);
             seed_state ^= (unsigned int)clock();
+            seed_state ^= (unsigned int)(size_t)&seed_state;
         }
         for (size_t i = 0; i < length; i++) {
             buffer[i] = charset[rand_r(&seed_state) % charset_len];

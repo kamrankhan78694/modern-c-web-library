@@ -115,7 +115,7 @@ struct http_server {
     int thread_count;
     
     /* Active connection tracking (BUG-6 fix) */
-    volatile int active_connections;
+    int active_connections;
     int max_connections;
     pthread_mutex_t conn_lock;
     
@@ -1844,7 +1844,9 @@ int http_server_set_max_connections(http_server_t *server, int max_conn) {
     if (!server || max_conn < 1) {
         return -1;
     }
+    pthread_mutex_lock(&server->conn_lock);
     server->max_connections = max_conn;
+    pthread_mutex_unlock(&server->conn_lock);
     return 0;
 }
 
@@ -1853,7 +1855,10 @@ int http_server_get_active_connections(http_server_t *server) {
     if (!server) {
         return -1;
     }
-    return server->active_connections;
+    pthread_mutex_lock(&server->conn_lock);
+    int count = server->active_connections;
+    pthread_mutex_unlock(&server->conn_lock);
+    return count;
 }
 
 /* Set non-blocking mode on a file descriptor */

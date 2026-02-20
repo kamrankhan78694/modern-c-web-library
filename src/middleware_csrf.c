@@ -73,8 +73,8 @@ static void _fill_random(unsigned char *buf, size_t len) {
 #endif
     /* Last-resort fallback: weak PRNG — only when no OS CSPRNG is available.
        This path should never be reached on modern Linux/macOS/Windows.
-       Uses rand_r() for thread safety. */
-    static unsigned int seed_state = 0;
+       Uses rand_r() with thread-local seed for thread safety. */
+    static __thread unsigned int seed_state = 0;
     if (seed_state == 0) {
         seed_state = (unsigned int)time(NULL) ^ (unsigned int)(size_t)buf;
     }
