@@ -29,11 +29,16 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake gcc build-essential
+          sudo apt-get install -y cmake gcc build-essential valgrind
 
       - name: Build project
         run: |
           mkdir -p build
           cd build
-          cmake ..
-          make
+          cmake .. -DCMAKE_BUILD_TYPE=Debug
+          make -j$(nproc)
+
+      - name: Verify build (run tests)
+        run: |
+          cd build
+          ./tests/test_weblib
