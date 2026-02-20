@@ -28,6 +28,9 @@
 | Phase 4 | v0.4.0 | ✅ Complete | HTTP parser hardening, header storage, JSON arrays, connection handling |
 | Phase 5 | v0.5.0 | ✅ Complete | Body parsing, cookies, CORS, rate limiting, static file serving |
 | Phase 6 | v0.6.0 | ✅ Complete | Sessions, template engine, auth middleware (Basic/JWT/API-Key), DB pooling, API docs |
+| Phase 7 | v0.7.0 | ✅ Complete | Socket timeouts, thread pool, graceful shutdown, GitHub Actions CI, integration tests |
+| Phase 8 | v0.8.0 | ✅ Complete | CSRF middleware, logging, error handler, input validation, health check |
+| Phase 9 | v0.9.0 | ✅ Complete | Response compression, caching layer, metrics middleware, async WebSocket, benchmarking suite |
 
 **Current state**: 71/71 unit tests passing · zero compiler warnings · 14 source modules · 4 example servers
 
@@ -435,8 +438,8 @@ Each phase release MUST pass:
 ---
 
 **Maintained by**: MCWL Core Team
-**Last Updated**: 2026-02-19
-**Status**: Active Development — Phase 7 next
+**Last Updated**: 2026-02-20
+**Status**: Active Development — Phase 10 next
 **License**: MIT (see LICENSE file)
 
 For questions or discussions about this roadmap, please open an issue on GitHub or contact the maintainers.
