@@ -2375,7 +2375,8 @@ void test_parser_duplicate_transfer_encoding(void) {
 
 /* Helper: start a server with a given router on a given port,
  * returning the server pointer.  Caller is responsible for
- * http_server_stop / destroy / router_destroy. */
+ * http_server_stop / destroy / router_destroy.
+ * Uses a connect-retry loop instead of a fixed sleep to avoid races. */
 static http_server_t *_start_test_server(router_t *router, uint16_t port) {
     http_server_t *server = http_server_create();
     if (!server) return NULL;
@@ -2384,8 +2385,21 @@ static http_server_t *_start_test_server(router_t *router, uint16_t port) {
         http_server_destroy(server);
         return NULL;
     }
-    usleep(50000); /* 50 ms for accept thread */
-    return server;
+    /* Poll until the server is accepting connections (max ~500 ms) */
+    for (int attempt = 0; attempt < 50; attempt++) {
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) { usleep(10000); continue; }
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+        close(fd);
+        if (rc == 0) return server;
+        usleep(10000); /* 10 ms between retries */
+    }
+    return server; /* best effort — tests may still work */
 }
 
 /* Handler that echoes request body back */
