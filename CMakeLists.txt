@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(ModernCWebLibrary VERSION 0.8.0 LANGUAGES C)
+project(ModernCWebLibrary VERSION 0.9.0 LANGUAGES C)
 
 # Set C standard
 set(CMAKE_C_STANDARD 11)
@@ -35,6 +35,7 @@ set(WEBLIB_SOURCES
     src/json.c
     src/event_loop.c
     src/websocket.c
+    src/async_websocket.c
     src/body_parser.c
     src/cookie.c
     src/middleware_cors.c
@@ -50,6 +51,10 @@ set(WEBLIB_SOURCES
     src/middleware_csrf.c
     src/input_validation.c
     src/health_check.c
+    src/cache.c
+    src/middleware_metrics.c
+    src/compression.c
+    src/benchmark.c
 )
 
 # Create static library

@@ -25,10 +25,11 @@ This document tracks planned features, enhancements, and improvements for the Mo
     - Multiple concurrent connections support
     - Comprehensive test suite (all tests passing)
     - Production-ready for real-time applications
-  - **Frame Processing (Async Mode)** - TODO
+  - **Frame Processing (Async Mode)** - Completed
     - Integration with event loop (epoll/kqueue/poll)
     - Non-blocking WebSocket I/O
     - Single-threaded high-concurrency support
+    - Write queue for non-blocking sends
   
 - [ ] 🎯 **SSL/TLS Support** - Secure HTTPS connections
   - Custom TLS implementation in pure C
@@ -83,11 +84,11 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Session expiration and cleanup
   - Key-value data storage per session
 
-- [ ] 🔧 **Response Compression** - Reduce bandwidth usage
-  - gzip compression
-  - deflate compression
-  - brotli compression
-  - Automatic content negotiation
+- [x] ✅ **Response Compression** - Reduce bandwidth usage
+  - gzip compression (pure C DEFLATE + gzip wrapper)
+  - Accept-Encoding content negotiation
+  - Smart content-type filtering
+  - Automatic compression threshold
 
 ### JSON Handling
 
@@ -180,7 +181,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Performance
 
-- [ ] 🔧 **Caching Layer** - Performance optimization
+- [x] ✅ **Caching Layer** - Performance optimization
   - In-memory cache implementation
   - LRU eviction policy
   - Cache invalidation
@@ -203,7 +204,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - [x] ✅ **Logging Middleware** - Request/response logging
 - [x] ✅ **Body Parser Middleware** - Automatic body parsing
 - [x] ✅ **Error Handler Middleware** - Centralized error handling
-- [ ] 💡 **Metrics Middleware** - Request metrics collection
+- [x] ✅ **Metrics Middleware** - Request metrics collection
 
 ### Developer Experience
 
@@ -257,10 +258,10 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Valgrind memory check gate
   - Multi-platform build matrix
 
-- [ ] 💡 **Benchmarking Suite** - Performance benchmarks
-  - Throughput tests
-  - Latency tests
-  - Comparison with other frameworks
+- [x] ✅ **Benchmarking Suite** - Performance benchmarks
+  - Throughput tests (requests/sec)
+  - Latency percentiles (p50/p95/p99)
+  - Live server integration
 
 ### Cross-Platform
 
@@ -322,6 +323,11 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - ✅ **Health Check Endpoint** - GET /healthz with JSON status and uptime
 - ✅ **Networking Integration Tests** - Live socket tests for HTTP protocol conformance
 - ✅ **Deployment Documentation** - Production deployment guide with Docker, systemd, nginx patterns
+- ✅ **In-Memory Cache** - LRU eviction, TTL support, thread-safe hash table implementation
+- ✅ **Metrics Middleware** - Request counting, per-method tracking, status code ranges, JSON endpoint
+- ✅ **Response Compression** - Pure C gzip (RFC 1952) with DEFLATE (RFC 1951), Accept-Encoding negotiation
+- ✅ **Async WebSocket** - Event loop integration, non-blocking I/O, write queue, connection manager
+- ✅ **Benchmarking Suite** - High-resolution timing, throughput/latency measurement, percentile statistics
 
 ## Community Requests
 
@@ -337,8 +343,8 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 - **Phase 5 (v0.5.0)**: ✅ Request Processing & Security — body parsing, cookies, CORS, rate limiting, static files
 - **Phase 6 (v0.6.0)**: ✅ Production Readiness — sessions, template engine, auth middleware, db pooling, API docs
 - **Phase 7 (v0.7.0)**: ✅ Server Hardening & CI — socket timeouts, thread pool, graceful shutdown, CI pipeline, integration tests, parser hardening
-- **Phase 8 (v0.8.0)**: 🚧 Security & Observability — CSRF middleware ✅, logging ✅, error handler ✅, input validation ✅, health check ✅, pure C TLS 1.2 (planned)
-- **Phase 9 (v0.9.0)**: Performance & Protocol — HTTP/2, response compression, caching layer, async WebSocket, benchmarks
+- **Phase 8 (v0.8.0)**: ✅ Security & Observability — CSRF middleware ✅, logging ✅, error handler ✅, input validation ✅, health check ✅
+- **Phase 9 (v0.9.0)**: ✅ Performance & Observability — caching layer ✅, metrics middleware ✅, response compression ✅, async WebSocket ✅, benchmarking suite ✅
 - **Phase 10 (v1.0.0)**: Release Readiness — tutorials, examples, Windows IOCP, BSD testing, release automation
 
 ## How to Contribute
@@ -365,5 +371,5 @@ Priorities may change based on community feedback and project direction.
 
 ---
 
-**Last Updated**: 2026-02-19  
+**Last Updated**: 2026-02-20  
 **Maintainer**: [@kamrankhan78694](https://github.com/kamrankhan78694)

@@ -1,0 +1,140 @@
+/* Test program for async WebSocket manager */
+#include "weblib.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+
+static int test_create_destroy(void) {
+    printf("Testing async_ws_manager (create/destroy)... ");
+    
+    event_loop_t *loop = event_loop_create();
+    assert(loop != NULL);
+    
+    async_ws_manager_t *mgr = async_ws_manager_create(loop);
+    assert(mgr != NULL);
+    assert(async_ws_manager_count(mgr) == 0);
+    
+    async_ws_manager_destroy(mgr);
+    event_loop_destroy(loop);
+    
+    printf("PASSED\n");
+    return 0;
+}
+
+static int test_null_handling(void) {
+    printf("Testing async_ws_manager (null handling)... ");
+    
+    /* NULL event loop */
+    async_ws_manager_t *mgr = async_ws_manager_create(NULL);
+    (void)mgr;
+    assert(mgr == NULL);
+    
+    /* NULL manager operations */
+    async_ws_manager_destroy(NULL);
+    async_ws_manager_set_callbacks(NULL, NULL, NULL, NULL);
+    assert(async_ws_manager_add(NULL, NULL) == -1);
+    assert(async_ws_manager_remove(NULL, NULL) == -1);
+    assert(async_ws_send(NULL, NULL, WS_MESSAGE_TEXT, "test", 4) == -1);
+    assert(async_ws_manager_count(NULL) == 0);
+    
+    printf("PASSED\n");
+    return 0;
+}
+
+static void dummy_message_cb(websocket_connection_t *conn, ws_message_type_t type, const void *data, size_t len) {
+    (void)conn; (void)type; (void)data; (void)len;
+}
+
+static void dummy_close_cb(websocket_connection_t *conn, uint16_t code) {
+    (void)conn; (void)code;
+}
+
+static void dummy_error_cb(websocket_connection_t *conn, const char *error) {
+    (void)conn; (void)error;
+}
+
+static int test_set_callbacks(void) {
+    printf("Testing async_ws_manager (set callbacks)... ");
+    
+    event_loop_t *loop = event_loop_create();
+    assert(loop != NULL);
+    
+    async_ws_manager_t *mgr = async_ws_manager_create(loop);
+    assert(mgr != NULL);
+    
+    /* Should not crash */
+    async_ws_manager_set_callbacks(mgr, dummy_message_cb, dummy_close_cb, dummy_error_cb);
+    async_ws_manager_set_callbacks(mgr, NULL, NULL, NULL);
+    
+    async_ws_manager_destroy(mgr);
+    event_loop_destroy(loop);
+    
+    printf("PASSED\n");
+    return 0;
+}
+
+static int test_add_remove_invalid(void) {
+    printf("Testing async_ws_manager (add/remove invalid)... ");
+    
+    event_loop_t *loop = event_loop_create();
+    assert(loop != NULL);
+    
+    async_ws_manager_t *mgr = async_ws_manager_create(loop);
+    assert(mgr != NULL);
+    
+    /* Add NULL connection should fail */
+    assert(async_ws_manager_add(mgr, NULL) == -1);
+    
+    /* Remove non-existent connection should fail */
+    assert(async_ws_manager_remove(mgr, (websocket_connection_t *)0xDEADBEEF) == -1);
+    
+    assert(async_ws_manager_count(mgr) == 0);
+    
+    async_ws_manager_destroy(mgr);
+    event_loop_destroy(loop);
+    
+    printf("PASSED\n");
+    return 0;
+}
+
+static int test_send_invalid(void) {
+    printf("Testing async_ws_manager (send invalid)... ");
+    
+    event_loop_t *loop = event_loop_create();
+    assert(loop != NULL);
+    
+    async_ws_manager_t *mgr = async_ws_manager_create(loop);
+    assert(mgr != NULL);
+    
+    /* Send with NULL data should fail */
+    assert(async_ws_send(mgr, (websocket_connection_t *)0xDEADBEEF, WS_MESSAGE_TEXT, NULL, 10) == -1);
+    
+    /* Send with NULL connection should fail */
+    const char *msg = "test";
+    (void)msg;
+    assert(async_ws_send(mgr, NULL, WS_MESSAGE_TEXT, msg, 4) == -1);
+    
+    async_ws_manager_destroy(mgr);
+    event_loop_destroy(loop);
+    
+    printf("PASSED\n");
+    return 0;
+}
+
+int main(void) {
+    printf("\n=== Testing Async WebSocket Manager ===\n\n");
+    
+    int failed = 0;
+    failed += test_create_destroy();
+    failed += test_null_handling();
+    failed += test_set_callbacks();
+    failed += test_add_remove_invalid();
+    failed += test_send_invalid();
+    
+    printf("\n===================================\n");
+    printf("Async WebSocket Tests: %d failed\n", failed);
+    printf("===================================\n\n");
+    
+    return failed;
+}
