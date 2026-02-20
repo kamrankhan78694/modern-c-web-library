@@ -2371,6 +2371,264 @@ void test_parser_duplicate_transfer_encoding(void) {
     PASS();
 }
 
+/* ===== Phase 7.5: Networking Integration Tests ===== */
+
+/* Helper: start a server with a given router on a given port,
+ * returning the server pointer.  Caller is responsible for
+ * http_server_stop / destroy / router_destroy. */
+static http_server_t *_start_test_server(router_t *router, uint16_t port) {
+    http_server_t *server = http_server_create();
+    if (!server) return NULL;
+    http_server_set_router(server, router);
+    if (http_server_listen(server, port) < 0) {
+        http_server_destroy(server);
+        return NULL;
+    }
+    usleep(50000); /* 50 ms for accept thread */
+    return server;
+}
+
+/* Handler that echoes request body back */
+static void echo_handler(http_request_t *req, http_response_t *res) {
+    const char *body = req->body ? req->body : "";
+    http_response_send_text(res, HTTP_OK, body);
+}
+
+/* Handler that returns a JSON object */
+static void json_handler(http_request_t *req, http_response_t *res) {
+    (void)req;
+    json_value_t *obj = json_object_create();
+    json_object_set(obj, "message", json_string_create("hello"));
+    char *body = json_stringify(obj);
+    json_value_free(obj);
+    http_response_set_header(res, "Content-Type", "application/json");
+    http_response_send_text(res, HTTP_OK, body);
+    free(body);
+}
+
+/* Integration test: GET request returns 200 */
+void test_integration_get_200(void) {
+    TEST("integration (GET → 200)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/ping", echo_handler);
+
+    uint16_t port = 18800;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    const char *req =
+        "GET /ping HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    char buf[4096];
+    ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+    ASSERT(n > 0);
+    ASSERT(strstr(buf, "HTTP/1.1 200") != NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
+/* Integration test: unknown path returns 404 */
+void test_integration_not_found(void) {
+    TEST("integration (GET unknown path → 404)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/exists", dummy_handler);
+
+    uint16_t port = 18801;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    const char *req =
+        "GET /does-not-exist HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    char buf[4096];
+    ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+    ASSERT(n > 0);
+    ASSERT(strstr(buf, "404") != NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
+/* Integration test: POST with body */
+void test_integration_post_body(void) {
+    TEST("integration (POST with body → echo)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_POST, "/echo", echo_handler);
+
+    uint16_t port = 18802;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    const char *req =
+        "POST /echo HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Length: 11\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "hello world";
+    char buf[4096];
+    ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+    ASSERT(n > 0);
+    ASSERT(strstr(buf, "200") != NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
+/* Integration test: JSON response */
+void test_integration_json_response(void) {
+    TEST("integration (GET → JSON response)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/json", json_handler);
+
+    uint16_t port = 18803;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    const char *req =
+        "GET /json HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    char buf[4096];
+    ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+    ASSERT(n > 0);
+    ASSERT(strstr(buf, "200") != NULL);
+    ASSERT(strstr(buf, "\"message\"") != NULL);
+    ASSERT(strstr(buf, "\"hello\"") != NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
+/* Integration test: malformed request line → 400 or error */
+void test_integration_malformed_request(void) {
+    TEST("integration (malformed request → 400)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/ok", dummy_handler);
+
+    uint16_t port = 18804;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    /* Send garbage that is not a valid HTTP request line */
+    const char *req = "GARBAGE\r\n\r\n";
+    char buf[4096];
+    ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+    /* Server should either return 400 or close the connection */
+    if (n > 0) {
+        ASSERT(strstr(buf, "400") != NULL || strstr(buf, "501") != NULL);
+    }
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
+/* Integration test: multiple sequential requests on different connections */
+void test_integration_concurrent_connections(void) {
+    TEST("integration (sequential connections)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/seq", echo_handler);
+
+    uint16_t port = 18805;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    const char *req =
+        "GET /seq HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    char buf[4096];
+
+    /* Send 5 sequential requests on separate connections */
+    for (int i = 0; i < 5; i++) {
+        ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+        ASSERT(n > 0);
+        ASSERT(strstr(buf, "200") != NULL);
+    }
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
+/* ===== Health Check Tests ===== */
+
+void test_health_check_register(void) {
+    TEST("health_check (register)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    int result = health_check_register(router);
+    ASSERT(result == 0);
+
+    /* NULL router should fail */
+    ASSERT(health_check_register(NULL) == -1);
+
+    router_destroy(router);
+    PASS();
+}
+
+void test_health_check_endpoint(void) {
+    TEST("health_check (GET /healthz → 200 JSON)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    health_check_register(router);
+
+    uint16_t port = 18806;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    const char *req =
+        "GET /healthz HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    char buf[4096];
+    ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+    ASSERT(n > 0);
+    ASSERT(strstr(buf, "200") != NULL);
+    ASSERT(strstr(buf, "\"status\"") != NULL);
+    ASSERT(strstr(buf, "\"ok\"") != NULL);
+    ASSERT(strstr(buf, "\"uptime_seconds\"") != NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -2520,6 +2778,18 @@ int main(void) {
 
     /* Phase 7: Parser hardening regression */
     test_parser_duplicate_transfer_encoding();
+
+    /* Phase 7.5: Networking integration tests */
+    test_integration_get_200();
+    test_integration_not_found();
+    test_integration_post_body();
+    test_integration_json_response();
+    test_integration_malformed_request();
+    test_integration_concurrent_connections();
+
+    /* Observability: Health check tests */
+    test_health_check_register();
+    test_health_check_endpoint();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

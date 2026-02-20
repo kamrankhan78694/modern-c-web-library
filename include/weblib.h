@@ -1200,6 +1200,26 @@ middleware_fn_t csrf_middleware_create(const csrf_config_t *config);
  */
 void csrf_middleware_destroy(void);
 
+/* ===== Health Check API (Observability) ===== */
+
+/**
+ * Health check route handler for GET /healthz
+ * Returns JSON: {"status":"ok","uptime_seconds":<N>}
+ * Suitable for load-balancer probes, Kubernetes liveness/readiness checks,
+ * and monitoring dashboards.
+ * @param req Request object
+ * @param res Response object
+ */
+void health_check_handler(http_request_t *req, http_response_t *res);
+
+/**
+ * Register the health check endpoint on an existing router.
+ * Adds GET /healthz → health_check_handler.
+ * @param router Router instance
+ * @return 0 on success, -1 on failure
+ */
+int health_check_register(router_t *router);
+
 /* ===== Input Validation API (Phase 8) ===== */
 
 /**
