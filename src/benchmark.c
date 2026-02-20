@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <float.h>
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
@@ -146,7 +147,7 @@ int benchmark_run(uint16_t port, const char *path,
 
     uint64_t successful = 0;
     uint64_t failed = 0;
-    double min_us = 1e18;
+    double min_us = DBL_MAX;
     double max_us = 0;
     double sum_us = 0;
 

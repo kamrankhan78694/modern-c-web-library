@@ -2967,6 +2967,12 @@ void test_compression_should_compress(void) {
     /* Too small */
     ASSERT(compression_should_compress("text/html", 100) == false);
 
+    /* Exactly at threshold (256 bytes — should pass) */
+    ASSERT(compression_should_compress("text/html", 256) == true);
+
+    /* Just below threshold (255 bytes — should fail) */
+    ASSERT(compression_should_compress("text/html", 255) == false);
+
     /* NULL */
     ASSERT(compression_should_compress(NULL, 1000) == false);
 

@@ -60,6 +60,11 @@ static bool _crc32_table_initialized = false;
 /* Maximum DEFLATE stored block size */
 #define MAX_STORED_BLOCK_SIZE 65535
 
+/* Minimum compression ratio (percent of original size) to justify sending
+ * compressed.  If compressed_size >= original_size * COMPRESSION_MIN_RATIO / 100
+ * the response is sent uncompressed. */
+#define COMPRESSION_MIN_RATIO 95
+
 /* ============================================================================
  * CRC32 Implementation
  * ============================================================================ */
@@ -661,7 +666,7 @@ void http_response_send_compressed(http_response_t *res, http_status_t status,
     compress_result_t compressed = gzip_compress((const uint8_t *)body,
                                                  body_len, COMPRESS_FAST);
 
-    if (!compressed.data || compressed.size >= (size_t)(body_len * 95 / 100)) {
+    if (!compressed.data || compressed.size >= (size_t)(body_len * COMPRESSION_MIN_RATIO / 100)) {
         /* Compression failed or not beneficial — send uncompressed */
         free(compressed.data);
         http_response_send_text(res, status, body);
