@@ -769,6 +769,106 @@ void *websocket_get_user_data(websocket_connection_t *conn);
  */
 bool websocket_is_open(websocket_connection_t *conn);
 
+/**
+ * Get file descriptor of WebSocket connection
+ * @param conn WebSocket connection
+ * @return File descriptor or -1 if connection is NULL
+ */
+int websocket_get_fd(websocket_connection_t *conn);
+
+/**
+ * Get message callback from WebSocket connection
+ * @param conn WebSocket connection
+ * @return Message callback or NULL
+ */
+websocket_message_cb_t websocket_get_message_callback(websocket_connection_t *conn);
+
+/**
+ * Get close callback from WebSocket connection
+ * @param conn WebSocket connection
+ * @return Close callback or NULL
+ */
+websocket_close_cb_t websocket_get_close_callback(websocket_connection_t *conn);
+
+/**
+ * Get error callback from WebSocket connection
+ * @param conn WebSocket connection
+ * @return Error callback or NULL
+ */
+websocket_error_cb_t websocket_get_error_callback(websocket_connection_t *conn);
+
+/* ===== Async WebSocket API ===== */
+
+/**
+ * Async WebSocket manager (forward declaration)
+ * Manages multiple WebSocket connections with non-blocking I/O via event loop
+ */
+typedef struct async_ws_manager async_ws_manager_t;
+
+/**
+ * Create an async WebSocket manager bound to an event loop
+ * @param loop Event loop instance
+ * @return Async WebSocket manager or NULL on failure
+ */
+async_ws_manager_t *async_ws_manager_create(event_loop_t *loop);
+
+/**
+ * Destroy async WebSocket manager and close all connections
+ * Note: Does not destroy the underlying websocket_connection_t objects
+ * @param mgr Async WebSocket manager
+ */
+void async_ws_manager_destroy(async_ws_manager_t *mgr);
+
+/**
+ * Set default callbacks for all WebSocket connections in the manager
+ * @param mgr Async WebSocket manager
+ * @param on_msg Message callback (or NULL to keep existing)
+ * @param on_close Close callback (or NULL to keep existing)
+ * @param on_error Error callback (or NULL to keep existing)
+ */
+void async_ws_manager_set_callbacks(async_ws_manager_t *mgr,
+                                     websocket_message_cb_t on_msg,
+                                     websocket_close_cb_t on_close,
+                                     websocket_error_cb_t on_error);
+
+/**
+ * Add a WebSocket connection to the async manager for non-blocking I/O
+ * The socket will be made non-blocking and registered with the event loop
+ * @param mgr Async WebSocket manager
+ * @param ws WebSocket connection
+ * @return 0 on success, -1 on failure
+ */
+int async_ws_manager_add(async_ws_manager_t *mgr, websocket_connection_t *ws);
+
+/**
+ * Remove a WebSocket connection from the async manager
+ * Unregisters from event loop and flushes write queue
+ * @param mgr Async WebSocket manager
+ * @param ws WebSocket connection
+ * @return 0 on success, -1 on failure
+ */
+int async_ws_manager_remove(async_ws_manager_t *mgr, websocket_connection_t *ws);
+
+/**
+ * Send a WebSocket message asynchronously (non-blocking)
+ * The message is queued and sent when the socket is writable
+ * @param mgr Async WebSocket manager
+ * @param ws WebSocket connection
+ * @param type Message type (text or binary)
+ * @param data Message data
+ * @param len Message length
+ * @return 0 on success, -1 on failure
+ */
+int async_ws_send(async_ws_manager_t *mgr, websocket_connection_t *ws,
+                  ws_message_type_t type, const void *data, size_t len);
+
+/**
+ * Get the number of active WebSocket connections in the manager
+ * @param mgr Async WebSocket manager
+ * @return Number of active connections
+ */
+size_t async_ws_manager_count(async_ws_manager_t *mgr);
+
 /* ===== Body Parser API ===== */
 
 /**
@@ -1372,6 +1472,101 @@ void metrics_handler(http_request_t *req, http_response_t *res);
  * @return 0 on success, -1 on failure
  */
 int metrics_register(router_t *router);
+
+/* ===== Response Compression API (Phase 9) ===== */
+
+/**
+ * Compute CRC-32 checksum (RFC 1952)
+ * @param data Input data
+ * @param len Data length
+ * @return CRC-32 checksum
+ */
+uint32_t crc32_compute(const uint8_t *data, size_t len);
+
+/**
+ * Negotiate compression encoding from Accept-Encoding header.
+ * @param accept_encoding Value of the Accept-Encoding request header
+ * @return "gzip" if gzip is accepted, NULL otherwise
+ */
+const char *compression_negotiate(const char *accept_encoding);
+
+/**
+ * Check if content type and size make compression worthwhile.
+ * Compresses text types, application/json, application/javascript, etc.
+ * Skips images, audio, video, and small payloads (<256 bytes).
+ * @param content_type Content-Type value
+ * @param content_length Response body length
+ * @return true if content should be compressed
+ */
+bool compression_should_compress(const char *content_type, size_t content_length);
+
+/**
+ * Send a compressed text response.
+ *
+ * If the accept_encoding header indicates gzip support and the content_type
+ * is compressible, the body is gzip-compressed before being set on the
+ * response.  Otherwise, the body is sent uncompressed via
+ * http_response_send_text().
+ *
+ * @param res             HTTP response object
+ * @param status          HTTP status code
+ * @param body            Response body text
+ * @param body_len        Response body length (0 = use strlen)
+ * @param content_type    Content-Type for compressibility check (e.g. "text/html")
+ * @param accept_encoding Value of the Accept-Encoding request header (may be NULL)
+ */
+void http_response_send_compressed(http_response_t *res, http_status_t status,
+                                   const char *body, size_t body_len,
+                                   const char *content_type,
+                                   const char *accept_encoding);
+
+/* ===== Benchmarking API (Phase 9) ===== */
+
+/**
+ * High-resolution timestamp in microseconds.
+ * Uses clock_gettime(CLOCK_MONOTONIC) for accurate measurement.
+ * @return Microseconds since an arbitrary epoch
+ */
+uint64_t benchmark_timestamp_us(void);
+
+/**
+ * Statistics from a benchmark run
+ */
+typedef struct {
+    uint64_t total_requests;     /* Total requests executed */
+    uint64_t successful;         /* 2xx responses */
+    uint64_t failed;             /* Non-2xx or connection error */
+    double elapsed_seconds;      /* Total wall-clock time */
+    double requests_per_second;  /* Throughput */
+    double avg_latency_us;       /* Average latency in microseconds */
+    double min_latency_us;       /* Minimum latency */
+    double max_latency_us;       /* Maximum latency */
+    double p50_latency_us;       /* 50th percentile (median) latency */
+    double p95_latency_us;       /* 95th percentile latency */
+    double p99_latency_us;       /* 99th percentile latency */
+} benchmark_stats_t;
+
+/**
+ * Run a throughput benchmark against a local HTTP endpoint.
+ *
+ * Sends @p num_requests sequential GET requests to http://127.0.0.1:@p port@p path
+ * and collects latency samples.
+ *
+ * @param port          Server port
+ * @param path          Request path (e.g. "/")
+ * @param num_requests  Number of requests to send
+ * @param stats         Output statistics (must not be NULL)
+ * @return 0 on success, -1 on failure
+ */
+int benchmark_run(uint16_t port, const char *path,
+                  uint64_t num_requests, benchmark_stats_t *stats);
+
+/**
+ * Print benchmark results to a FILE stream.
+ * @param fp    Output stream (e.g. stdout)
+ * @param stats Benchmark statistics
+ */
+void benchmark_print(FILE *fp, const benchmark_stats_t *stats);
 
 #ifdef __cplusplus
 }

@@ -441,8 +441,9 @@ int websocket_send(websocket_connection_t *conn, ws_message_type_t type, const v
     } else {
         uint64_t len64 = (uint64_t)len;
         header[1] = 127;
-        for (int i = 7; i >= 0; i--) {
-            header[2 + i] = (uint8_t)(len64 & 0xFF);
+        /* RFC 6455: 64-bit extended payload length in network byte order (big-endian) */
+        for (int i = 0; i < 8; i++) {
+            header[9 - i] = (uint8_t)(len64 & 0xFF);
             len64 >>= 8;
         }
         header_len = 10;
@@ -806,4 +807,24 @@ void *websocket_get_user_data(websocket_connection_t *conn) {
 /* Check if connection is open */
 bool websocket_is_open(websocket_connection_t *conn) {
     return conn && conn->state == WS_STATE_OPEN;
+}
+
+/* Get file descriptor */
+int websocket_get_fd(websocket_connection_t *conn) {
+    return conn ? conn->fd : -1;
+}
+
+/* Get on_message callback */
+websocket_message_cb_t websocket_get_message_callback(websocket_connection_t *conn) {
+    return conn ? conn->on_message : NULL;
+}
+
+/* Get on_close callback */
+websocket_close_cb_t websocket_get_close_callback(websocket_connection_t *conn) {
+    return conn ? conn->on_close : NULL;
+}
+
+/* Get on_error callback */
+websocket_error_cb_t websocket_get_error_callback(websocket_connection_t *conn) {
+    return conn ? conn->on_error : NULL;
 }
