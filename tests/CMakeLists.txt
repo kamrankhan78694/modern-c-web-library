@@ -13,3 +13,10 @@ target_link_libraries(test_async_websocket weblib ${PLATFORM_LIBS})
 
 # Add async WebSocket test to CTest
 add_test(NAME AsyncWebSocketTests COMMAND test_async_websocket)
+
+# Stress test executable
+add_executable(test_stress test_stress.c)
+target_link_libraries(test_stress weblib ${PLATFORM_LIBS})
+
+# Add stress test to CTest
+add_test(NAME StressTests COMMAND test_stress)
