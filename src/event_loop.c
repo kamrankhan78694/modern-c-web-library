@@ -458,7 +458,8 @@ int event_loop_add_timeout(event_loop_t *loop, int timeout_ms, event_callback_t 
     }
     
     if (loop->timer_count >= MAX_TIMERS) {
-        fprintf(stderr, "Max timers exceeded\n");
+        fprintf(stderr, "Max timers exceeded: %d/%d active timers\n",
+                loop->timer_count, MAX_TIMERS);
         return -1;
     }
     
@@ -572,4 +573,16 @@ static int get_next_timeout(event_loop_t *loop) {
     }
     
     return min_timeout;
+}
+
+/* Get current timer count and maximum */
+int event_loop_get_timer_count(event_loop_t *loop) {
+    if (!loop) {
+        return -1;
+    }
+    return loop->timer_count;
+}
+
+int event_loop_get_max_timers(void) {
+    return MAX_TIMERS;
 }

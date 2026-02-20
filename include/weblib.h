@@ -500,6 +500,19 @@ int event_loop_add_timeout(event_loop_t *loop, int timeout_ms, event_callback_t 
  */
 int event_loop_cancel_timeout(event_loop_t *loop, int timer_id);
 
+/**
+ * Get the current number of active timers
+ * @param loop Event loop instance
+ * @return Number of active timers, or -1 on failure
+ */
+int event_loop_get_timer_count(event_loop_t *loop);
+
+/**
+ * Get the maximum number of timers supported
+ * @return Maximum timer count (compile-time constant)
+ */
+int event_loop_get_max_timers(void);
+
 /* ===== Async HTTP Server API ===== */
 
 /**
@@ -575,6 +588,21 @@ int http_server_shutdown(http_server_t *server, int timeout_sec);
  * @return HTTP_SERVER_STOPPED, HTTP_SERVER_RUNNING, or HTTP_SERVER_DRAINING
  */
 int http_server_get_state(http_server_t *server);
+
+/**
+ * Set maximum active connections for the server
+ * @param server Server instance
+ * @param max_conn Maximum number of simultaneous connections (must be >= 1)
+ * @return 0 on success, -1 on failure
+ */
+int http_server_set_max_connections(http_server_t *server, int max_conn);
+
+/**
+ * Get the current number of active connections
+ * @param server Server instance
+ * @return Active connection count, or -1 on failure
+ */
+int http_server_get_active_connections(http_server_t *server);
 
 /* ===== WebSocket API ===== */
 

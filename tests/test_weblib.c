@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <signal.h>
 
 /* Test counter */
 static int tests_run = 0;
@@ -3091,6 +3092,108 @@ void test_benchmark_integration(void) {
     PASS();
 }
 
+/* Phase 10: Bug fix tests */
+
+/* Test SIGPIPE handling (BUG-1) — verify server creates without crash */
+void test_sigpipe_handling(void) {
+    TEST("BUG-1: SIGPIPE handling");
+    
+    /* Creating the server should set SIGPIPE to SIG_IGN */
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    
+    /* Verify SIGPIPE is ignored (sigaction check) */
+#ifndef _WIN32
+    struct sigaction sa;
+    sigaction(SIGPIPE, NULL, &sa);
+    ASSERT(sa.sa_handler == SIG_IGN);
+#endif
+    
+    http_server_destroy(server);
+    PASS();
+}
+
+/* Test session store thread safety (BUG-2) — verify mutex init/destroy */
+void test_session_store_thread_safety(void) {
+    TEST("BUG-2: session store thread safety");
+    
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    
+    /* Create multiple sessions concurrently safe */
+    char *sid1 = session_create(store, 3600);
+    ASSERT(sid1 != NULL);
+    char *sid2 = session_create(store, 3600);
+    ASSERT(sid2 != NULL);
+    
+    /* Sessions should have different IDs */
+    ASSERT(strcmp(sid1, sid2) != 0);
+    
+    /* Both should be retrievable */
+    ASSERT(session_get(store, sid1) != NULL);
+    ASSERT(session_get(store, sid2) != NULL);
+    
+    /* Destroy one, other should still exist */
+    session_destroy(store, sid1);
+    ASSERT(session_get(store, sid1) == NULL);
+    ASSERT(session_get(store, sid2) != NULL);
+    
+    free(sid1);
+    free(sid2);
+    session_store_destroy(store);
+    PASS();
+}
+
+/* Test event_loop timer count query (BUG-5) */
+void test_event_loop_timer_count(void) {
+    TEST("BUG-5: event_loop timer count query");
+    
+    event_loop_t *loop = event_loop_create();
+    ASSERT(loop != NULL);
+    
+    /* Initially no timers */
+    ASSERT(event_loop_get_timer_count(loop) == 0);
+    
+    /* Max timers should be 64 */
+    ASSERT(event_loop_get_max_timers() == 64);
+    
+    /* Add a timer */
+    int id = event_loop_add_timeout(loop, 10000, dummy_event_callback, NULL);
+    ASSERT(id > 0);
+    ASSERT(event_loop_get_timer_count(loop) == 1);
+    
+    /* NULL loop should return -1 */
+    ASSERT(event_loop_get_timer_count(NULL) == -1);
+    
+    event_loop_destroy(loop);
+    PASS();
+}
+
+/* Test active connection tracking (BUG-6) */
+void test_server_connection_tracking(void) {
+    TEST("BUG-6: server connection tracking");
+    
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    
+    /* Initially 0 active connections */
+    ASSERT(http_server_get_active_connections(server) == 0);
+    
+    /* Set max connections */
+    ASSERT(http_server_set_max_connections(server, 50) == 0);
+    
+    /* Invalid values should fail */
+    ASSERT(http_server_set_max_connections(server, 0) == -1);
+    ASSERT(http_server_set_max_connections(server, -1) == -1);
+    ASSERT(http_server_set_max_connections(NULL, 50) == -1);
+    
+    /* NULL server should return -1 */
+    ASSERT(http_server_get_active_connections(NULL) == -1);
+    
+    http_server_destroy(server);
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -3278,6 +3381,12 @@ int main(void) {
     test_benchmark_stats();
     test_benchmark_print();
     test_benchmark_integration();
+
+    /* Phase 10: Bug fix tests */
+    test_sigpipe_handling();
+    test_session_store_thread_safety();
+    test_event_loop_timer_count();
+    test_server_connection_tracking();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

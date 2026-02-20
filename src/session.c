@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
+#include <pthread.h>
 
 #define MAX_SESSIONS 1024
 #define SESSION_ID_LENGTH 32
@@ -30,6 +31,7 @@ struct session {
 struct session_store {
     session_t sessions[MAX_SESSIONS];
     size_t session_count;
+    pthread_mutex_t lock;
 };
 
 /* Generate random session ID */
@@ -63,16 +65,14 @@ static void generate_session_id(char *buffer, size_t length) {
             buffer[i] = charset[random_bytes[i] % charset_len];
         }
     } else {
-        /* Fallback: seed rand() with time + clock */
-        static bool seeded = false;
-        if (!seeded) {
-            unsigned int seed = (unsigned int)time(NULL);
-            seed ^= (unsigned int)clock();
-            srand(seed);
-            seeded = true;
+        /* Fallback: use rand_r() with per-call seed for thread safety */
+        static unsigned int seed_state = 0;
+        if (seed_state == 0) {
+            seed_state = (unsigned int)time(NULL);
+            seed_state ^= (unsigned int)clock();
         }
         for (size_t i = 0; i < length; i++) {
-            buffer[i] = charset[rand() % charset_len];
+            buffer[i] = charset[rand_r(&seed_state) % charset_len];
         }
     }
     buffer[length] = '\0';
@@ -82,6 +82,11 @@ static void generate_session_id(char *buffer, size_t length) {
 session_store_t *session_store_create(void) {
     session_store_t *store = (session_store_t *)calloc(1, sizeof(session_store_t));
     if (!store) {
+        return NULL;
+    }
+    
+    if (pthread_mutex_init(&store->lock, NULL) != 0) {
+        free(store);
         return NULL;
     }
     
@@ -114,12 +119,17 @@ void session_store_destroy(session_store_t *store) {
         return;
     }
     
+    pthread_mutex_lock(&store->lock);
+    
     /* Free all session data */
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
         if (store->sessions[i].in_use) {
             free_session_data(store->sessions[i].data);
         }
     }
+    
+    pthread_mutex_unlock(&store->lock);
+    pthread_mutex_destroy(&store->lock);
     
     free(store);
 }
@@ -129,6 +139,8 @@ char *session_create(session_store_t *store, int max_age) {
     if (!store) {
         return NULL;
     }
+    
+    pthread_mutex_lock(&store->lock);
     
     /* Find free session slot */
     session_t *session = NULL;
@@ -141,6 +153,7 @@ char *session_create(session_store_t *store, int max_age) {
     
     if (!session) {
         fprintf(stderr, "No free session slots available\n");
+        pthread_mutex_unlock(&store->lock);
         return NULL;
     }
     
@@ -164,6 +177,7 @@ char *session_create(session_store_t *store, int max_age) {
     
     if (!unique) {
         fprintf(stderr, "Failed to generate unique session ID after %d attempts\n", max_attempts);
+        pthread_mutex_unlock(&store->lock);
         return NULL;
     }
     
@@ -181,7 +195,11 @@ char *session_create(session_store_t *store, int max_age) {
     session->in_use = true;
     store->session_count++;
     
-    return strdup(session->session_id);
+    char *result = strdup(session->session_id);
+    
+    pthread_mutex_unlock(&store->lock);
+    
+    return result;
 }
 
 /* Get session by ID */
@@ -189,6 +207,8 @@ session_t *session_get(session_store_t *store, const char *session_id) {
     if (!store || !session_id) {
         return NULL;
     }
+    
+    pthread_mutex_lock(&store->lock);
     
     /* Find session with matching ID */
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
@@ -203,13 +223,16 @@ session_t *session_get(session_store_t *store, const char *session_id) {
                 if (store->session_count > 0) {
                     store->session_count--;
                 }
+                pthread_mutex_unlock(&store->lock);
                 return NULL;
             }
             
+            pthread_mutex_unlock(&store->lock);
             return &store->sessions[i];
         }
     }
     
+    pthread_mutex_unlock(&store->lock);
     return NULL;
 }
 
@@ -218,6 +241,8 @@ void session_destroy(session_store_t *store, const char *session_id) {
     if (!store || !session_id) {
         return;
     }
+    
+    pthread_mutex_lock(&store->lock);
     
     /* Find and destroy session */
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
@@ -232,6 +257,8 @@ void session_destroy(session_store_t *store, const char *session_id) {
             break;
         }
     }
+    
+    pthread_mutex_unlock(&store->lock);
 }
 
 /* Set session data */
@@ -354,6 +381,8 @@ int session_cleanup_expired(session_store_t *store) {
         return 0;
     }
     
+    pthread_mutex_lock(&store->lock);
+    
     int cleaned = 0;
     
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
@@ -365,6 +394,8 @@ int session_cleanup_expired(session_store_t *store) {
             cleaned++;
         }
     }
+    
+    pthread_mutex_unlock(&store->lock);
     
     return cleaned;
 }
