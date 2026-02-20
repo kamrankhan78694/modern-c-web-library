@@ -12,6 +12,30 @@
 static int tests_run = 0;
 static int tests_passed = 0;
 
+/*
+ * Test-local helper: free an http_header_node linked list.
+ * Mirrors the internal header_list_free() in http_server.c so that tests
+ * using stack-allocated http_response_t can clean up header allocations.
+ */
+typedef struct _test_hdr_node {
+    char *name;
+    char *raw_name;
+    char *value;
+    struct _test_hdr_node *next;
+} _test_hdr_node_t;
+
+static void _test_free_header_list(void *headers) {
+    _test_hdr_node_t *h = (_test_hdr_node_t *)headers;
+    while (h) {
+        _test_hdr_node_t *next = h->next;
+        free(h->name);
+        free(h->raw_name);
+        free(h->value);
+        free(h);
+        h = next;
+    }
+}
+
 /* Dummy handler for testing */
 static void dummy_handler(http_request_t *req, http_response_t *res) {
     (void)req;
@@ -741,6 +765,8 @@ void test_cookie_set(void) {
     http_response_set_cookie(&res, "session", "abc123", &opts);
     /* The Set-Cookie header should be set (verified by the fact it doesn't crash) */
 
+    _test_free_header_list(res.headers);
+
     PASS();
 }
 
@@ -758,6 +784,8 @@ void test_cookie_delete(void) {
     /* Delete a cookie */
     http_response_delete_cookie(&res, "session");
     /* Should set Set-Cookie: session=; Path=/; Max-Age=0 */
+
+    _test_free_header_list(res.headers);
 
     PASS();
 }
@@ -929,6 +957,7 @@ void test_static_file_serve(void) {
 
     free(req.path);
     free(res.body);
+    _test_free_header_list(res.headers);
 
     /* Clean up test file */
     remove("/tmp/test_weblib_static.txt");
@@ -1214,6 +1243,8 @@ void test_session_cookie_set(void) {
 
     /* Delete session cookie */
     session_set_cookie(&res, "abc123", -1, "/");
+
+    _test_free_header_list(res.headers);
 
     PASS();
 }
@@ -1967,6 +1998,379 @@ void test_server_state(void) {
     PASS();
 }
 
+/* ===== Phase 8: Logging Middleware Tests ===== */
+
+void test_log_middleware_create_destroy(void) {
+    TEST("log_middleware (create/destroy)");
+
+    /* Default config */
+    middleware_fn_t fn = log_middleware_create(NULL);
+    ASSERT(fn != NULL);
+    log_middleware_destroy();
+
+    /* Custom config */
+    log_config_t cfg = {LOG_LEVEL_DEBUG, NULL};
+    fn = log_middleware_create(&cfg);
+    ASSERT(fn != NULL);
+    log_middleware_destroy();
+
+    /* NULL config → defaults */
+    fn = log_middleware_create(NULL);
+    ASSERT(fn != NULL);
+    log_middleware_destroy();
+
+    PASS();
+}
+
+void test_log_middleware_invoke(void) {
+    TEST("log_middleware (invoke)");
+
+    /* tmpfile() is portable across POSIX and Windows */
+    FILE *sink = tmpfile();
+    ASSERT(sink != NULL);
+
+    log_config_t cfg = {LOG_LEVEL_INFO, sink};
+    middleware_fn_t fn = log_middleware_create(&cfg);
+    ASSERT(fn != NULL);
+
+    /* Build minimal request */
+    http_request_t req;
+    memset(&req, 0, sizeof(req));
+    req.method = HTTP_GET;
+    req.path   = "/test";
+
+    http_response_t res;
+    memset(&res, 0, sizeof(res));
+
+    /* Should return true (continue chain) */
+    bool cont = fn(&req, &res);
+    ASSERT(cont == true);
+
+    /* NULL inputs should not crash */
+    cont = fn(NULL, NULL);
+    ASSERT(cont == true);
+
+    log_middleware_destroy();
+    fclose(sink);
+
+    PASS();
+}
+
+/* ===== Phase 8: Error Handler Middleware Tests ===== */
+
+void test_error_handler_create_destroy(void) {
+    TEST("error_handler_middleware (create/destroy)");
+
+    middleware_fn_t fn = error_handler_middleware_create(NULL);
+    ASSERT(fn != NULL);
+    error_handler_middleware_destroy();
+
+    error_handler_config_t cfg = {NULL};
+    fn = error_handler_middleware_create(&cfg);
+    ASSERT(fn != NULL);
+    error_handler_middleware_destroy();
+
+    PASS();
+}
+
+void test_error_handler_apply(void) {
+    TEST("error_handler_apply");
+
+    error_handler_middleware_create(NULL);
+
+    /* Build a 404 response with no body */
+    http_response_t res;
+    memset(&res, 0, sizeof(res));
+    res.status = HTTP_NOT_FOUND;
+
+    error_handler_apply(NULL, &res);
+
+    /* Should have filled in a JSON body */
+    ASSERT(res.body != NULL);
+    ASSERT(res.body_length > 0);
+    ASSERT(strstr(res.body, "404") != NULL || strstr(res.body, "Not Found") != NULL);
+
+    free(res.body);
+    _test_free_header_list(res.headers);
+
+    /* Non-error status → no change */
+    http_response_t ok_res;
+    memset(&ok_res, 0, sizeof(ok_res));
+    ok_res.status = HTTP_OK;
+    error_handler_apply(NULL, &ok_res);
+    ASSERT(ok_res.body == NULL);
+
+    /* NULL response → no crash */
+    error_handler_apply(NULL, NULL);
+
+    error_handler_middleware_destroy();
+
+    PASS();
+}
+
+/* ===== Phase 8: CSRF Middleware Tests ===== */
+
+void test_csrf_create_destroy(void) {
+    TEST("csrf_middleware (create/destroy)");
+
+    middleware_fn_t fn = csrf_middleware_create(NULL);
+    ASSERT(fn != NULL);
+    csrf_middleware_destroy();
+
+    csrf_config_t cfg = {"my_csrf", "X-My-Token", 16};
+    fn = csrf_middleware_create(&cfg);
+    ASSERT(fn != NULL);
+    csrf_middleware_destroy();
+
+    PASS();
+}
+
+void test_csrf_safe_methods(void) {
+    TEST("csrf_middleware (safe methods pass through)");
+
+    csrf_middleware_create(NULL);
+
+    http_request_t req;
+    memset(&req, 0, sizeof(req));
+    req.method = HTTP_GET;
+    req.path   = "/";
+
+    http_response_t res;
+    memset(&res, 0, sizeof(res));
+    res.status = HTTP_OK;
+
+    /* GET without token: should be allowed (returns true) */
+    middleware_fn_t fn = csrf_middleware_create(NULL);
+    ASSERT(fn != NULL);
+
+    /* fn will try to set a cookie via http_response_set_cookie which requires
+       a real response header list — for simplicity we just verify it returns true
+       and does not crash. */
+    bool cont = fn(&req, &res);
+    ASSERT(cont == true);
+
+    csrf_middleware_destroy();
+
+    /* Free any allocated cookie/header nodes */
+    _test_free_header_list(res.headers);
+
+    PASS();
+}
+
+/* ===== Phase 8: Input Validation Tests ===== */
+
+void test_input_validate_length(void) {
+    TEST("input_validate_length");
+
+    ASSERT(input_validate_length("hello", 1, 10) == true);
+    ASSERT(input_validate_length("hello", 5, 5) == true);
+    ASSERT(input_validate_length("hello", 6, 10) == false);  /* too short */
+    ASSERT(input_validate_length("hello", 1, 4)  == false);  /* too long */
+    ASSERT(input_validate_length("",      0, 10) == true);
+    ASSERT(input_validate_length("",      1, 10) == false);
+    ASSERT(input_validate_length(NULL,    0, 10) == false);
+
+    PASS();
+}
+
+void test_input_validate_charset(void) {
+    TEST("input_validate_charset");
+
+    ASSERT(input_validate_charset("abc123", "abcdefghijklmnopqrstuvwxyz0123456789") == true);
+    ASSERT(input_validate_charset("abc!",   "abcdefghijklmnopqrstuvwxyz0123456789") == false);
+    ASSERT(input_validate_charset("",       "abc") == true);  /* empty always valid */
+    ASSERT(input_validate_charset(NULL,     "abc") == false);
+    ASSERT(input_validate_charset("abc",    NULL)  == false);
+
+    PASS();
+}
+
+void test_input_validate_integer(void) {
+    TEST("input_validate_integer");
+
+    long long out = 0;
+    ASSERT(input_validate_integer("42",    0, 100, &out) == true  && out == 42);
+    ASSERT(input_validate_integer("-5",   -10, 0,  &out) == true  && out == -5);
+    ASSERT(input_validate_integer("200",   0, 100, &out) == false); /* out of range */
+    ASSERT(input_validate_integer("abc",   0, 100, &out) == false); /* not a number */
+    ASSERT(input_validate_integer(" 42",   0, 100, &out) == false); /* leading space */
+    ASSERT(input_validate_integer("42x",   0, 100, &out) == false); /* trailing char */
+    ASSERT(input_validate_integer("",      0, 100, &out) == false);
+    ASSERT(input_validate_integer(NULL,    0, 100, &out) == false);
+    /* NULL out_val is acceptable */
+    ASSERT(input_validate_integer("7", 0, 10, NULL) == true);
+
+    PASS();
+}
+
+void test_input_validate_email(void) {
+    TEST("input_validate_email");
+
+    ASSERT(input_validate_email("user@example.com")     == true);
+    ASSERT(input_validate_email("a@b.co")               == true);
+    ASSERT(input_validate_email("no-at-sign")           == false);
+    ASSERT(input_validate_email("@nodomain.com")        == false);
+    ASSERT(input_validate_email("user@")                == false);
+    ASSERT(input_validate_email("user@nodot")           == false);
+    ASSERT(input_validate_email("user@.leading.dot")    == false);
+    ASSERT(input_validate_email("user@domain.")         == false);
+    ASSERT(input_validate_email("")                     == false);
+    ASSERT(input_validate_email(NULL)                   == false);
+
+    PASS();
+}
+
+void test_input_is_alphanumeric(void) {
+    TEST("input_is_alphanumeric");
+
+    ASSERT(input_is_alphanumeric("abc123")  == true);
+    ASSERT(input_is_alphanumeric("ABC")     == true);
+    ASSERT(input_is_alphanumeric("abc 123") == false); /* space */
+    ASSERT(input_is_alphanumeric("abc!")    == false);
+    ASSERT(input_is_alphanumeric("")        == false); /* empty → false */
+    ASSERT(input_is_alphanumeric(NULL)      == false);
+
+    PASS();
+}
+
+void test_input_sanitize_html(void) {
+    TEST("input_sanitize_html");
+
+    char *out = input_sanitize_html("<script>alert('xss')</script>");
+    ASSERT(out != NULL);
+    ASSERT(strstr(out, "<")  == NULL);
+    ASSERT(strstr(out, ">")  == NULL);
+    ASSERT(strstr(out, "'")  == NULL);
+    ASSERT(strstr(out, "&lt;")   != NULL);
+    ASSERT(strstr(out, "&gt;")   != NULL);
+    ASSERT(strstr(out, "&#39;")  != NULL);
+    free(out);
+
+    /* Ampersand */
+    out = input_sanitize_html("a & b");
+    ASSERT(out != NULL);
+    ASSERT(strstr(out, "&amp;") != NULL);
+    free(out);
+
+    /* Double quote */
+    out = input_sanitize_html("say \"hello\"");
+    ASSERT(out != NULL);
+    ASSERT(strstr(out, "&quot;") != NULL);
+    free(out);
+
+    /* Plain text unchanged */
+    out = input_sanitize_html("hello world");
+    ASSERT(out != NULL);
+    ASSERT(strcmp(out, "hello world") == 0);
+    free(out);
+
+    /* NULL input */
+    ASSERT(input_sanitize_html(NULL) == NULL);
+
+    PASS();
+}
+
+/* ===== Phase 7: Parser Hardening Tests ===== */
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+/* Helper: connect to localhost:port, send raw bytes, read response into buf.
+ * Returns bytes read or -1 on error. */
+static ssize_t _send_raw_request(uint16_t port, const char *raw, size_t raw_len,
+                                  char *buf, size_t buf_size) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    /* Send the raw request bytes */
+    ssize_t sent = send(fd, raw, raw_len, 0);
+    if (sent < 0) {
+        close(fd);
+        return -1;
+    }
+
+    /* Shutdown write side so server knows we're done sending */
+    shutdown(fd, SHUT_WR);
+
+    /* Read response */
+    ssize_t total = 0;
+    while ((size_t)total < buf_size - 1) {
+        ssize_t n = recv(fd, buf + total, buf_size - 1 - (size_t)total, 0);
+        if (n <= 0) break;
+        total += n;
+    }
+    buf[total] = '\0';
+
+    close(fd);
+    return total;
+}
+
+void test_parser_duplicate_transfer_encoding(void) {
+    TEST("parser (duplicate Transfer-Encoding → 400)");
+
+    /* Start a real server on an ephemeral port */
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/ok", dummy_handler);
+    http_server_set_router(server, router);
+
+    /* Use a high port to avoid conflicts */
+    uint16_t port = 18787;
+    int listen_result = http_server_listen(server, port);
+    ASSERT(listen_result == 0);
+
+    /* Allow the accept thread to start */
+    usleep(50000); /* 50ms */
+
+    /* 1. Duplicate Transfer-Encoding → expect "400" in response */
+    const char *dup_te_request =
+        "GET /ok HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n";
+
+    char resp_buf[2048];
+    ssize_t nread = _send_raw_request(port, dup_te_request, strlen(dup_te_request),
+                                       resp_buf, sizeof(resp_buf));
+    ASSERT(nread > 0);
+    ASSERT(strstr(resp_buf, "400") != NULL);
+
+    /* 2. Sanity: a valid request on the same server should succeed */
+    const char *good_request =
+        "GET /ok HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+
+    nread = _send_raw_request(port, good_request, strlen(good_request),
+                               resp_buf, sizeof(resp_buf));
+    ASSERT(nread > 0);
+    /* Should be a 200 or 404 (dummy_handler doesn't set body, but route matches) */
+    ASSERT(strstr(resp_buf, "HTTP/1.1") != NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -2094,6 +2498,29 @@ int main(void) {
     /* Phase 7: Server state tests */
     test_server_state();
     
+    /* Phase 8: Logging middleware tests */
+    test_log_middleware_create_destroy();
+    test_log_middleware_invoke();
+
+    /* Phase 8: Error handler middleware tests */
+    test_error_handler_create_destroy();
+    test_error_handler_apply();
+
+    /* Phase 8: CSRF middleware tests */
+    test_csrf_create_destroy();
+    test_csrf_safe_methods();
+
+    /* Phase 8: Input validation tests */
+    test_input_validate_length();
+    test_input_validate_charset();
+    test_input_validate_integer();
+    test_input_validate_email();
+    test_input_is_alphanumeric();
+    test_input_sanitize_html();
+
+    /* Phase 7: Parser hardening regression */
+    test_parser_duplicate_transfer_encoding();
+
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
     printf("Tests passed: %d\n", tests_passed);
