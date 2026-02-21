@@ -15,6 +15,14 @@
 #include <ctype.h>
 #include <strings.h>
 
+/* BUG-1 fix: Use MSG_NOSIGNAL on send() where available, else rely on
+   the process-wide signal(SIGPIPE, SIG_IGN) set in http_server_create(). */
+#ifdef MSG_NOSIGNAL
+#define SEND_FLAGS MSG_NOSIGNAL
+#else
+#define SEND_FLAGS 0
+#endif
+
 #define MAX_CONNECTIONS 128
 #define READ_BUFFER_SIZE 8192
 #define MAX_REQUEST_LINE_LEN 4096
@@ -106,6 +114,11 @@ struct http_server {
     thread_pool_t *pool;
     int thread_count;
     
+    /* Active connection tracking (BUG-6 fix) */
+    int active_connections;
+    int max_connections;
+    pthread_mutex_t conn_lock;
+    
     /* Async I/O support */
     bool async_mode;
     event_loop_t *event_loop;
@@ -181,6 +194,12 @@ http_server_t *http_server_create(void) {
         return NULL;
     }
     
+    /* BUG-1 fix: Ignore SIGPIPE process-wide so that send() on a disconnected
+       client returns EPIPE instead of terminating the server process. */
+#ifndef _WIN32
+    signal(SIGPIPE, SIG_IGN);
+#endif
+    
     server->socket_fd = -1;
     server->running = false;
     server->state = SERVER_STOPPED;
@@ -191,6 +210,11 @@ http_server_t *http_server_create(void) {
     server->write_timeout_sec = DEFAULT_WRITE_TIMEOUT_SEC;
     server->pool = NULL;
     server->thread_count = THREAD_POOL_DEFAULT_SIZE;
+    
+    /* BUG-6 fix: Initialize connection tracking */
+    server->active_connections = 0;
+    server->max_connections = MAX_CONNECTIONS;
+    pthread_mutex_init(&server->conn_lock, NULL);
     
     return server;
 }
@@ -391,6 +415,8 @@ void http_server_destroy(http_server_t *server) {
         server->event_loop = NULL;
     }
     
+    pthread_mutex_destroy(&server->conn_lock);
+    
     free(server);
 }
 
@@ -444,6 +470,17 @@ static void *accept_connections(void *arg) {
             continue;
         }
         
+        /* BUG-6 fix: Reject when active connection limit reached */
+        pthread_mutex_lock(&server->conn_lock);
+        if (server->active_connections >= server->max_connections) {
+            pthread_mutex_unlock(&server->conn_lock);
+            send_error_response(client_fd, HTTP_SERVICE_UNAVAILABLE, "Connection limit reached");
+            close(client_fd);
+            continue;
+        }
+        server->active_connections++;
+        pthread_mutex_unlock(&server->conn_lock);
+        
         /* Apply socket timeouts */
         apply_socket_timeouts(client_fd, server->read_timeout_sec, server->write_timeout_sec);
         
@@ -459,6 +496,9 @@ static void *accept_connections(void *arg) {
                     send_error_response(client_fd, HTTP_SERVICE_UNAVAILABLE, "Server Busy");
                     close(client_fd);
                     free(conn);
+                    pthread_mutex_lock(&server->conn_lock);
+                    server->active_connections--;
+                    pthread_mutex_unlock(&server->conn_lock);
                 }
             } else {
                 /* Fallback: thread-per-connection (shouldn't happen normally) */
@@ -467,12 +507,18 @@ static void *accept_connections(void *arg) {
                     perror("pthread_create for connection failed");
                     close(client_fd);
                     free(conn);
+                    pthread_mutex_lock(&server->conn_lock);
+                    server->active_connections--;
+                    pthread_mutex_unlock(&server->conn_lock);
                 } else {
                     pthread_detach(thread);
                 }
             }
         } else {
             close(client_fd);
+            pthread_mutex_lock(&server->conn_lock);
+            server->active_connections--;
+            pthread_mutex_unlock(&server->conn_lock);
         }
     }
     
@@ -667,6 +713,12 @@ static void *handle_connection(void *arg) {
         http_parser_destroy(&conn->parser);
     }
     close(client_fd);
+    
+    /* BUG-6 fix: Decrement active connection count */
+    pthread_mutex_lock(&server->conn_lock);
+    server->active_connections--;
+    pthread_mutex_unlock(&server->conn_lock);
+    
     free(conn);
     return NULL;
 }
@@ -892,7 +944,7 @@ static void http_response_destroy(http_response_t *res) {
 static int send_all(int fd, const char *buf, size_t len) {
     size_t sent_total = 0;
     while (sent_total < len) {
-        ssize_t sent = send(fd, buf + sent_total, len - sent_total, 0);
+        ssize_t sent = send(fd, buf + sent_total, len - sent_total, SEND_FLAGS);
         if (sent < 0) {
             if (errno == EINTR) {
                 continue;
@@ -1787,6 +1839,28 @@ int http_server_get_state(http_server_t *server) {
     return (int)server->state;
 }
 
+/* Set maximum active connections (BUG-6 fix) */
+int http_server_set_max_connections(http_server_t *server, int max_conn) {
+    if (!server || max_conn < 1) {
+        return -1;
+    }
+    pthread_mutex_lock(&server->conn_lock);
+    server->max_connections = max_conn;
+    pthread_mutex_unlock(&server->conn_lock);
+    return 0;
+}
+
+/* Get current active connection count (BUG-6 fix) */
+int http_server_get_active_connections(http_server_t *server) {
+    if (!server) {
+        return -1;
+    }
+    pthread_mutex_lock(&server->conn_lock);
+    int count = server->active_connections;
+    pthread_mutex_unlock(&server->conn_lock);
+    return count;
+}
+
 /* Set non-blocking mode on a file descriptor */
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -2015,7 +2089,7 @@ static void async_write_handler(int fd, int events, void *user_data) {
     for (;;) {
         while (conn->header_sent < conn->header_len) {
             ssize_t sent = send(fd, conn->header_buf + conn->header_sent,
-                                conn->header_len - conn->header_sent, 0);
+                                conn->header_len - conn->header_sent, SEND_FLAGS);
             if (sent < 0) {
                 if (errno == EINTR) {
                     continue;
@@ -2042,7 +2116,7 @@ static void async_write_handler(int fd, int events, void *user_data) {
                 break;
             }
             size_t remaining = conn->response->body_length - conn->body_sent;
-            ssize_t sent = send(fd, conn->response->body + conn->body_sent, remaining, 0);
+            ssize_t sent = send(fd, conn->response->body + conn->body_sent, remaining, SEND_FLAGS);
             if (sent < 0) {
                 if (errno == EINTR) {
                     continue;

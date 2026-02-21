@@ -157,8 +157,10 @@ struct http_response {
 /* Route handler callback */
 typedef void (*route_handler_t)(http_request_t *req, http_response_t *res);
 
-/* Middleware callback - return true to continue, false to stop */
-typedef bool (*middleware_fn_t)(http_request_t *req, http_response_t *res);
+/* Middleware callback - return true to continue, false to stop.
+ * The user_data parameter enables per-instance middleware state,
+ * allowing multiple instances of the same middleware type. */
+typedef bool (*middleware_fn_t)(http_request_t *req, http_response_t *res, void *user_data);
 
 /* JSON Value Types */
 typedef enum {
@@ -242,6 +244,17 @@ int router_add_route(router_t *router, http_method_t method, const char *path, r
  * @return 0 on success, -1 on failure
  */
 int router_use_middleware(router_t *router, middleware_fn_t middleware);
+
+/**
+ * Add middleware with per-instance user data to the router.
+ * This enables multiple instances of the same middleware type with
+ * different configurations (e.g., different rate limits per route group).
+ * @param router Router instance
+ * @param middleware Middleware function
+ * @param user_data Opaque pointer passed to middleware on each invocation
+ * @return 0 on success, -1 on failure
+ */
+int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware, void *user_data);
 
 /**
  * Route an incoming request
@@ -500,6 +513,19 @@ int event_loop_add_timeout(event_loop_t *loop, int timeout_ms, event_callback_t 
  */
 int event_loop_cancel_timeout(event_loop_t *loop, int timer_id);
 
+/**
+ * Get the current number of active timers
+ * @param loop Event loop instance
+ * @return Number of active timers, or -1 on failure
+ */
+int event_loop_get_timer_count(event_loop_t *loop);
+
+/**
+ * Get the maximum number of timers supported
+ * @return Maximum timer count (compile-time constant)
+ */
+int event_loop_get_max_timers(void);
+
 /* ===== Async HTTP Server API ===== */
 
 /**
@@ -575,6 +601,21 @@ int http_server_shutdown(http_server_t *server, int timeout_sec);
  * @return HTTP_SERVER_STOPPED, HTTP_SERVER_RUNNING, or HTTP_SERVER_DRAINING
  */
 int http_server_get_state(http_server_t *server);
+
+/**
+ * Set maximum active connections for the server
+ * @param server Server instance
+ * @param max_conn Maximum number of simultaneous connections (must be >= 1)
+ * @return 0 on success, -1 on failure
+ */
+int http_server_set_max_connections(http_server_t *server, int max_conn);
+
+/**
+ * Get the current number of active connections
+ * @param server Server instance
+ * @return Active connection count, or -1 on failure
+ */
+int http_server_get_active_connections(http_server_t *server);
 
 /* ===== WebSocket API ===== */
 

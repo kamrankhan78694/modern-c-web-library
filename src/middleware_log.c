@@ -43,17 +43,19 @@ static const char *_method_str(http_method_t m) {
 /**
  * @brief The actual middleware handler function
  */
-static bool _log_middleware_handler(http_request_t *req, http_response_t *res) {
+static bool _log_middleware_handler(http_request_t *req, http_response_t *res, void *user_data) {
     if (req == NULL) {
         return true;
     }
 
+    log_config_t *config = user_data ? (log_config_t *)user_data : &g_log_config;
+
     /* Only emit if request-level >= configured minimum */
-    if (LOG_LEVEL_INFO < g_log_config.level) {
+    if (LOG_LEVEL_INFO < config->level) {
         return true;
     }
 
-    FILE *out = g_log_config.output ? g_log_config.output : stderr;
+    FILE *out = config->output ? config->output : stderr;
 
     /* Format timestamp */
     time_t now = time(NULL);

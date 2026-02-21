@@ -532,14 +532,15 @@ static bool parse_basic_auth(const char *auth_header,
 /**
  * basic_auth_handler - Basic authentication middleware handler
  */
-static bool basic_auth_handler(http_request_t *req, http_response_t *res)
+static bool basic_auth_handler(http_request_t *req, http_response_t *res, void *user_data)
 {
+    basic_auth_config_t *config = user_data ? (basic_auth_config_t *)user_data : g_basic_auth_config;
     const char *auth_header;
     char username[256];
     char password[256];
     char www_auth[512];
 
-    if (!g_basic_auth_config) {
+    if (!config) {
         return false;
     }
 
@@ -553,8 +554,8 @@ static bool basic_auth_handler(http_request_t *req, http_response_t *res)
     }
 
     /* Verify credentials via callback */
-    if (!g_basic_auth_config->verify ||
-        !g_basic_auth_config->verify(username, password, g_basic_auth_config->user_data)) {
+    if (!config->verify ||
+        !config->verify(username, password, config->user_data)) {
         goto unauthorized;
     }
 
@@ -563,8 +564,8 @@ static bool basic_auth_handler(http_request_t *req, http_response_t *res)
 
 unauthorized:
     /* Set WWW-Authenticate header */
-    if (g_basic_auth_config->realm) {
-        snprintf(www_auth, sizeof(www_auth), "Basic realm=\"%s\"", g_basic_auth_config->realm);
+    if (config->realm) {
+        snprintf(www_auth, sizeof(www_auth), "Basic realm=\"%s\"", config->realm);
     } else {
         snprintf(www_auth, sizeof(www_auth), "Basic realm=\"Restricted\"");
     }
@@ -629,17 +630,18 @@ static apikey_auth_config_t *g_apikey_auth_config = NULL;
 /**
  * apikey_auth_handler - API Key authentication middleware handler
  */
-static bool apikey_auth_handler(http_request_t *req, http_response_t *res)
+static bool apikey_auth_handler(http_request_t *req, http_response_t *res, void *user_data)
 {
+    apikey_auth_config_t *config = user_data ? (apikey_auth_config_t *)user_data : g_apikey_auth_config;
     const char *header_name;
     const char *api_key;
 
-    if (!g_apikey_auth_config || !g_apikey_auth_config->verify) {
+    if (!config || !config->verify) {
         return false;
     }
 
-    header_name = g_apikey_auth_config->header_name ? 
-                  g_apikey_auth_config->header_name : "X-API-Key";
+    header_name = config->header_name ? 
+                  config->header_name : "X-API-Key";
 
     api_key = http_request_get_header(req, header_name);
     if (!api_key) {
@@ -648,7 +650,7 @@ static bool apikey_auth_handler(http_request_t *req, http_response_t *res)
     }
 
     /* Verify API key via callback */
-    if (!g_apikey_auth_config->verify(api_key, g_apikey_auth_config->user_data)) {
+    if (!config->verify(api_key, config->user_data)) {
         http_response_send_text(res, HTTP_FORBIDDEN, "403 Forbidden - Invalid API Key");
         return false;
     }
@@ -822,19 +824,20 @@ static bool parse_jwt_token(const char *token,
 /**
  * jwt_auth_handler - JWT authentication middleware handler
  */
-static bool jwt_auth_handler(http_request_t *req, http_response_t *res)
+static bool jwt_auth_handler(http_request_t *req, http_response_t *res, void *user_data)
 {
+    jwt_auth_config_t *config = user_data ? (jwt_auth_config_t *)user_data : g_jwt_auth_config;
     const char *header_name;
     const char *auth_header;
     const char *token;
     char payload[2048];
 
-    if (!g_jwt_auth_config || !g_jwt_auth_config->secret) {
+    if (!config || !config->secret) {
         return false;
     }
 
-    header_name = g_jwt_auth_config->header_name ? 
-                  g_jwt_auth_config->header_name : "Authorization";
+    header_name = config->header_name ? 
+                  config->header_name : "Authorization";
 
     auth_header = http_request_get_header(req, header_name);
     if (!auth_header) {
@@ -859,8 +862,8 @@ static bool jwt_auth_handler(http_request_t *req, http_response_t *res)
 
     /* Parse and verify JWT */
     if (!parse_jwt_token(token,
-                        (const uint8_t *)g_jwt_auth_config->secret,
-                        g_jwt_auth_config->secret_len,
+                        (const uint8_t *)config->secret,
+                        config->secret_len,
                         payload, sizeof(payload))) {
         goto unauthorized;
     }

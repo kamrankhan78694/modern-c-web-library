@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <signal.h>
 
 /* Test counter */
 static int tests_run = 0;
@@ -840,7 +841,7 @@ void test_cors_handler(void) {
     /* Test: Request without Origin header should pass through */
     http_request_t req = {0};
     http_response_t res = {0};
-    bool result = mw(&req, &res);
+    bool result = mw(&req, &res, NULL);
     ASSERT(result == true);  /* Continue chain */
 
     cors_middleware_destroy();
@@ -948,7 +949,7 @@ void test_static_file_serve(void) {
     req.path = strdup("/test_weblib_static.txt");
 
     http_response_t res = {0};
-    bool result = mw(&req, &res);
+    bool result = mw(&req, &res, NULL);
     ASSERT(result == false);  /* File served, stop chain */
     ASSERT(res.status == HTTP_OK);
     ASSERT(res.body != NULL);
@@ -987,7 +988,7 @@ void test_static_file_not_found(void) {
     req.path = strdup("/nonexistent_file_xyz.txt");
 
     http_response_t res = {0};
-    bool result = mw(&req, &res);
+    bool result = mw(&req, &res, NULL);
     ASSERT(result == true);  /* File not found, continue chain */
 
     free(req.path);
@@ -1017,7 +1018,7 @@ void test_static_file_path_traversal(void) {
     req.path = strdup("/../etc/passwd");
 
     http_response_t res = {0};
-    bool result = mw(&req, &res);
+    bool result = mw(&req, &res, NULL);
     ASSERT(result == true);  /* Path traversal blocked, continue chain */
 
     free(req.path);
@@ -2043,11 +2044,11 @@ void test_log_middleware_invoke(void) {
     memset(&res, 0, sizeof(res));
 
     /* Should return true (continue chain) */
-    bool cont = fn(&req, &res);
+    bool cont = fn(&req, &res, NULL);
     ASSERT(cont == true);
 
     /* NULL inputs should not crash */
-    cont = fn(NULL, NULL);
+    cont = fn(NULL, NULL, NULL);
     ASSERT(cont == true);
 
     log_middleware_destroy();
@@ -2146,7 +2147,7 @@ void test_csrf_safe_methods(void) {
     /* fn will try to set a cookie via http_response_set_cookie which requires
        a real response header list — for simplicity we just verify it returns true
        and does not crash. */
-    bool cont = fn(&req, &res);
+    bool cont = fn(&req, &res, NULL);
     ASSERT(cont == true);
 
     csrf_middleware_destroy();
@@ -3091,6 +3092,213 @@ void test_benchmark_integration(void) {
     PASS();
 }
 
+/* Phase 10: Bug fix tests */
+
+/* Test SIGPIPE handling (BUG-1) — verify server creates without crash */
+void test_sigpipe_handling(void) {
+    TEST("BUG-1: SIGPIPE handling");
+    
+    /* Creating the server should set SIGPIPE to SIG_IGN */
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    
+    /* Verify SIGPIPE is ignored (sigaction check) */
+#ifndef _WIN32
+    struct sigaction sa;
+    sigaction(SIGPIPE, NULL, &sa);
+    ASSERT(sa.sa_handler == SIG_IGN);
+#endif
+    
+    http_server_destroy(server);
+    PASS();
+}
+
+/* Test session store thread safety (BUG-2) — verify mutex init/destroy */
+void test_session_store_thread_safety(void) {
+    TEST("BUG-2: session store thread safety");
+    
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    
+    /* Create multiple sessions concurrently safe */
+    char *sid1 = session_create(store, 3600);
+    ASSERT(sid1 != NULL);
+    char *sid2 = session_create(store, 3600);
+    ASSERT(sid2 != NULL);
+    
+    /* Sessions should have different IDs */
+    ASSERT(strcmp(sid1, sid2) != 0);
+    
+    /* Both should be retrievable */
+    ASSERT(session_get(store, sid1) != NULL);
+    ASSERT(session_get(store, sid2) != NULL);
+    
+    /* Destroy one, other should still exist */
+    session_destroy(store, sid1);
+    ASSERT(session_get(store, sid1) == NULL);
+    ASSERT(session_get(store, sid2) != NULL);
+    
+    free(sid1);
+    free(sid2);
+    session_store_destroy(store);
+    PASS();
+}
+
+/* Test event_loop timer count query (BUG-5) */
+void test_event_loop_timer_count(void) {
+    TEST("BUG-5: event_loop timer count query");
+    
+    event_loop_t *loop = event_loop_create();
+    ASSERT(loop != NULL);
+    
+    /* Initially no timers */
+    ASSERT(event_loop_get_timer_count(loop) == 0);
+    
+    /* Max timers should be 64 */
+    ASSERT(event_loop_get_max_timers() == 64);
+    
+    /* Add a timer */
+    int id = event_loop_add_timeout(loop, 10000, dummy_event_callback, NULL);
+    ASSERT(id > 0);
+    ASSERT(event_loop_get_timer_count(loop) == 1);
+    
+    /* NULL loop should return -1 */
+    ASSERT(event_loop_get_timer_count(NULL) == -1);
+    
+    event_loop_destroy(loop);
+    PASS();
+}
+
+/* Test active connection tracking (BUG-6) */
+void test_server_connection_tracking(void) {
+    TEST("BUG-6: server connection tracking");
+    
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    
+    /* Initially 0 active connections */
+    ASSERT(http_server_get_active_connections(server) == 0);
+    
+    /* Set max connections */
+    ASSERT(http_server_set_max_connections(server, 50) == 0);
+    
+    /* Invalid values should fail */
+    ASSERT(http_server_set_max_connections(server, 0) == -1);
+    ASSERT(http_server_set_max_connections(server, -1) == -1);
+    ASSERT(http_server_set_max_connections(NULL, 50) == -1);
+    
+    /* NULL server should return -1 */
+    ASSERT(http_server_get_active_connections(NULL) == -1);
+    
+    http_server_destroy(server);
+    PASS();
+}
+
+/* BUG-4 fix test: middleware user_data support */
+static int _counter_a = 0;
+static int _counter_b = 0;
+
+/* Single middleware function that uses user_data to select which counter to increment.
+ * By using the SAME function with DIFFERENT user_data, we prove per-instance isolation. */
+static bool _counting_middleware(http_request_t *req, http_response_t *res, void *user_data) {
+    (void)req; (void)res;
+    int *counter = (int *)user_data;
+    if (counter) (*counter)++;
+    return true;
+}
+
+void test_middleware_user_data(void) {
+    TEST("BUG-4: middleware user_data (multiple instances)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    /* Register the SAME middleware function twice with DIFFERENT user_data
+     * — this was impossible before BUG-4 fix (singleton pattern). */
+    _counter_a = 0;
+    _counter_b = 0;
+    ASSERT(router_use_middleware_with_data(router, _counting_middleware, &_counter_a) == 0);
+    ASSERT(router_use_middleware_with_data(router, _counting_middleware, &_counter_b) == 0);
+
+    /* Add a dummy route */
+    router_add_route(router, HTTP_GET, "/test", dummy_handler);
+
+    /* Simulate a request */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/test";
+    http_response_t res = {0};
+    router_route(router, &req, &res);
+
+    /* Both counters should have been incremented exactly once — proving isolation */
+    ASSERT(_counter_a == 1);
+    ASSERT(_counter_b == 1);
+
+    /* Route again — each middleware instance runs independently */
+    res.sent = false;
+    res.status = 0;
+    _test_free_header_list(res.headers);
+    res.headers = NULL;
+    free(res.body);
+    res.body = NULL;
+    res.body_length = 0;
+    router_route(router, &req, &res);
+    ASSERT(_counter_a == 2);
+    ASSERT(_counter_b == 2);
+
+    _test_free_header_list(res.headers);
+    free(res.body);
+    router_destroy(router);
+    PASS();
+}
+
+void test_middleware_null_user_data(void) {
+    TEST("BUG-4: middleware NULL user_data (backward compat)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    /* Register middleware via old API (NULL user_data) — backward compat */
+    _counter_a = 0;
+    ASSERT(router_use_middleware(router, _counting_middleware) == 0);
+
+    router_add_route(router, HTTP_GET, "/test2", dummy_handler);
+
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/test2";
+    http_response_t res = {0};
+    router_route(router, &req, &res);
+
+    /* Counter should NOT increment since user_data is NULL */
+    ASSERT(_counter_a == 0);
+
+    _test_free_header_list(res.headers);
+    free(res.body);
+    router_destroy(router);
+    PASS();
+}
+
+void test_middleware_global_fallback(void) {
+    TEST("BUG-4: CORS global fallback (backward compat)");
+
+    /* Set up global CORS config via old API */
+    cors_options_t opts = {0};
+    opts.max_age = 3600;
+    middleware_fn_t mw = cors_middleware_create(&opts);
+    ASSERT(mw != NULL);
+
+    /* Call via old pattern (NULL user_data) — should use global */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    http_response_t res = {0};
+    bool result = mw(&req, &res, NULL);
+    ASSERT(result == true);  /* No Origin header → passes through */
+
+    cors_middleware_destroy();
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -3278,6 +3486,17 @@ int main(void) {
     test_benchmark_stats();
     test_benchmark_print();
     test_benchmark_integration();
+
+    /* Phase 10: Bug fix tests */
+    test_sigpipe_handling();
+    test_session_store_thread_safety();
+    test_event_loop_timer_count();
+    test_server_connection_tracking();
+
+    /* BUG-4: Middleware user_data support */
+    test_middleware_user_data();
+    test_middleware_null_user_data();
+    test_middleware_global_fallback();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

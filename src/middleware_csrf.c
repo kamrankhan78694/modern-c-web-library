@@ -72,14 +72,14 @@ static void _fill_random(unsigned char *buf, size_t len) {
     }
 #endif
     /* Last-resort fallback: weak PRNG — only when no OS CSPRNG is available.
-       This path should never be reached on modern Linux/macOS/Windows. */
-    static unsigned long seed_state = 0;
+       This path should never be reached on modern Linux/macOS/Windows.
+       Uses rand_r() with thread-local seed for thread safety. */
+    static __thread unsigned int seed_state = 0;
     if (seed_state == 0) {
-        seed_state = (unsigned long)time(NULL) ^ (unsigned long)(size_t)buf;
-        srand((unsigned int)seed_state);
+        seed_state = (unsigned int)time(NULL) ^ (unsigned int)(size_t)buf;
     }
     for (size_t i = 0; i < len; i++) {
-        buf[i] = (unsigned char)(rand() & 0xFF);
+        buf[i] = (unsigned char)(rand_r(&seed_state) & 0xFF);
     }
 }
 
@@ -129,7 +129,8 @@ static bool _ct_strcmp(const char *a, const char *b) {
 
 /* ── Middleware handler ───────────────────────────────────────────────────── */
 
-static bool _csrf_middleware_handler(http_request_t *req, http_response_t *res) {
+static bool _csrf_middleware_handler(http_request_t *req, http_response_t *res, void *user_data) {
+    (void)user_data;
     if (!req || !res) return true;
 
     /* Safe methods bypass CSRF check */

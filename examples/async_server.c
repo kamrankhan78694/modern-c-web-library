@@ -67,8 +67,9 @@ void handle_info(http_request_t *req, http_response_t *res) {
 }
 
 /* Middleware example - logging */
-bool logging_middleware(http_request_t *req, http_response_t *res) {
+bool logging_middleware(http_request_t *req, http_response_t *res, void *user_data) {
     (void)res;
+    (void)user_data;
     
     const char *method_str = "UNKNOWN";
     switch (req->method) {

@@ -53,17 +53,23 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Run unit tests
+      - name: Run all tests (ctest)
         run: |
           cd build
-          ./tests/test_weblib
+          ctest --output-on-failure --timeout 120
 
       - name: Valgrind memory check (Linux gcc only)
         if: runner.os == 'Linux' && matrix.compiler == 'gcc'
         run: |
           cd build
-          valgrind \
-            --leak-check=full \
-            --error-exitcode=1 \
-            --show-leak-kinds=definite,indirect \
-            ./tests/test_weblib
+          # Run valgrind on every test binary discovered in the tests/ dir
+          for test_bin in tests/test_*; do
+            if [ -x "$test_bin" ]; then
+              echo "=== Valgrind: $test_bin ==="
+              valgrind \
+                --leak-check=full \
+                --error-exitcode=1 \
+                --show-leak-kinds=definite,indirect \
+                ./"$test_bin"
+            fi
+          done
