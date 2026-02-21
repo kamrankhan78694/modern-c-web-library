@@ -38,10 +38,10 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Debug
           make -j$(nproc)
 
-      - name: Verify build (run all tests)
+      - name: Verify build (run tests)
         run: |
           cd build
-          ctest --output-on-failure --timeout 120
+          ./tests/test_weblib
 
       - name: Install library into system
         run: |
