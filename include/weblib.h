@@ -157,8 +157,10 @@ struct http_response {
 /* Route handler callback */
 typedef void (*route_handler_t)(http_request_t *req, http_response_t *res);
 
-/* Middleware callback - return true to continue, false to stop */
-typedef bool (*middleware_fn_t)(http_request_t *req, http_response_t *res);
+/* Middleware callback - return true to continue, false to stop.
+ * The user_data parameter enables per-instance middleware state,
+ * allowing multiple instances of the same middleware type. */
+typedef bool (*middleware_fn_t)(http_request_t *req, http_response_t *res, void *user_data);
 
 /* JSON Value Types */
 typedef enum {
@@ -242,6 +244,17 @@ int router_add_route(router_t *router, http_method_t method, const char *path, r
  * @return 0 on success, -1 on failure
  */
 int router_use_middleware(router_t *router, middleware_fn_t middleware);
+
+/**
+ * Add middleware with per-instance user data to the router.
+ * This enables multiple instances of the same middleware type with
+ * different configurations (e.g., different rate limits per route group).
+ * @param router Router instance
+ * @param middleware Middleware function
+ * @param user_data Opaque pointer passed to middleware on each invocation
+ * @return 0 on success, -1 on failure
+ */
+int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware, void *user_data);
 
 /**
  * Route an incoming request

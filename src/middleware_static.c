@@ -240,7 +240,8 @@ static char *_read_file(const char *filepath, size_t *out_size) {
 /**
  * Static file serving middleware handler
  */
-static bool _static_file_handler(http_request_t *req, http_response_t *res) {
+static bool _static_file_handler(http_request_t *req, http_response_t *res, void *user_data) {
+    (void)user_data;
     if (!req || !res || !_static_config.initialized) {
         return true;  /* Continue to next middleware */
     }

@@ -63,16 +63,16 @@ static bool _is_origin_allowed(const char *origin, const char **allowed_origins)
  * @param origin The request origin (if allowed)
  * @param is_preflight Whether this is a preflight request
  */
-static void _set_cors_headers(http_response_t *res, const char *origin, bool is_preflight) {
-    if (res == NULL || g_cors_config == NULL) {
+static void _set_cors_headers(http_response_t *res, const char *origin, bool is_preflight, const cors_options_t *config) {
+    if (res == NULL || config == NULL) {
         return;
     }
 
     /* Set Access-Control-Allow-Origin */
-    if (g_cors_config->allowed_origins == NULL) {
+    if (config->allowed_origins == NULL) {
         /* Wildcard mode: when credentials are allowed, must echo specific origin
          * (browsers reject Access-Control-Allow-Origin: * with credentials) */
-        if (g_cors_config->allow_credentials && origin != NULL) {
+        if (config->allow_credentials && origin != NULL) {
             http_response_set_header(res, "Access-Control-Allow-Origin", origin);
             http_response_set_header(res, "Vary", "Origin");
         } else {
@@ -86,28 +86,28 @@ static void _set_cors_headers(http_response_t *res, const char *origin, bool is_
     }
 
     /* Set Access-Control-Allow-Credentials if enabled */
-    if (g_cors_config->allow_credentials) {
+    if (config->allow_credentials) {
         http_response_set_header(res, "Access-Control-Allow-Credentials", "true");
     }
 
     /* For preflight requests, set additional headers */
     if (is_preflight) {
         /* Set Access-Control-Allow-Methods */
-        const char *methods = g_cors_config->allowed_methods;
+        const char *methods = config->allowed_methods;
         if (_is_empty(methods)) {
             methods = DEFAULT_ALLOWED_METHODS;
         }
         http_response_set_header(res, "Access-Control-Allow-Methods", methods);
 
         /* Set Access-Control-Allow-Headers */
-        const char *headers = g_cors_config->allowed_headers;
+        const char *headers = config->allowed_headers;
         if (_is_empty(headers)) {
             headers = DEFAULT_ALLOWED_HEADERS;
         }
         http_response_set_header(res, "Access-Control-Allow-Headers", headers);
 
         /* Set Access-Control-Max-Age */
-        int max_age = g_cors_config->max_age;
+        int max_age = config->max_age;
         if (max_age <= 0) {
             max_age = DEFAULT_MAX_AGE;
         }
@@ -116,9 +116,9 @@ static void _set_cors_headers(http_response_t *res, const char *origin, bool is_
         http_response_set_header(res, "Access-Control-Max-Age", max_age_str);
     } else {
         /* For regular requests, set Access-Control-Expose-Headers if configured */
-        if (!_is_empty(g_cors_config->expose_headers)) {
+        if (!_is_empty(config->expose_headers)) {
             http_response_set_header(res, "Access-Control-Expose-Headers", 
-                                   g_cors_config->expose_headers);
+                                   config->expose_headers);
         }
     }
 }
@@ -129,8 +129,9 @@ static void _set_cors_headers(http_response_t *res, const char *origin, bool is_
  * @param res The HTTP response
  * @return true to continue the middleware chain, false to stop
  */
-static bool _cors_middleware_handler(http_request_t *req, http_response_t *res) {
-    if (req == NULL || res == NULL || g_cors_config == NULL) {
+static bool _cors_middleware_handler(http_request_t *req, http_response_t *res, void *user_data) {
+    cors_options_t *config = user_data ? (cors_options_t *)user_data : g_cors_config;
+    if (req == NULL || res == NULL || config == NULL) {
         return true; /* Continue chain on invalid input */
     }
 
@@ -143,7 +144,7 @@ static bool _cors_middleware_handler(http_request_t *req, http_response_t *res) 
     }
 
     /* Check if the origin is allowed */
-    bool origin_allowed = _is_origin_allowed(origin, g_cors_config->allowed_origins);
+    bool origin_allowed = _is_origin_allowed(origin, config->allowed_origins);
     
     /* If origin is not allowed, continue without setting CORS headers */
     if (!origin_allowed) {
@@ -158,14 +159,14 @@ static bool _cors_middleware_handler(http_request_t *req, http_response_t *res) 
 
     if (is_preflight) {
         /* This is a preflight request */
-        _set_cors_headers(res, origin, true);
+        _set_cors_headers(res, origin, true, config);
         
         /* Send 204 No Content response and stop the middleware chain */
         http_response_send_text(res, HTTP_NO_CONTENT, "");
         return false; /* Stop middleware chain */
     } else {
         /* Regular CORS request */
-        _set_cors_headers(res, origin, false);
+        _set_cors_headers(res, origin, false, config);
         return true; /* Continue middleware chain */
     }
 }

@@ -238,8 +238,8 @@ static void _set_ratelimit_headers(http_response_t *res,
 /*
  * Rate limiting middleware function
  */
-static bool _ratelimit_middleware(http_request_t *req, http_response_t *res) {
-    ratelimiter_t *limiter = g_ratelimiter;
+static bool _ratelimit_middleware(http_request_t *req, http_response_t *res, void *user_data) {
+    ratelimiter_t *limiter = user_data ? (ratelimiter_t *)user_data : g_ratelimiter;
     
     if (limiter == NULL) {
         /* No limiter configured, allow request */

@@ -77,8 +77,9 @@ void handle_not_found(http_request_t *req, http_response_t *res) {
 }
 
 /* Middleware example - logging */
-bool logging_middleware(http_request_t *req, http_response_t *res) {
+bool logging_middleware(http_request_t *req, http_response_t *res, void *user_data) {
     (void)res;
+    (void)user_data;
     
     const char *method_str = "UNKNOWN";
     switch (req->method) {
@@ -97,8 +98,9 @@ bool logging_middleware(http_request_t *req, http_response_t *res) {
 }
 
 /* Middleware example - CORS headers */
-bool cors_middleware(http_request_t *req, http_response_t *res) {
+bool cors_middleware(http_request_t *req, http_response_t *res, void *user_data) {
     (void)req;
+    (void)user_data;
     
     http_response_set_header(res, "Access-Control-Allow-Origin", "*");
     http_response_set_header(res, "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");

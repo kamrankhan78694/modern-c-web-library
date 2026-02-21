@@ -58,9 +58,10 @@ static void dummy_handler(http_request_t *req, http_response_t *res) {
 }
 
 /* Dummy middleware */
-static bool dummy_middleware(http_request_t *req, http_response_t *res) {
+static bool dummy_middleware(http_request_t *req, http_response_t *res, void *user_data) {
     (void)req;
     (void)res;
+    (void)user_data;
     return true;  /* Continue to next handler */
 }
 

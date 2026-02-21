@@ -19,6 +19,7 @@ struct router {
     route_t routes[MAX_ROUTES];
     size_t route_count;
     middleware_fn_t middlewares[MAX_MIDDLEWARES];
+    void *middleware_data[MAX_MIDDLEWARES];
     size_t middleware_count;
 };
 
@@ -67,6 +68,11 @@ int router_add_route(router_t *router, http_method_t method, const char *path, r
 
 /* Add middleware */
 int router_use_middleware(router_t *router, middleware_fn_t middleware) {
+    return router_use_middleware_with_data(router, middleware, NULL);
+}
+
+/* Add middleware with per-instance data */
+int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware, void *user_data) {
     if (!router || !middleware) {
         return -1;
     }
@@ -77,6 +83,7 @@ int router_use_middleware(router_t *router, middleware_fn_t middleware) {
     }
     
     router->middlewares[router->middleware_count] = middleware;
+    router->middleware_data[router->middleware_count] = user_data;
     router->middleware_count++;
     
     return 0;
@@ -90,7 +97,7 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res) {
     
     /* Execute middlewares */
     for (size_t i = 0; i < router->middleware_count; i++) {
-        if (!router->middlewares[i](req, res)) {
+        if (!router->middlewares[i](req, res, router->middleware_data[i])) {
             /* Middleware stopped the chain */
             return 0;
         }

@@ -14,7 +14,7 @@
 | 1 | **Critical** | HTTP Server | **Fixed** | No SIGPIPE handling — server process can crash on client disconnect |
 | 2 | **High** | Session Store | **Fixed** | Session store is not thread-safe — data races in multi-threaded mode |
 | 3 | **Medium** | Session / CSRF | **Fixed** | `rand()` fallback is not thread-safe and cryptographically weak |
-| 4 | **Low** | Middleware | Open | All middleware types use global singletons — only one instance per type |
+| 4 | **Low** | Middleware | **Fixed** | All middleware types use global singletons — only one instance per type |
 | 5 | **Low** | Event Loop | **Fixed** | Timer limit of 64 is hard-coded with no runtime feedback beyond -1 return |
 | 6 | **Info** | HTTP Server | **Fixed** | No HTTP keep-alive connection limit — could exhaust file descriptors |
 
@@ -107,11 +107,12 @@ Use `rand_r()` (thread-safe) or per-thread seed storage instead of global `rand(
 
 ---
 
-### BUG-4: Middleware Singleton Pattern Limitation (Low)
+### BUG-4: Middleware Singleton Pattern Limitation (Low) — ✅ FIXED
 
 **Component:** All middleware implementations
 **Severity:** Low — design limitation, not a crash bug
 **Discovered:** Architecture analysis during stress testing
+**Fixed:** Added `void *user_data` parameter to `middleware_fn_t` signature and router infrastructure. All middleware handlers now accept per-instance context via user_data, while maintaining backward compatibility through global fallback when user_data is NULL. Added `router_use_middleware_with_data()` API for registering middleware with per-instance state.
 
 **Description:**
 All middleware types (CORS, rate limiting, static files, auth, logging, error handler, CSRF, metrics) use global static variables to store their configuration. This means only one instance of each middleware type can exist at a time. Calling `*_middleware_create()` a second time overwrites the first configuration.

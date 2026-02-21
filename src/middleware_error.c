@@ -113,7 +113,8 @@ void error_handler_apply(http_request_t *req, http_response_t *res) {
  * Note: Errors produced by the route handler itself still require an explicit
  * call to error_handler_apply() from user code or from server-side send logic.
  */
-static bool _error_handler_middleware(http_request_t *req, http_response_t *res) {
+static bool _error_handler_middleware(http_request_t *req, http_response_t *res, void *user_data) {
+    (void)user_data;
     if (res != NULL) {
         error_handler_apply(req, res);
     }

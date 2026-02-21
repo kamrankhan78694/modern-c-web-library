@@ -129,7 +129,8 @@ static bool _ct_strcmp(const char *a, const char *b) {
 
 /* ── Middleware handler ───────────────────────────────────────────────────── */
 
-static bool _csrf_middleware_handler(http_request_t *req, http_response_t *res) {
+static bool _csrf_middleware_handler(http_request_t *req, http_response_t *res, void *user_data) {
+    (void)user_data;
     if (!req || !res) return true;
 
     /* Safe methods bypass CSRF check */

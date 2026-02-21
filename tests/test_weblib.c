@@ -841,7 +841,7 @@ void test_cors_handler(void) {
     /* Test: Request without Origin header should pass through */
     http_request_t req = {0};
     http_response_t res = {0};
-    bool result = mw(&req, &res);
+    bool result = mw(&req, &res, NULL);
     ASSERT(result == true);  /* Continue chain */
 
     cors_middleware_destroy();
@@ -949,7 +949,7 @@ void test_static_file_serve(void) {
     req.path = strdup("/test_weblib_static.txt");
 
     http_response_t res = {0};
-    bool result = mw(&req, &res);
+    bool result = mw(&req, &res, NULL);
     ASSERT(result == false);  /* File served, stop chain */
     ASSERT(res.status == HTTP_OK);
     ASSERT(res.body != NULL);
@@ -988,7 +988,7 @@ void test_static_file_not_found(void) {
     req.path = strdup("/nonexistent_file_xyz.txt");
 
     http_response_t res = {0};
-    bool result = mw(&req, &res);
+    bool result = mw(&req, &res, NULL);
     ASSERT(result == true);  /* File not found, continue chain */
 
     free(req.path);
@@ -1018,7 +1018,7 @@ void test_static_file_path_traversal(void) {
     req.path = strdup("/../etc/passwd");
 
     http_response_t res = {0};
-    bool result = mw(&req, &res);
+    bool result = mw(&req, &res, NULL);
     ASSERT(result == true);  /* Path traversal blocked, continue chain */
 
     free(req.path);
@@ -2044,11 +2044,11 @@ void test_log_middleware_invoke(void) {
     memset(&res, 0, sizeof(res));
 
     /* Should return true (continue chain) */
-    bool cont = fn(&req, &res);
+    bool cont = fn(&req, &res, NULL);
     ASSERT(cont == true);
 
     /* NULL inputs should not crash */
-    cont = fn(NULL, NULL);
+    cont = fn(NULL, NULL, NULL);
     ASSERT(cont == true);
 
     log_middleware_destroy();
@@ -2147,7 +2147,7 @@ void test_csrf_safe_methods(void) {
     /* fn will try to set a cookie via http_response_set_cookie which requires
        a real response header list — for simplicity we just verify it returns true
        and does not crash. */
-    bool cont = fn(&req, &res);
+    bool cont = fn(&req, &res, NULL);
     ASSERT(cont == true);
 
     csrf_middleware_destroy();
@@ -3194,6 +3194,95 @@ void test_server_connection_tracking(void) {
     PASS();
 }
 
+/* BUG-4 fix test: middleware user_data support */
+static int _counter_a = 0;
+static int _counter_b = 0;
+
+static bool _counting_middleware_a(http_request_t *req, http_response_t *res, void *user_data) {
+    (void)req; (void)res;
+    int *counter = (int *)user_data;
+    if (counter) (*counter)++;
+    return true;
+}
+
+static bool _counting_middleware_b(http_request_t *req, http_response_t *res, void *user_data) {
+    (void)req; (void)res;
+    int *counter = (int *)user_data;
+    if (counter) (*counter)++;
+    return true;
+}
+
+void test_middleware_user_data(void) {
+    TEST("BUG-4: middleware user_data (multiple instances)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    /* Register two middleware instances with different user_data */
+    _counter_a = 0;
+    _counter_b = 0;
+    ASSERT(router_use_middleware_with_data(router, _counting_middleware_a, &_counter_a) == 0);
+    ASSERT(router_use_middleware_with_data(router, _counting_middleware_b, &_counter_b) == 0);
+
+    /* Add a dummy route */
+    router_add_route(router, HTTP_GET, "/test", dummy_handler);
+
+    /* Simulate a request */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/test";
+    http_response_t res = {0};
+    router_route(router, &req, &res);
+
+    /* Both counters should have been incremented once */
+    ASSERT(_counter_a == 1);
+    ASSERT(_counter_b == 1);
+
+    /* Route again — counters should increment again */
+    res.sent = false;
+    res.status = 0;
+    _test_free_header_list(res.headers);
+    res.headers = NULL;
+    free(res.body);
+    res.body = NULL;
+    res.body_length = 0;
+    router_route(router, &req, &res);
+    ASSERT(_counter_a == 2);
+    ASSERT(_counter_b == 2);
+
+    _test_free_header_list(res.headers);
+    free(res.body);
+    router_destroy(router);
+    PASS();
+}
+
+void test_middleware_null_user_data(void) {
+    TEST("BUG-4: middleware NULL user_data (backward compat)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    /* Register middleware via old API (NULL user_data) */
+    _counter_a = 0;
+    ASSERT(router_use_middleware(router, _counting_middleware_a) == 0);
+
+    router_add_route(router, HTTP_GET, "/test2", dummy_handler);
+
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/test2";
+    http_response_t res = {0};
+    router_route(router, &req, &res);
+
+    /* Counter should NOT increment since user_data is NULL */
+    ASSERT(_counter_a == 0);
+
+    _test_free_header_list(res.headers);
+    free(res.body);
+    router_destroy(router);
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -3387,6 +3476,10 @@ int main(void) {
     test_session_store_thread_safety();
     test_event_loop_timer_count();
     test_server_connection_tracking();
+
+    /* BUG-4: Middleware user_data support */
+    test_middleware_user_data();
+    test_middleware_null_user_data();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

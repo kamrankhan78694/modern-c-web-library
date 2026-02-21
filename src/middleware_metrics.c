@@ -28,8 +28,9 @@ typedef struct metrics_data {
 static metrics_data_t *_metrics = NULL;
 
 /* Internal middleware function implementation */
-static bool _metrics_middleware(http_request_t *req, http_response_t *res) {
+static bool _metrics_middleware(http_request_t *req, http_response_t *res, void *user_data) {
     (void)res;
+    (void)user_data;
     if (!_metrics)
         return true;
     
