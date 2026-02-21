@@ -50,7 +50,7 @@ This document explicitly records architectural decisions, trade-offs, and known 
 
 ### High Priority
 
-1. **Integration test coverage** — Phase 7.5 added basic networking tests (GET, POST, 404, malformed, sequential connections).  Missing: keep-alive pipelining, chunked transfer encoding over sockets, concurrent parallel connections stress test, and timeout behavior tests.
+1. **Integration test coverage** — Phase 7.5 added basic networking tests (GET, POST, 404, malformed, sequential connections).  Missing: keep-alive pipelining, chunked transfer encoding over sockets, and timeout behavior tests.  Concurrent parallel connections stress test was added in Phase 10.
 
 2. **Memory leak on error paths** — Some HTTP parsing error paths may leak partial header allocations.  Valgrind CI gate catches definite/indirect leaks, but conditional leaks under extreme error conditions need additional audit.
 
@@ -62,7 +62,7 @@ This document explicitly records architectural decisions, trade-offs, and known 
 
 5. **Rate limiter uses linear scan** — IP tracking in the rate limiter uses a fixed-size array with linear search.  This is O(n) per request where n is the number of tracked IPs.  A hash table would improve performance under high cardinality.
 
-6. **No HTTP/1.1 keep-alive support** — Each request opens a new TCP connection.  The server does not reuse connections for multiple requests, which increases latency and resource usage.
+6. ~~**No HTTP/1.1 keep-alive support**~~ — **RESOLVED** (Phase 7).  The parser detects HTTP/1.1 `Connection: keep-alive` and loops within `handle_connection()` to serve multiple requests per TCP connection.
 
 7. **Template engine is basic** — Only supports `{{ variable }}` substitution.  No conditionals, loops, or includes.  Adequate for simple pages but not for complex rendering.
 
@@ -72,7 +72,7 @@ This document explicitly records architectural decisions, trade-offs, and known 
 
 9. **JSON parser does not validate UTF-8** — The JSON parser accepts and produces strings but does not validate that they contain valid UTF-8 sequences.  Invalid UTF-8 passes through unmodified.
 
-10. **No response compression** — Responses are sent uncompressed.  gzip/deflate support is planned (Phase 9).
+10. ~~**No response compression**~~ — **RESOLVED** (Phase 9).  Pure C gzip compression (RFC 1951/1952) is implemented with `Accept-Encoding` content negotiation.
 
 11. **Static file serving has no byte-range resume** — Range request headers are not honoured for partial content delivery.
 

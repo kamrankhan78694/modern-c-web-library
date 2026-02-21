@@ -16,5 +16,9 @@ target_link_libraries(websocket_echo_server weblib ${PLATFORM_LIBS})
 add_executable(async_websocket_echo_server async_websocket_echo_server.c)
 target_link_libraries(async_websocket_echo_server weblib ${PLATFORM_LIBS})
 
+# REST API server example
+add_executable(rest_api_server rest_api_server.c)
+target_link_libraries(rest_api_server weblib ${PLATFORM_LIBS})
+
 # Installation
-install(TARGETS simple_server async_server websocket_echo_server async_websocket_echo_server DESTINATION bin)
+install(TARGETS simple_server async_server websocket_echo_server async_websocket_echo_server rest_api_server DESTINATION bin)
