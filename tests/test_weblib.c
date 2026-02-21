@@ -3198,14 +3198,9 @@ void test_server_connection_tracking(void) {
 static int _counter_a = 0;
 static int _counter_b = 0;
 
-static bool _counting_middleware_a(http_request_t *req, http_response_t *res, void *user_data) {
-    (void)req; (void)res;
-    int *counter = (int *)user_data;
-    if (counter) (*counter)++;
-    return true;
-}
-
-static bool _counting_middleware_b(http_request_t *req, http_response_t *res, void *user_data) {
+/* Single middleware function that uses user_data to select which counter to increment.
+ * By using the SAME function with DIFFERENT user_data, we prove per-instance isolation. */
+static bool _counting_middleware(http_request_t *req, http_response_t *res, void *user_data) {
     (void)req; (void)res;
     int *counter = (int *)user_data;
     if (counter) (*counter)++;
@@ -3218,11 +3213,12 @@ void test_middleware_user_data(void) {
     router_t *router = router_create();
     ASSERT(router != NULL);
 
-    /* Register two middleware instances with different user_data */
+    /* Register the SAME middleware function twice with DIFFERENT user_data
+     * — this was impossible before BUG-4 fix (singleton pattern). */
     _counter_a = 0;
     _counter_b = 0;
-    ASSERT(router_use_middleware_with_data(router, _counting_middleware_a, &_counter_a) == 0);
-    ASSERT(router_use_middleware_with_data(router, _counting_middleware_b, &_counter_b) == 0);
+    ASSERT(router_use_middleware_with_data(router, _counting_middleware, &_counter_a) == 0);
+    ASSERT(router_use_middleware_with_data(router, _counting_middleware, &_counter_b) == 0);
 
     /* Add a dummy route */
     router_add_route(router, HTTP_GET, "/test", dummy_handler);
@@ -3234,11 +3230,11 @@ void test_middleware_user_data(void) {
     http_response_t res = {0};
     router_route(router, &req, &res);
 
-    /* Both counters should have been incremented once */
+    /* Both counters should have been incremented exactly once — proving isolation */
     ASSERT(_counter_a == 1);
     ASSERT(_counter_b == 1);
 
-    /* Route again — counters should increment again */
+    /* Route again — each middleware instance runs independently */
     res.sent = false;
     res.status = 0;
     _test_free_header_list(res.headers);
@@ -3262,9 +3258,9 @@ void test_middleware_null_user_data(void) {
     router_t *router = router_create();
     ASSERT(router != NULL);
 
-    /* Register middleware via old API (NULL user_data) */
+    /* Register middleware via old API (NULL user_data) — backward compat */
     _counter_a = 0;
-    ASSERT(router_use_middleware(router, _counting_middleware_a) == 0);
+    ASSERT(router_use_middleware(router, _counting_middleware) == 0);
 
     router_add_route(router, HTTP_GET, "/test2", dummy_handler);
 
@@ -3280,6 +3276,26 @@ void test_middleware_null_user_data(void) {
     _test_free_header_list(res.headers);
     free(res.body);
     router_destroy(router);
+    PASS();
+}
+
+void test_middleware_global_fallback(void) {
+    TEST("BUG-4: CORS global fallback (backward compat)");
+
+    /* Set up global CORS config via old API */
+    cors_options_t opts = {0};
+    opts.max_age = 3600;
+    middleware_fn_t mw = cors_middleware_create(&opts);
+    ASSERT(mw != NULL);
+
+    /* Call via old pattern (NULL user_data) — should use global */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    http_response_t res = {0};
+    bool result = mw(&req, &res, NULL);
+    ASSERT(result == true);  /* No Origin header → passes through */
+
+    cors_middleware_destroy();
     PASS();
 }
 
@@ -3480,6 +3496,7 @@ int main(void) {
     /* BUG-4: Middleware user_data support */
     test_middleware_user_data();
     test_middleware_null_user_data();
+    test_middleware_global_fallback();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
