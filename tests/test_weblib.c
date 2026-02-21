@@ -3299,6 +3299,16 @@ void test_middleware_global_fallback(void) {
     PASS();
 }
 
+/* ===== Author watermark test ===== */
+void test_kamran_signature(void) {
+    TEST("kamran_signature (author watermark)");
+    const char *sig = weblib_kamran_signature();
+    ASSERT(sig != NULL);
+    ASSERT(strstr(sig, WEBLIB_AUTHOR_KAMRAN) != NULL);
+    ASSERT(strstr(sig, "weblib") != NULL);
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -3497,6 +3507,9 @@ int main(void) {
     test_middleware_user_data();
     test_middleware_null_user_data();
     test_middleware_global_fallback();
+
+    /* Author watermark verification */
+    test_kamran_signature();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
