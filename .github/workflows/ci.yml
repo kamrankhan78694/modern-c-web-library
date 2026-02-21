@@ -62,9 +62,8 @@ jobs:
         if: runner.os == 'Linux' && matrix.compiler == 'gcc'
         run: |
           cd build
-          ctest -T memcheck --output-on-failure --timeout 300 || true
-          # Fall back to running valgrind directly on each test binary
-          for test_bin in tests/test_weblib tests/test_async_websocket tests/test_stress; do
+          # Run valgrind on every test binary discovered in the tests/ dir
+          for test_bin in tests/test_*; do
             if [ -x "$test_bin" ]; then
               echo "=== Valgrind: $test_bin ==="
               valgrind \
