@@ -50,18 +50,18 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Request/Response Handling
 
-- [ ] 🎯 **Complete HTTP Parser** - Fully parse and validate incoming requests
+- [x] ✅ **Complete HTTP Parser** - Fully parse and validate incoming requests
   - Method support beyond GET with explicit error responses
   - Header parsing, canonicalization, and lookup APIs
   - Content-Length and chunked body handling with size safeguards
   - Clear rejection of malformed or oversized payloads
 
-- [ ] 🎯 **Header & Parameter Storage** - Back middleware and handlers with real data
+- [x] ✅ **Header & Parameter Storage** - Back middleware and handlers with real data
   - Implement request header access and mutation
   - Persist route parameters for `/path/:id` patterns
   - Support response header setting and serialization
 
-- [ ] 🎯 **Robust Connection Handling** - Hardening for sync and async servers
+- [x] ✅ **Robust Connection Handling** - Hardening for sync and async servers
   - Looping reads/writes with back-pressure awareness
   - HTTP/1.1 keep-alive negotiation and cleanup
   - Deterministic connection teardown on timeouts and errors
@@ -345,7 +345,7 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 - **Phase 7 (v0.7.0)**: ✅ Server Hardening & CI — socket timeouts, thread pool, graceful shutdown, CI pipeline, integration tests, parser hardening
 - **Phase 8 (v0.8.0)**: ✅ Security & Observability — CSRF middleware ✅, logging ✅, error handler ✅, input validation ✅, health check ✅
 - **Phase 9 (v0.9.0)**: ✅ Performance & Observability — caching layer ✅, metrics middleware ✅, response compression ✅, async WebSocket ✅, benchmarking suite ✅
-- **Phase 10 (v1.0.0)**: Release Readiness — tutorials, examples, Windows IOCP, BSD testing, release automation
+- **Phase 10 (v1.0.0)**: 🚧 Release Readiness — REST API example ✅, tutorials, examples, Windows IOCP, BSD testing, release automation
 
 ## How to Contribute
 

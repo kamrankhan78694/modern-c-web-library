@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-02-21
+
+### Added
+- **Phase 10: Release Readiness (v1.0.0)**
+- **REST API example** (`examples/rest_api_server.c`) — full CRUD operations with input validation, JSON responses, and production middleware (logging, CORS, rate limiting, error handling, health check, metrics)
+- Updated `TODO.md` — marked HTTP parser, header/parameter storage, and connection handling as complete
+- Updated `docs/TECHNICAL_DEBT.md` — resolved stale entries for keep-alive (#6) and compression (#10)
+
+### Changed
+- Version bump from 0.9.0 to 1.0.0
+
+## [0.9.0] - 2026-02-20
+
+### Added
+- **Phase 9: Performance & Observability**
+- **In-Memory Cache** — LRU eviction, TTL support, thread-safe hash table (`src/cache.c`)
+- **Metrics Middleware** — request counting, per-method tracking, status code ranges, JSON `/metrics` endpoint (`src/middleware_metrics.c`)
+- **Response Compression** — pure C gzip (RFC 1952) with DEFLATE (RFC 1951), `Accept-Encoding` negotiation (`src/compression.c`)
+- **Async WebSocket** — event loop integration, non-blocking I/O, write queue, connection manager (`src/async_websocket.c`)
+- **Benchmarking Suite** — high-resolution timing, throughput/latency measurement, percentile statistics (`src/benchmark.c`)
+- 20 new unit tests for Phase 9 features
+
+## [0.8.0] - 2026-02-19
+
+### Added
+- **Phase 8: Security & Observability**
+- **CSRF Middleware** — double-submit cookie pattern with constant-time comparison (`src/middleware_csrf.c`)
+- **Logging Middleware** — configurable log levels (DEBUG/INFO/WARN/ERROR), timestamp format (`src/middleware_log.c`)
+- **Error Handler Middleware** — centralized 4xx/5xx JSON error responses (`src/middleware_error.c`)
+- **Input Validation** — length, charset, integer range, email format validation, HTML sanitization (`src/input_validation.c`)
+- **Health Check Endpoint** — `GET /healthz` with JSON status and uptime (`src/health_check.c`)
+- 12 new unit tests for Phase 8 features
+
+## [0.7.0] - 2026-02-18
+
+### Added
+- **Phase 7: Server Hardening & CI**
+- **Socket Timeouts** — `setsockopt(SO_RCVTIMEO/SO_SNDTIMEO)` with `http_server_set_timeout()` API
+- **Thread Pool** — bounded thread pool replacing thread-per-connection model (`src/thread_pool.c`)
+- **Graceful Shutdown** — server state machine (STOPPED → RUNNING → DRAINING → STOPPED), `http_server_shutdown()` API
+- **GitHub Actions CI** — Linux (GCC + Clang) and macOS (Clang) matrix with Valgrind memcheck gate
+- **Networking Integration Tests** — raw-socket HTTP client, GET/POST/404/malformed/concurrent tests
+- **Parser Hardening** — duplicate Transfer-Encoding detection, `Expect: 100-continue` handling
+
+## [0.6.0] - 2026-02-17
+
 ### Added
 - **Phase 6: Production Readiness (v0.6.0)**
 - **Session Management** (Phase 6.2) - Server-side session store
@@ -232,7 +278,12 @@ and immediately closed connections. Now:
 - **0.2.x**: WebSocket support (RFC 6455 compliant)
 - **0.1.x**: Initial HTTP server implementation with event loop
 
-[Unreleased]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.9.0...v1.0.0
+[0.9.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.3.0...v0.6.0
 [0.3.0]: https://github.com/kamrankhan78694/modern-c-web-library/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kamrankhan78694/modern-c-web-library/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kamrankhan78694/modern-c-web-library/releases/tag/v0.1.0
