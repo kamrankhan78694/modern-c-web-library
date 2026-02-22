@@ -21,9 +21,9 @@ Each test reviewed for **false greens** — tests that pass but don't actually v
 | 3 | `test_json_object_create` | `json_object_create` | ✅ | Asserts type == JSON_OBJECT. |
 | 4 | `test_json_string_create` | `json_string_create` | ✅ | Asserts type and value match. |
 | 5 | `test_json_number_create` | `json_number_create` | ✅ | Asserts type and exact numeric value. |
-| 6 | `test_json_bool_create` | `json_bool_create` | ⚠️ | Only tests `true`; does not test `false`. Not a false green but thin. |
+| 6 | `test_json_bool_create` | `json_bool_create` | 🔴→✅ | Was only testing `true`. **Fixed**: added `false` case with assertion `bool_val == false`. |
 | 7 | `test_json_object_operations` | `json_object_set/get` | ✅ | Sets key, retrieves, verifies value. |
-| 8 | `test_json_stringify` | `json_stringify` | ⚠️ | Checks 4 of 6 fields ("active"/"true" missing). Assertions present are real. |
+| 8 | `test_json_stringify` | `json_stringify` | 🔴→✅ | Was missing assertions for "active" and "true" fields. **Fixed**: added both checks. |
 | 9 | `test_json_parse_string` | `json_parse (string)` | ✅ | Parses and verifies string value. |
 | 10 | `test_json_parse_number` | `json_parse (number)` | ✅ | Exact value check. |
 | 11 | `test_json_parse_bool` | `json_parse (bool)` | ✅ | Tests both true and false. |
@@ -153,8 +153,9 @@ Each test reviewed for **false greens** — tests that pass but don't actually v
 | Category | Count |
 |----------|-------|
 | ✅ OK | 109 |
-| ⚠️ Weak (honest but thin) | 7 |
-| 🔴 False green (fixed) | 13 |
+| ⚠️ Weak (honest but thin) | 5 |
+| 🔴→✅ False green (fixed) | 13 |
+| **Total** | **129** |
 
 ### False greens fixed in this PR
 
