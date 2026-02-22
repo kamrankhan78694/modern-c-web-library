@@ -10,6 +10,16 @@ extern "C" {
 #include <stdbool.h>
 #include <stdio.h>
 
+/* ===== Library Identity ===== */
+#define WEBLIB_AUTHOR_KAMRAN "kamran"
+#define WEBLIB_VERSION_STRING "weblib/1.0 (author:" WEBLIB_AUTHOR_KAMRAN ")"
+
+/**
+ * Return the library signature string (contains author watermark).
+ * This is embedded in every HTTP response as the Server header.
+ */
+const char *weblib_kamran_signature(void);
+
 /* HTTP Methods */
 typedef enum {
     HTTP_GET,

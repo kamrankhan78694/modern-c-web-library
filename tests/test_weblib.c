@@ -3299,6 +3299,153 @@ void test_middleware_global_fallback(void) {
     PASS();
 }
 
+/* ===== Author watermark test ===== */
+void test_kamran_signature(void) {
+    TEST("kamran_signature (author watermark)");
+    const char *sig = weblib_kamran_signature();
+    ASSERT(sig != NULL);
+    ASSERT(strstr(sig, WEBLIB_AUTHOR_KAMRAN) != NULL);
+    ASSERT(strstr(sig, "weblib") != NULL);
+    PASS();
+}
+
+/* Integration test: Server header watermark in HTTP response */
+void test_kamran_server_header(void) {
+    TEST("kamran_server_header (no duplicate Server headers)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/ping", echo_handler);
+
+    uint16_t port = 18809;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    const char *req =
+        "GET /ping HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    char buf[4096];
+    ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+    ASSERT(n > 0);
+    ASSERT(strstr(buf, "HTTP/1.1 200") != NULL);
+
+    /* Verify Server header is present with author watermark */
+    const char *server_hdr = strstr(buf, "Server: ");
+    ASSERT(server_hdr != NULL);
+    ASSERT(strstr(server_hdr, WEBLIB_AUTHOR_KAMRAN) != NULL);
+
+    /* Verify no duplicate Server header (search for a second occurrence) */
+    const char *second = strstr(server_hdr + 1, "\r\nServer: ");
+    ASSERT(second == NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
+/* Integration test: error responses also carry the Server watermark */
+void test_kamran_error_response_header(void) {
+    TEST("kamran_error_response (404 carries Server watermark)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/exists", echo_handler);
+
+    uint16_t port = 18810;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    /* Request a path that doesn't exist → 404 */
+    const char *req =
+        "GET /no-such-path HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    char buf[4096];
+    ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+    ASSERT(n > 0);
+    ASSERT(strstr(buf, "404") != NULL);
+
+    /* Verify Server header is present with author watermark */
+    const char *server_hdr = strstr(buf, "Server: ");
+    ASSERT(server_hdr != NULL);
+    ASSERT(strstr(server_hdr, WEBLIB_AUTHOR_KAMRAN) != NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
+/* Handler that sets a custom Server header — watermark should override it */
+static void custom_server_handler(http_request_t *req, http_response_t *res) {
+    (void)req;
+    http_response_set_header(res, "Server", "CustomServer/2.0");
+    http_response_send_text(res, HTTP_OK, "custom");
+}
+
+/* Integration test: user-set Server header is overridden by watermark */
+void test_kamran_override_user_server_header(void) {
+    TEST("kamran_override (user Server header replaced by watermark)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/custom", custom_server_handler);
+
+    uint16_t port = 18811;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    const char *req =
+        "GET /custom HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    char buf[4096];
+    ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+    ASSERT(n > 0);
+    ASSERT(strstr(buf, "HTTP/1.1 200") != NULL);
+
+    /* Verify the watermark Server header is present (overrides custom) */
+    const char *server_hdr = strstr(buf, "Server: ");
+    ASSERT(server_hdr != NULL);
+    ASSERT(strstr(server_hdr, WEBLIB_AUTHOR_KAMRAN) != NULL);
+
+    /* Verify no duplicate Server header */
+    const char *second = strstr(server_hdr + 1, "\r\nServer: ");
+    ASSERT(second == NULL);
+
+    /* Verify the user's custom value was replaced, not appended */
+    ASSERT(strstr(buf, "CustomServer/2.0") == NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
+/* Test: multiple server create/destroy cycles don't corrupt watermark */
+void test_kamran_multiple_servers(void) {
+    TEST("kamran_multiple_servers (create/destroy cycles safe)");
+
+    /* Create and destroy multiple servers in sequence */
+    for (int i = 0; i < 5; i++) {
+        http_server_t *s = http_server_create();
+        ASSERT(s != NULL);
+        http_server_destroy(s);
+    }
+
+    /* Verify signature still works correctly after multiple cycles */
+    const char *sig = weblib_kamran_signature();
+    ASSERT(sig != NULL);
+    ASSERT(strstr(sig, WEBLIB_AUTHOR_KAMRAN) != NULL);
+
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -3497,6 +3644,13 @@ int main(void) {
     test_middleware_user_data();
     test_middleware_null_user_data();
     test_middleware_global_fallback();
+
+    /* Author watermark verification */
+    test_kamran_signature();
+    test_kamran_server_header();
+    test_kamran_error_response_header();
+    test_kamran_override_user_server_header();
+    test_kamran_multiple_servers();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
