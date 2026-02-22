@@ -6,70 +6,154 @@ on:
   pull_request:
     branches: [ "main", "master" ]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-and-test:
-    name: ${{ matrix.os }} / ${{ matrix.compiler }}
-    runs-on: ${{ matrix.os }}
+  # ── Stage 1: Primary gate ──────────────────────────────────────────
+  # Single Docker-based job replaces the old Docker job AND the native
+  # ubuntu/gcc job.  GCC build, full test suite, and Valgrind memcheck
+  # all happen inside Dockerfile.dev (which already ships gcc + valgrind).
+  # Docker Buildx layer caching keeps rebuilds fast.
+  primary-checks:
+    name: Build, Test & Memcheck (Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            compiler: gcc
-            c_compiler: gcc
-          - os: ubuntu-latest
-            compiler: clang
-            c_compiler: clang
-          - os: macos-latest
-            compiler: clang
-            c_compiler: clang
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install build dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build dev image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.dev
+          load: true
+          tags: modern-c-weblib:dev
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run tests
+        run: docker run --rm modern-c-weblib:dev /bin/bash -c "cd build && ctest --output-on-failure --timeout 120"
+
+      - name: Valgrind memory check
+        run: |
+          docker run --rm modern-c-weblib:dev /bin/bash -c '
+            cd build
+            for test_bin in tests/test_*; do
+              if [ -x "$test_bin" ]; then
+                echo "=== Valgrind: $test_bin ==="
+                valgrind \
+                  --leak-check=full \
+                  --error-exitcode=1 \
+                  --show-leak-kinds=definite,indirect \
+                  ./"$test_bin"
+              fi
+            done
+          '
+
+  # ── Stage 2: Secondary checks (only after Stage 1 passes) ─────────
+
+  # Clang compilation — catches warnings/errors that GCC misses.
+  # No valgrind (already covered above), so this is a lightweight job.
+  clang-check:
+    name: Clang Build & Test
+    needs: primary-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q cmake build-essential valgrind
+          sudo apt-get install -y -q cmake clang
 
-      - name: Install build dependencies (macOS)
-        if: runner.os == 'macOS'
+      - name: Configure
         run: |
-          brew install cmake
-
-      - name: Configure (cmake)
-        run: |
-          mkdir -p build
-          cd build
+          mkdir -p build && cd build
           cmake .. \
-            -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} \
+            -DCMAKE_C_COMPILER=clang \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_FLAGS="-Wall -Wextra -pedantic"
 
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Run all tests (ctest)
-        run: |
-          cd build
-          ctest --output-on-failure --timeout 120
+      - name: Run tests
+        run: cd build && ctest --output-on-failure --timeout 120
 
-      - name: Valgrind memory check (Linux gcc only)
-        if: runner.os == 'Linux' && matrix.compiler == 'gcc'
+  # macOS cross-platform check — runs only on pull requests to avoid
+  # burning expensive macOS minutes on every push to main.
+  macos-check:
+    name: macOS Compatibility
+    needs: primary-checks
+    if: github.event_name == 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install cmake
+
+      - name: Configure
         run: |
-          cd build
-          # Run valgrind on every test binary discovered in the tests/ dir
-          for test_bin in tests/test_*; do
-            if [ -x "$test_bin" ]; then
-              echo "=== Valgrind: $test_bin ==="
-              valgrind \
-                --leak-check=full \
-                --error-exitcode=1 \
-                --show-leak-kinds=definite,indirect \
-                ./"$test_bin"
-            fi
-          done
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -pedantic"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: cd build && ctest --output-on-failure --timeout 120
+
+  # Production Docker image — validates that the release image builds
+  # and contains working executables.  Only runs when Dockerfiles or
+  # source code change (skipped for docs-only / CI-only edits).
+  docker-image-check:
+    name: Production Docker Image
+    needs: primary-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build production image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: modern-c-weblib:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify production image
+        run: |
+          docker run --rm modern-c-weblib:latest /bin/bash -c '
+            echo "Checking simple_server..." && test -x /app/simple_server && echo "  OK" &&
+            echo "Checking async_server..."  && test -x /app/async_server  && echo "  OK" &&
+            echo "Production image verified successfully"
+          '
