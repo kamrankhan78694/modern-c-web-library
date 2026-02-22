@@ -31,9 +31,9 @@
 | Phase 7 | v0.7.0 | ✅ Complete | Socket timeouts, thread pool, graceful shutdown, GitHub Actions CI, integration tests |
 | Phase 8 | v0.8.0 | ✅ Complete | CSRF middleware, logging, error handler, input validation, health check |
 | Phase 9 | v0.9.0 | ✅ Complete | Response compression, caching layer, metrics middleware, async WebSocket, benchmarking suite |
-| Phase 10 | v1.0.0 | 🚧 In Progress | REST API example, tutorials, release engineering |
+| Phase 10 | v1.0.0 | ✅ Complete | REST API example, tutorials, release engineering |
 
-**Current state**: 124/124 unit tests passing · zero compiler warnings · 25 source modules · 5 example servers
+**Current state**: 129/129 unit tests passing · zero compiler warnings · 25 source modules · 5 example servers
 
 ---
 
@@ -439,8 +439,8 @@ Each phase release MUST pass:
 ---
 
 **Maintained by**: MCWL Core Team
-**Last Updated**: 2026-02-20
-**Status**: Active Development — Phase 10 next
+**Last Updated**: 2026-02-22
+**Status**: Complete — v1.0.0 released
 **License**: MIT (see LICENSE file)
 
 For questions or discussions about this roadmap, please open an issue on GitHub or contact the maintainers.

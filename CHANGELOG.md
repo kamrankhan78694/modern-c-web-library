@@ -7,16 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-02-21
+## [1.0.0] - 2026-02-22
 
 ### Added
 - **Phase 10: Release Readiness (v1.0.0)**
 - **REST API example** (`examples/rest_api_server.c`) — full CRUD operations with input validation, JSON responses, and production middleware (logging, CORS, rate limiting, error handling, health check, metrics)
+- **Tutorial documentation** (`docs/tutorials/`) — step-by-step guides:
+  - Getting Started tutorial
+  - Building a REST API tutorial
+  - Real-time WebSocket Applications tutorial
+- **Complete API reference** (`docs/api/README.md`) — updated to v1.0.0 with all Phase 7-9 APIs
 - Updated `TODO.md` — marked HTTP parser, header/parameter storage, and connection handling as complete
 - Updated `docs/TECHNICAL_DEBT.md` — resolved stale entries for keep-alive (#6) and compression (#10)
 
 ### Changed
 - Version bump from 0.9.0 to 1.0.0
+- Updated all documentation to reflect v1.0.0 release status
+- Updated `ACHIEVEMENTS.md` with current test counts (129 tests) and complete feature list
+- Updated `NEXT_PHASE.md` — all phases marked as complete
+- Updated `README.md` — comprehensive project structure, features list, and roadmap
 
 ## [0.9.0] - 2026-02-20
 
@@ -224,56 +233,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Release Notes
 
-### WebSocket Frame Processing (Current)
+### v1.0.0 — Production Release (Current)
 
-This release completes the WebSocket implementation by adding full frame processing
-capabilities in threaded mode. Previously, the server only performed the handshake
-and immediately closed connections. Now:
+This release marks the first production-ready version of the Modern C Web Library.
+All planned phases (4-10) are complete with comprehensive documentation and tutorials.
 
-**What Works:**
-- ✅ Complete RFC 6455 WebSocket handshake
-- ✅ Persistent WebSocket connections after upgrade
-- ✅ Text message echo
-- ✅ Binary message support
-- ✅ Automatic ping/pong handling
-- ✅ Multiple concurrent connections
-- ✅ Graceful close with status codes
-
-**Test Results:**
-```
-[Test 1] Sending text message...
-✓ Received echo: Hello, WebSocket!
-
-[Test 2] Testing ping/pong...
-✓ Pong received! Latency: 0.000s
-
-[Test 3] Sending another message...
-✓ Received echo: Testing after ping
-
-[Test 4] Sending multiple pings...
-  Ping 1: 0.000s
-  Ping 2: 0.000s
-  Ping 3: 0.000s
-✓ All pongs received!
-
-✅ All tests passed!
-```
+**Highlights:**
+- ✅ 129 unit tests passing with 100% success rate
+- ✅ 25 source modules covering HTTP, WebSocket, JSON, middleware, and more
+- ✅ 5 example servers including REST API and WebSocket echo
+- ✅ Complete tutorial documentation (Getting Started, REST API, WebSocket)
+- ✅ Comprehensive API reference for all modules
+- ✅ GitHub Actions CI with Linux (GCC, Clang) and macOS (Clang)
+- ✅ Zero compiler warnings, Valgrind-clean
 
 **Architecture:**
-- Threaded mode: One pthread per WebSocket connection (blocking I/O)
-- Suitable for moderate connection counts (<1000)
-- Production-ready for real-time applications
-
-**Next Steps:**
-- Async mode WebSocket support (epoll/kqueue/poll integration)
-- WebSocket compression extensions
-- Per-message deflate
-- Enhanced connection tracking and metrics
+- Threaded mode: Bounded thread pool with configurable worker count
+- Async mode: Event loop with epoll/kqueue/poll backends
+- Both modes are production-ready for deployment
 
 ---
 
 ## Version History
 
+- **1.0.x**: Production release — all phases complete, tutorials, full documentation
+- **0.9.x**: Performance & Observability — compression, caching, metrics, async WebSocket, benchmarking
+- **0.8.x**: Security & Observability — CSRF, logging, error handler, input validation, health check
+- **0.7.x**: Server Hardening & CI — timeouts, thread pool, graceful shutdown, CI, integration tests
+- **0.6.x**: Production Readiness — sessions, templates, auth, DB pooling, API docs
+- **0.5.x**: Request Processing & Security — body parsing, cookies, CORS, rate limiting, static files
+- **0.4.x**: HTTP Foundation Hardening — parser, headers, JSON arrays, connections
 - **0.3.x**: WebSocket frame processing (Production-ready threaded mode)
 - **0.2.x**: WebSocket support (RFC 6455 compliant)
 - **0.1.x**: Initial HTTP server implementation with event loop

@@ -84,6 +84,19 @@ This policy emphasizes **C craftsmanship** over convenience through other ecosys
 - **CORS Middleware**: Configurable cross-origin resource sharing
 - **Rate Limiting**: IP-based rate limiting with token bucket algorithm
 - **Static File Serving**: MIME detection, ETag, path traversal prevention
+- **Thread Pool**: Bounded thread pool with configurable worker count
+- **Graceful Shutdown**: Server state machine with drain timeout
+- **Socket Timeouts**: Configurable read/write timeouts to prevent slow-loris attacks
+- **CSRF Protection**: Double-submit cookie pattern with constant-time comparison
+- **Input Validation**: Length, charset, integer, email validation and HTML sanitization
+- **Logging Middleware**: Configurable log levels with timestamp formatting
+- **Error Handler**: Centralized JSON error responses for 4xx/5xx status codes
+- **Health Check**: Built-in `/healthz` endpoint with JSON status
+- **In-Memory Cache**: LRU eviction, TTL support, thread-safe implementation
+- **Metrics Middleware**: Request counting, per-method tracking, JSON `/metrics` endpoint
+- **Response Compression**: Pure C gzip (RFC 1952) with Accept-Encoding negotiation
+- **Async WebSocket**: Event loop integration with non-blocking I/O and write queue
+- **Benchmarking Suite**: Throughput/latency measurement with percentile statistics
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design with zero external dependencies
 
@@ -415,7 +428,7 @@ router_add_route(router, HTTP_GET, "/ws", handle_websocket);
   - Multiple concurrent WebSocket connections
   - All protocol tests passing (4/4 test cases)
 
-**Status:** Threaded mode is production-ready. Async mode (event loop integration) is planned for future releases.
+**Status:** Both threaded mode and async mode (event loop integration) are production-ready.
 
 See `examples/websocket_echo_server.c` for a complete WebSocket server implementation with a browser-based test client.
 
@@ -480,20 +493,53 @@ See `examples/websocket_echo_server.c` for a complete WebSocket server implement
 ```
 modern-c-web-library/
 ├── include/
-│   └── weblib.h           # Public API header
+│   ├── weblib.h           # Public API header
+│   └── db_pool.h          # Database connection pool header
 ├── src/
 │   ├── http_server.c      # HTTP server implementation (sync & async)
 │   ├── router.c           # Router implementation
 │   ├── json.c             # JSON parser/serializer
-│   └── event_loop.c       # Event loop implementation (epoll/kqueue/poll)
+│   ├── event_loop.c       # Event loop (epoll/kqueue/poll)
+│   ├── websocket.c        # WebSocket protocol (RFC 6455)
+│   ├── async_websocket.c  # Async WebSocket with event loop
+│   ├── body_parser.c      # Request body parsing
+│   ├── cookie.c           # Cookie handling (RFC 6265)
+│   ├── session.c          # Session management
+│   ├── template.c         # Template engine
+│   ├── cache.c            # In-memory LRU cache
+│   ├── compression.c      # Response compression (gzip)
+│   ├── benchmark.c        # Benchmarking suite
+│   ├── thread_pool.c      # Bounded thread pool
+│   ├── db_pool.c          # Database connection pool
+│   ├── health_check.c     # Health check endpoint
+│   ├── input_validation.c # Input validation helpers
+│   ├── middleware_auth.c   # Authentication (Basic/JWT/API-Key)
+│   ├── middleware_cors.c   # CORS middleware
+│   ├── middleware_csrf.c   # CSRF protection
+│   ├── middleware_error.c  # Error handler middleware
+│   ├── middleware_log.c    # Logging middleware
+│   ├── middleware_metrics.c# Metrics middleware
+│   ├── middleware_ratelimit.c # Rate limiting
+│   └── middleware_static.c # Static file serving
 ├── examples/
-│   ├── simple_server.c    # Example HTTP server (threaded mode)
-│   ├── async_server.c     # Example async HTTP server (event loop mode)
-│   └── websocket_echo_server.c  # WebSocket echo server with browser client
+│   ├── simple_server.c    # Basic HTTP server (threaded)
+│   ├── async_server.c     # Async HTTP server (event loop)
+│   ├── rest_api_server.c  # Full CRUD REST API example
+│   ├── websocket_echo_server.c        # WebSocket echo server
+│   └── async_websocket_echo_server.c  # Async WebSocket server
 ├── tests/
-│   └── test_weblib.c      # Unit tests
+│   └── test_weblib.c      # Unit tests (129 tests)
+├── docs/
+│   ├── api/README.md      # Complete API reference
+│   ├── tutorials/         # Step-by-step tutorials
+│   ├── DEBUGGING.md       # Debugging guide
+│   ├── DEPLOYMENT.md      # Production deployment guide
+│   └── TECHNICAL_DEBT.md  # Known trade-offs
 ├── CMakeLists.txt         # Main CMake configuration
 ├── README.md              # This file
+├── CHANGELOG.md           # Version history
+├── TODO.md                # Feature roadmap
+├── NEXT_PHASE.md          # Detailed phase roadmap
 ├── LICENSE                # MIT License
 └── .gitignore             # Git ignore rules
 ```
@@ -639,13 +685,13 @@ For a list of planned features and enhancements, check out [TODO.md](TODO.md).
 
 ## Project Status
 
-**Current Status**: ✅ Production-ready with 100% test pass rate
+**Current Status**: ✅ Production-ready v1.0.0 with 100% test pass rate
 
-- **Tests**: 60/60 passing
-- **Code Quality**: Zero compiler warnings (1 informational about string literal length)
+- **Tests**: 129/129 passing
+- **Code Quality**: Zero compiler warnings
 - **Security**: All buffer operations bounds-checked, HMAC-SHA256 with constant-time comparison
 - **Debugging**: Full IDE integration with LLDB/GDB
-- **WebSocket**: RFC 6455 compliant implementation
+- **WebSocket**: RFC 6455 compliant implementation (threaded + async modes)
 
 For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMENTS.md**](ACHIEVEMENTS.md).
 
@@ -666,9 +712,22 @@ For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMEN
 - [x] Authentication middleware (Basic Auth, API Key, JWT/HMAC-SHA256)
 - [x] Database connection pooling (thread-safe, configurable)
 - [x] API documentation (`docs/api/`)
+- [x] Socket timeouts and thread pool (server hardening)
+- [x] Graceful shutdown with drain timeout
+- [x] GitHub Actions CI (Linux + macOS, Valgrind)
+- [x] CSRF protection middleware
+- [x] Input validation and HTML sanitization
+- [x] Logging and error handler middleware
+- [x] Health check endpoint (`/healthz`)
+- [x] In-memory cache (LRU, TTL)
+- [x] Metrics middleware with JSON endpoint
+- [x] Response compression (pure C gzip)
+- [x] Async WebSocket (event loop integration)
+- [x] Benchmarking suite
+- [x] REST API example
+- [x] Tutorial documentation
 - [ ] SSL/TLS support (pure C implementation)
 - [ ] HTTP/2 support
-- [ ] WebSocket async mode (event loop integration)
 
 ## Community & Support
 
