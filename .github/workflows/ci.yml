@@ -65,7 +65,11 @@ jobs:
 
       - name: Verify production image
         run: |
-          docker run --rm modern-c-weblib:latest /bin/bash -c "test -x /app/simple_server && test -x /app/async_server"
+          docker run --rm modern-c-weblib:latest /bin/bash -c '
+            echo "Checking simple_server..." && test -x /app/simple_server && echo "  OK" &&
+            echo "Checking async_server..."  && test -x /app/async_server  && echo "  OK" &&
+            echo "Production image verified successfully"
+          '
 
   build-and-test:
     name: ${{ matrix.os }} / ${{ matrix.compiler }}
