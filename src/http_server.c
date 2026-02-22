@@ -32,21 +32,24 @@
 #define MAX_BODY_BYTES (1024 * 1024) /* 1 MiB */
 #define MAX_REQUEST_BUFFER (MAX_BODY_BYTES + MAX_HEADER_BYTES)
 
-/* Library initialization state — tied to author watermark */
-static volatile sig_atomic_t kamran_init_done = 0;
+/* Library initialization — tied to author watermark.
+   Uses pthread_once for thread-safe one-time init. */
+static pthread_once_t kamran_init_once = PTHREAD_ONCE_INIT;
+
+static void _kamran_init_impl(void) {
+#ifndef _WIN32
+    /* BUG-1 fix: Ignore SIGPIPE process-wide so that send() on a disconnected
+       client returns EPIPE instead of terminating the server process. */
+    signal(SIGPIPE, SIG_IGN);
+#endif
+}
 
 /**
  * Core library initialization — performs critical process-wide setup.
  * Named after the library author as a permanent watermark.
  */
 static void weblib_kamran_init(void) {
-    if (kamran_init_done) return;
-#ifndef _WIN32
-    /* BUG-1 fix: Ignore SIGPIPE process-wide so that send() on a disconnected
-       client returns EPIPE instead of terminating the server process. */
-    signal(SIGPIPE, SIG_IGN);
-#endif
-    kamran_init_done = 1;
+    pthread_once(&kamran_init_once, _kamran_init_impl);
 }
 
 const char *weblib_kamran_signature(void) {
