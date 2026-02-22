@@ -31,22 +31,28 @@ This document tracks planned features, enhancements, and improvements for the Mo
     - Single-threaded high-concurrency support
     - Write queue for non-blocking sends
   
-- [ ] 🎯 **SSL/TLS Support** - Secure HTTPS connections
-  - Custom TLS implementation in pure C
-  - Certificate management
-  - SNI support
-  - TLS 1.2+ support
+- [ ] 🎯 **SSL/TLS Support** - Secure HTTPS connections *(Phase 11–12, v1.1.0–v1.2.0)*
+  - Pure C crypto primitives (SHA-256/384, AES-256-GCM, ChaCha20-Poly1305, X25519)
+  - TLS 1.3 record layer and handshake state machine (RFC 8446)
+  - X.509 certificate chain validation (DER/PEM parsing)
+  - ALPN negotiation (h2 + http/1.1)
+  - SNI support for virtual hosting
+  - `http_server_enable_tls(server, cert_path, key_path)` API
 
-- [ ] 🔧 **HTTP/2 Support** - Implement HTTP/2 protocol
-  - Binary framing
-  - Stream multiplexing
-  - Server push
-  - Header compression (HPACK)
+- [ ] 🔧 **HTTP/2 Support** - Implement HTTP/2 protocol *(Phase 13, v1.3.0)*
+  - Binary framing layer (RFC 7540, all 10 frame types)
+  - HPACK header compression (RFC 7541, static + dynamic tables)
+  - Stream multiplexing with priority and flow control
+  - Server push (PUSH_PROMISE)
+  - `http_server_enable_http2()` API
+  - h2 (TLS) + h2c (cleartext) support
 
-- [ ] 💡 **HTTP/3 / QUIC Support** - Next-generation HTTP protocol
-  - UDP-based transport
-  - Built-in TLS
-  - Improved performance
+- [ ] 💡 **HTTP/3 / QUIC Support** - Next-generation HTTP protocol *(Phase 19, v1.9.0)*
+  - UDP socket layer with batch I/O
+  - QUIC transport protocol (RFC 9000) with connection migration
+  - HTTP/3 framing (RFC 9114) over QUIC streams
+  - QPACK header compression (RFC 9204)
+  - `http_server_enable_http3()` API
 
 ### Request/Response Handling
 
@@ -108,7 +114,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - ETag support
   - Cache headers
 
-- [ ] 🔧 **Directory Listing** - Auto-generate directory indexes
+- [ ] 🔧 **Directory Listing** - Auto-generate directory indexes *(Phase 15, v1.5.0)*
   - Configurable templates
   - File size formatting
   - Sorting options
@@ -121,24 +127,24 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Context-based rendering
   - HTTP response integration
 
-- [ ] 💡 **Multiple Template Formats** - Support various template languages
-  - Mustache templates
-  - Jinja2-style templates
-  - Custom template syntax
+- [ ] 💡 **Multiple Template Formats** - Support various template languages *(Phase 18, v1.8.0)*
+  - Mustache templates (sections, partials, inheritance)
+  - Auto-escaping (HTML/URL/JS context-aware)
+  - Template includes and compiled template caching
 
 ### Data Storage
 
-- [ ] 🔧 **SQLite Integration** - Lightweight embedded database
+- [ ] 🔧 **SQLite Integration** - Lightweight embedded database *(see Phase 14 for custom storage engine)*
   - Direct SQLite C API usage (SQLite source code vendored/embedded, no external dependency)
   - Connection pooling
   - Transaction management
   - Query builder helpers
 
-- [ ] 💡 **Custom File-Based Storage** - Simple data persistence
-  - Key-value store implementation
-  - Index structures
-  - Transaction log
-  - Query interface
+- [ ] 💡 **Custom File-Based Storage** - Simple data persistence *(Phase 14, v1.4.0)*
+  - B-tree key-value store (on-disk, memory-mapped)
+  - Write-ahead log for crash recovery
+  - Transaction support (begin/commit/rollback)
+  - Iterator API for range queries
 
 ### Security
 
@@ -187,16 +193,17 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Cache invalidation
   - TTL support
 
-- [ ] 🔧 **Load Balancing** - Distribute traffic
-  - Round-robin
-  - Least connections
-  - IP hash
-  - Health checks
+- [ ] 🔧 **Load Balancing** - Distribute traffic *(Phase 16, v1.6.0)*
+  - Multi-process master-worker model (fork-based)
+  - SO_REUSEPORT per-worker accept
+  - Worker supervision and auto-restart
+  - Per-worker health monitoring
 
-- [ ] 💡 **Worker Pool** - Process management
-  - Multi-process model
-  - Process supervision
-  - Hot reload
+- [ ] 💡 **Worker Pool** - Process management *(Phase 16, v1.6.0)*
+  - Multi-process model via fork()
+  - Process supervision with auto-restart
+  - Zero-downtime hot reload (SIGHUP)
+  - Signal-based worker management
 
 ### Middleware
 
@@ -208,16 +215,16 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Developer Experience
 
-- [ ] 🔧 **Hot Reload** - Automatic server restart on code changes
-- [ ] 🔧 **Debug Mode** - Enhanced debugging features
-  - Verbose logging
-  - Request/response inspection
-  - Stack traces
+- [ ] 🔧 **Hot Reload** - Automatic server restart on code changes *(Phase 16, v1.6.0)*
+- [ ] 🔧 **Debug Mode** - Enhanced debugging features *(Phase 18, v1.8.0)*
+  - Verbose logging with request/response headers
+  - Request/response inspection with per-middleware timing
+  - Memory allocation tracking
   
-- [ ] 💡 **CLI Tools** - Command-line utilities
-  - Project scaffolding
-  - Route listing
-  - Configuration validator
+- [ ] 💡 **CLI Tools** - Command-line utilities *(Phase 20, v2.0.0)*
+  - Project scaffolding (`weblib init`)
+  - Route listing (`weblib routes`)
+  - Configuration validator (`weblib config validate`)
 
 ### Documentation & Examples
 
@@ -227,18 +234,21 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Return value documentation
   - Usage examples
 
-- [ ] 🔧 **More Examples** - Additional example applications
-  - REST API example
+- [ ] 🔧 **More Examples** - Additional example applications *(Phase 15–18)*
+  - REST API example ✅ (completed in v1.0.0)
   - WebSocket chat example
   - File upload example
   - Authentication example
-  - Data persistence example
+  - Data persistence example *(Phase 14)*
+  - SSE streaming example *(Phase 15)*
 
-- [ ] 🔧 **Tutorial Series** - Step-by-step guides
-  - Getting started tutorial
-  - Building a REST API
-  - Real-time applications
+- [ ] 🔧 **Tutorial Series** - Step-by-step guides *(Phase 20, v2.0.0)*
+  - Getting started tutorial ✅ (completed in v1.0.0)
+  - Building a REST API ✅ (completed in v1.0.0)
+  - Real-time applications ✅ (completed in v1.0.0)
   - Production deployment
+  - TLS/HTTPS setup *(Phase 12)*
+  - Storage engine usage *(Phase 14)*
 
 ### Testing & Quality
 
@@ -247,11 +257,12 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Coverage for malformed input and sequential connections
   - Baseline concurrency smoke tests
 
-- [ ] 🔧 **Comprehensive Test Suite** - Expand test coverage
+- [ ] 🔧 **Comprehensive Test Suite** - Expand test coverage *(Phase 20, v2.0.0)*
   - Unit tests for all modules
   - Integration tests
   - Performance tests
   - Stress tests
+  - Fuzz testing (HTTP, JSON, TLS, HPACK, QUIC parsers)
 
 - [x] ✅ **Continuous Integration** - Automated testing
   - GitHub Actions CI (Linux GCC, Linux Clang, macOS Clang)
@@ -265,31 +276,34 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Cross-Platform
 
-- [ ] 🔧 **Windows Improvements** - Better Windows support
-  - IOCP support (Windows async I/O)
-  - Native Windows builds
-  - Windows-specific optimizations
+- [ ] 🔧 **Windows Improvements** - Better Windows support *(Phase 17, v1.7.0)*
+  - IOCP event loop backend (`src/event_loop_iocp.c`)
+  - MSVC build support (CMake generator)
+  - Windows-specific CI runner
+  - Platform abstraction layer (`src/platform.h`)
 
-- [ ] 💡 **BSD Support** - Explicit BSD testing and support
-  - FreeBSD
-  - OpenBSD
-  - NetBSD
+- [ ] 💡 **BSD Support** - Explicit BSD testing and support *(Phase 17, v1.7.0)*
+  - FreeBSD CI testing
+  - OpenBSD CI testing
+  - NetBSD CI testing
+  - Platform compatibility matrix documentation
 
 ### Monitoring & Observability
 
-- [ ] 💡 **Prometheus Metrics** - Metrics export
-  - HTTP metrics
-  - Custom metrics
-  - Metric labels
+- [ ] 💡 **Prometheus Metrics** - Metrics export *(Phase 20, v2.0.0)*
+  - Prometheus exposition format endpoint (`/metrics`)
+  - HTTP counters, gauges, histograms
+  - Custom metric labels
+  - Per-worker metrics aggregation *(Phase 16)*
 
 - [x] ✅ **Health Check Endpoint** - Service health monitoring
   - GET /healthz with JSON status and uptime
   - Suitable for load-balancer and Kubernetes probes
 
-- [ ] 💡 **OpenTelemetry Support** - Distributed tracing
-  - Trace context propagation
-  - Span creation
-  - Exporter integration
+- [ ] 💡 **OpenTelemetry Support** - Distributed tracing *(Phase 20, v2.0.0)*
+  - W3C Trace Context (`traceparent` header) propagation
+  - Span creation and completion
+  - Trace ID in structured log output
 
 ## Completed Features
 
@@ -339,6 +353,11 @@ This section will track feature requests from the community. Please open an issu
 
 For a detailed, phased implementation plan with timelines, priorities, and implementation guidance, see **[NEXT_PHASE.md](NEXT_PHASE.md)**.
 
+### v1.0.0 Completed Phases
+
+- **Phase 1 (v0.1.0)**: ✅ Foundation — HTTP server, event loop (epoll/kqueue/poll), routing, middleware, JSON, CMake build
+- **Phase 2 (v0.2.0)**: ✅ WebSocket Protocol — RFC 6455 handshake, framing, masking, fragmentation, control frames
+- **Phase 3 (v0.3.0)**: ✅ WebSocket Production — threaded mode frame processing, persistent connections, ping/pong
 - **Phase 4 (v0.4.0)**: ✅ HTTP Foundation Hardening — parser, headers, connections, JSON arrays, graceful shutdown
 - **Phase 5 (v0.5.0)**: ✅ Request Processing & Security — body parsing, cookies, CORS, rate limiting, static files
 - **Phase 6 (v0.6.0)**: ✅ Production Readiness — sessions, template engine, auth middleware, db pooling, API docs
@@ -346,6 +365,19 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 - **Phase 8 (v0.8.0)**: ✅ Security & Observability — CSRF middleware ✅, logging ✅, error handler ✅, input validation ✅, health check ✅
 - **Phase 9 (v0.9.0)**: ✅ Performance & Observability — caching layer ✅, metrics middleware ✅, response compression ✅, async WebSocket ✅, benchmarking suite ✅
 - **Phase 10 (v1.0.0)**: ✅ Release Readiness — REST API example ✅, tutorials ✅, documentation ✅, CHANGELOG ✅, semantic versioning ✅
+
+### v2.0.0 Planned Phases
+
+- **Phase 11 (v1.1.0)**: 🎯 TLS Foundation — SHA-256/384, AES-256-GCM, ChaCha20-Poly1305, X25519 key exchange, HKDF key derivation
+- **Phase 12 (v1.2.0)**: 🎯 TLS 1.3 Handshake & HTTPS — record layer, handshake state machine, certificate parsing, ALPN, `http_server_enable_tls()` API
+- **Phase 13 (v1.3.0)**: 🎯 HTTP/2 Protocol — binary framing, HPACK compression, stream multiplexing, flow control, server push
+- **Phase 14 (v1.4.0)**: 🔧 Persistent Storage Engine — B-tree key-value store, write-ahead log, transactions, crash recovery, iterator API
+- **Phase 15 (v1.5.0)**: 🔧 Advanced Middleware & Content — directory listing, Server-Sent Events, content negotiation, route groups, regex routes
+- **Phase 16 (v1.6.0)**: 🔧 Multi-Process Architecture — master-worker fork model, SO_REUSEPORT, zero-downtime reload, per-worker metrics
+- **Phase 17 (v1.7.0)**: 🔧 Cross-Platform Hardening — platform abstraction layer, Windows IOCP, BSD testing, MSVC build, CI matrix expansion
+- **Phase 18 (v1.8.0)**: 🔧 Developer Experience & Configuration — INI config parser, plugin architecture, advanced templates, debug mode, API versioning
+- **Phase 19 (v1.9.0)**: 💡 HTTP/3 & QUIC — UDP transport, QUIC protocol (RFC 9000), connection migration, HTTP/3 framing, QPACK compression
+- **Phase 20 (v2.0.0)**: 💡 Release Engineering & Ecosystem — CLI tools, Prometheus metrics, OpenTelemetry tracing, fuzz testing, v2.0.0 release
 
 ## How to Contribute
 

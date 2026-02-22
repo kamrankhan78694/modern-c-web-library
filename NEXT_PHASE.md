@@ -1,13 +1,36 @@
-# Next Phase Roadmap — Modern C Web Library v0.7.0+
+# Next Phase Roadmap — Modern C Web Library v2.0.0
 
 > **Methodology**: First-principles engineering workflow.
 > Every decision below traces back to a verifiable technical constraint, not convention.
 
 ---
 
+## Part I: v1.0.0 Completed Phases (Reference)
+
+| Phase | Version | Status | Highlights |
+|-------|---------|--------|------------|
+| Phase 1 | v0.1.0 | ✅ Complete | HTTP server, event loop (epoll/kqueue/poll), routing, middleware, JSON, CMake build |
+| Phase 2 | v0.2.0 | ✅ Complete | WebSocket RFC 6455 (handshake, framing, masking, fragmentation, control frames) |
+| Phase 3 | v0.3.0 | ✅ Complete | WebSocket frame processing in threaded mode, persistent connections, ping/pong |
+| Phase 4 | v0.4.0 | ✅ Complete | HTTP parser hardening, header storage, JSON arrays, connection handling |
+| Phase 5 | v0.5.0 | ✅ Complete | Body parsing, cookies, CORS, rate limiting, static file serving |
+| Phase 6 | v0.6.0 | ✅ Complete | Sessions, template engine, auth middleware (Basic/JWT/API-Key), DB pooling, API docs |
+| Phase 7 | v0.7.0 | ✅ Complete | Socket timeouts, thread pool, graceful shutdown, GitHub Actions CI, integration tests |
+| Phase 8 | v0.8.0 | ✅ Complete | CSRF middleware, logging, error handler, input validation, health check |
+| Phase 9 | v0.9.0 | ✅ Complete | Response compression, caching layer, metrics middleware, async WebSocket, benchmarking |
+| Phase 10 | v1.0.0 | ✅ Complete | REST API example, tutorials, documentation, release engineering |
+
+**v1.0.0 baseline**: 129/129 unit tests · zero compiler warnings · 25 source modules · 5 example servers
+
+---
+
+## Part II: v2.0.0 Roadmap — Phases 11–20
+
+---
+
 ## 1. Idea Intake
 
-**Core problem in one sentence**: The library has shipped a feature-rich v0.6.0 but lacks the connection-level hardening, transport security, CI automation, and observability required for unsupervised production deployment.
+**Core problem in one sentence**: The library has achieved production-grade HTTP/1.1 functionality but lacks transport encryption (TLS), modern protocol support (HTTP/2, HTTP/3), persistent storage, multi-process scalability, cross-platform parity, and the developer tooling necessary to compete with frameworks like nginx and libuv as a self-contained, zero-dependency C web platform.
 
 ---
 
@@ -15,417 +38,805 @@
 
 | Dimension | Detail |
 |-----------|--------|
-| **Target users** | C developers building HTTP/WebSocket backends who refuse external dependencies |
-| **Desired outcomes** | A server that survives hostile network conditions, encrypts traffic, shuts down without data loss, and proves correctness through automated CI on every commit |
-| **Non-goals** | HTTP/3 / QUIC (premature without TLS); framework-level ORM; language bindings; GUI tooling |
+| **Target users** | C developers building production HTTP/HTTPS backends, microservices, and real-time systems who require zero external dependencies and full source-level control |
+| **Desired outcomes** | A library that encrypts traffic (TLS 1.3), speaks HTTP/2 and HTTP/3, persists data without external databases, scales across CPU cores via multi-process architecture, runs identically on Linux/macOS/Windows/BSD, and provides developer tooling for rapid iteration |
+| **Non-goals** | Full ORM abstraction; language bindings (Python/Go/Rust wrappers); GUI tools; package manager integration (apt/brew/vcpkg); WebAssembly compilation target |
 
 ---
 
-## 3. Completed Phases (Reference)
+## 3. Grounded First-Principles Design
 
-| Phase | Version | Status | Highlights |
-|-------|---------|--------|------------|
-| Phase 4 | v0.4.0 | ✅ Complete | HTTP parser hardening, header storage, JSON arrays, connection handling |
-| Phase 5 | v0.5.0 | ✅ Complete | Body parsing, cookies, CORS, rate limiting, static file serving |
-| Phase 6 | v0.6.0 | ✅ Complete | Sessions, template engine, auth middleware (Basic/JWT/API-Key), DB pooling, API docs |
-| Phase 7 | v0.7.0 | ✅ Complete | Socket timeouts, thread pool, graceful shutdown, GitHub Actions CI, integration tests |
-| Phase 8 | v0.8.0 | ✅ Complete | CSRF middleware, logging, error handler, input validation, health check |
-| Phase 9 | v0.9.0 | ✅ Complete | Response compression, caching layer, metrics middleware, async WebSocket, benchmarking suite |
-| Phase 10 | v1.0.0 | ✅ Complete | REST API example, tutorials, release engineering |
+### What separates a v1 library from a v2 platform?
 
-**Current state**: 129/129 unit tests passing · zero compiler warnings · 25 source modules · 5 example servers
+Working from network fundamentals upward:
 
----
+1. **Transport encryption is non-negotiable** — Every production deployment requires HTTPS. Without TLS, browsers refuse connections, load balancers reject backends, and credentials travel in plaintext. Pure C TLS (not OpenSSL) is the single highest-impact v2 feature.
 
-## 4. Grounded First-Principles Design
+2. **Protocol evolution drives adoption** — HTTP/2 multiplexing eliminates head-of-line blocking. HTTP/3 over QUIC eliminates TCP head-of-line blocking entirely. Supporting these protocols in pure C is a differentiator no other single-file C library offers.
 
-### What makes a network server production-safe?
+3. **Persistence eliminates deployment complexity** — Requiring an external database (PostgreSQL, Redis) for simple state storage adds operational burden. An embedded key-value store and file-based persistence layer makes the library self-sufficient for 80% of use cases.
 
-Working from the socket up, not from features down:
+4. **Multi-core utilization determines throughput ceiling** — A single-threaded event loop or thread pool is limited to one core's throughput. Multi-process (fork-based) architecture with shared-nothing design scales linearly with CPU cores.
 
-1. **Timeout enforcement** — A server without socket timeouts is vulnerable to Slowloris and connection exhaustion. The current `recv()` call in the connection loop blocks indefinitely.
-2. **Transport encryption** — Plaintext HTTP is rejected by browsers and load balancers. TLS 1.2+ is non-negotiable for production.
-3. **Graceful lifecycle** — Crash-stopping drops in-flight requests. A state machine (running → draining → stopped) with connection drain timeout is required.
-4. **Automated proof** — Without CI running tests on every push, regressions ship undetected. GitHub Actions with build + test + Valgrind is the minimum.
-5. **Observability** — A server without structured logging is a black box under incident. Logging middleware feeds debugging and monitoring.
-6. **Defensive parsing** — Edge cases in chunked encoding, duplicate headers, and request smuggling need targeted hardening.
+5. **Platform parity determines reach** — Windows IOCP, BSD kqueue variants, and cross-platform builds determine whether the library is Linux-only or truly portable.
 
-### Architecture Decision Records
+6. **Developer experience determines adoption** — CLI scaffolding tools, hot reload, structured debug modes, plugin architecture, and configuration file support determine whether developers choose this library over alternatives.
+
+### Architecture Decision Records (v2.0.0)
 
 | Decision | Rationale |
 |----------|-----------|
-| Socket timeouts via `setsockopt(SO_RCVTIMEO/SO_SNDTIMEO)` | Portable POSIX, no extra threads, prevents indefinite blocking |
-| Pure C TLS (not OpenSSL) | Aligns with zero-dependency principle; vendor `src/tls/` subdirectory |
-| Thread pool instead of thread-per-connection | Bounded resource usage; prevents fork-bomb under load |
-| Structured logging to `FILE *` stream | Zero-allocation hot path; configurable destination (stderr, file, custom) |
-| GitHub Actions CI matrix: Linux + macOS | Covers epoll + kqueue backends; Windows IOCP deferred to Phase 10 |
+| Pure C TLS 1.3 (not 1.2) | TLS 1.3 has simpler handshake (1-RTT), fewer cipher suites to implement, mandatory forward secrecy; aligns with modern security baseline |
+| X25519 key exchange (not RSA key exchange) | Smaller code, faster computation, mandatory in TLS 1.3; RSA key exchange removed in TLS 1.3 |
+| AES-256-GCM + ChaCha20-Poly1305 ciphers | Two cipher suites cover all platforms; AES-GCM for hardware-accelerated systems, ChaCha20 for ARM/embedded |
+| HTTP/2 via ALPN negotiation over TLS | HTTP/2 cleartext (h2c) rarely used in practice; TLS-based negotiation is the standard path |
+| HPACK with static table only (initially) | Dynamic table adds complexity and memory-based attacks (HPACK bomb); static table covers 90% of headers |
+| Embedded B-tree key-value store | Simplest data structure that supports ordered iteration, range queries, and O(log n) access; avoids LSM complexity |
+| Multi-process via `fork()` + shared-nothing | No shared memory races; each worker is independent; master process handles signals and restarts; proven model (nginx, Redis) |
+| Windows IOCP via abstraction layer | `src/platform.h` abstracts epoll/kqueue/IOCP behind common interface; compile-time selection |
+| Configuration via C struct + optional INI parser | No YAML/JSON config dependency; INI is trivially parseable in C; C struct provides type safety |
 
 ---
 
-## 5. Adversarial Review
+## 4. Adversarial Review
 
-| Attack Vector / Failure Mode | Current Exposure | Mitigation (Phase) |
-|------------------------------|-----------------|---------------------|
-| **Slowloris** (slow headers) | CRITICAL: `recv()` blocks forever | Socket read timeout (Phase 7) |
-| **Slow POST** (slow body) | CRITICAL: body read has no deadline | Body read timeout (Phase 7) |
-| **Connection exhaustion** | HIGH: thread-per-connection, no cap | Thread pool with bounded queue (Phase 7) |
-| **Plaintext credentials** | HIGH: no TLS | Pure C TLS 1.2+ (Phase 8) |
-| **CSRF** | MEDIUM: no token validation | CSRF middleware with double-submit cookie (Phase 8) |
-| **Request smuggling** | LOW: Content-Length + Transfer-Encoding conflict checked | Add duplicate Transfer-Encoding detection (Phase 7) |
-| **Memory leaks under error paths** | LOW: parser malloc on line 1046 may leak on early return | Valgrind CI gate (Phase 7) |
-| **No regression detection** | HIGH: no CI pipeline | GitHub Actions on every push (Phase 7) |
-| **Silent failures** | MEDIUM: errors go to fprintf(stderr) | Structured logging middleware (Phase 8) |
-| **Stale connections after shutdown** | MEDIUM: no drain phase | Graceful shutdown state machine (Phase 7) |
+| Attack Vector / Failure Mode | Current Exposure (v1.0.0) | Mitigation (Phase) |
+|------------------------------|--------------------------|---------------------|
+| **Plaintext credential exposure** | CRITICAL: no TLS at all | Pure C TLS 1.3 (Phase 11) |
+| **TLS implementation bugs** | N/A (not yet implemented) | NIST test vectors + known-answer tests; constant-time operations; fuzz testing (Phase 11-12) |
+| **HTTP/2 stream flood** | N/A (not yet implemented) | MAX_CONCURRENT_STREAMS limit; stream reset rate limiting; SETTINGS_MAX_HEADER_LIST_SIZE (Phase 13) |
+| **HPACK bomb (memory exhaustion)** | N/A | Static table only initially; dynamic table with hard size cap (Phase 13) |
+| **Persistent storage corruption** | N/A (no persistence) | Write-ahead log; fsync on commit; CRC32 checksums on pages (Phase 14) |
+| **B-tree page split crash** | N/A | WAL replay on recovery; atomic rename for page files (Phase 14) |
+| **Multi-process fork bomb** | N/A (single process) | Hard worker count limit; master process rate-limits respawns (Phase 16) |
+| **Shared socket thundering herd** | N/A | SO_REUSEPORT with per-worker accept; or master-distributes-fd model (Phase 16) |
+| **QUIC amplification attack** | N/A | Retry token validation; address validation before resource commitment (Phase 19) |
+| **Cross-platform divergence** | MEDIUM: Windows untested | Platform abstraction layer; CI matrix expansion (Phase 17) |
+| **Plugin arbitrary code execution** | N/A | Plugins are compile-time linked C modules, not runtime-loaded DSOs (Phase 18) |
+| **Config injection** | N/A | INI parser rejects values > MAX_CONFIG_VALUE_LEN; no shell expansion (Phase 18) |
+| **Memory growth under load** | LOW: Valgrind clean | Continuous benchmark with RSS monitoring; leak detection in CI (Phase 20) |
 
 ---
 
-## 6. Design Iteration (Refined Architecture)
+## 5. Design Iteration (Refined Architecture)
 
-Based on adversarial review, the phases are ordered by **blast radius** — the damage caused if the gap is not closed:
+Phases ordered by **dependency chain** and **blast radius**:
 
 ```
-Phase 7 (v0.7.0): Server Hardening & CI
-   ├── Socket timeouts (blocks Slowloris/Slow-POST)
-   ├── Thread pool (bounds resource usage)
-   ├── Graceful shutdown (drain + timeout)
-   ├── Connection hardening (keep-alive limits, partial I/O loops)
-   ├── GitHub Actions CI (build + test + Valgrind on Linux/macOS)
-   └── Networking integration tests
+Phase 11 (v1.1.0): TLS Foundation — Crypto Primitives
+   ├── SHA-256 / SHA-384 (FIPS 180-4)
+   ├── AES-256-GCM (NIST SP 800-38D)
+   ├── ChaCha20-Poly1305 (RFC 8439)
+   ├── X25519 key exchange (RFC 7748)
+   ├── HKDF key derivation (RFC 5869)
+   ├── Pure C big-integer arithmetic for X25519
+   └── NIST/RFC test vector validation for every primitive
 
-Phase 8 (v0.8.0): Security & Observability
-   ├── Pure C TLS 1.2 (AES-GCM, SHA-256, RSA/ECDSA)
-   ├── CSRF middleware (double-submit cookie)
-   ├── Logging middleware (structured, configurable levels)
-   ├── Error handler middleware (centralized 4xx/5xx responses)
-   └── Input validation helpers (sanitization, length checks)
+Phase 12 (v1.2.0): TLS 1.3 Handshake & HTTPS
+   ├── TLS 1.3 record layer (RFC 8446)
+   ├── Handshake state machine (ClientHello → ServerHello → Finished)
+   ├── Certificate chain validation (X.509 DER parsing)
+   ├── PEM file loading (certificate + private key)
+   ├── ALPN negotiation (for HTTP/2 in Phase 13)
+   ├── `http_server_enable_tls()` API
+   └── HTTPS example server with self-signed certificate
 
-Phase 9 (v0.9.0): Performance & Protocol
-   ├── HTTP/2 binary framing + stream multiplexing
-   ├── Response compression (gzip/deflate, pure C)
-   ├── In-memory caching layer (LRU, TTL)
-   ├── Async WebSocket mode (event loop integration)
-   └── Benchmarking suite
+Phase 13 (v1.3.0): HTTP/2 Protocol
+   ├── Binary framing layer (RFC 7540)
+   ├── HPACK header compression (RFC 7541, static table)
+   ├── Stream multiplexing with priority
+   ├── Flow control (connection-level + stream-level)
+   ├── Server push
+   ├── `http_server_enable_http2()` API
+   └── h2 + h2c (cleartext) support
 
-Phase 10 (v1.0.0): Release Readiness
-   ├── Tutorial series (REST API, WebSocket chat, file upload)
-   ├── REST API example application
-   ├── Windows IOCP support
-   ├── BSD platform testing
-   ├── Health check endpoint
-   └── CHANGELOG + semantic versioning enforcement
+Phase 14 (v1.4.0): Persistent Storage Engine
+   ├── B-tree key-value store (on-disk, memory-mapped)
+   ├── Write-ahead log (WAL) for crash recovery
+   ├── Transaction support (begin/commit/rollback)
+   ├── Page-level CRC32 checksums
+   ├── Iterator API for range queries
+   ├── `storage_open()` / `storage_close()` lifecycle
+   └── Integration with session store + cache persistence
+
+Phase 15 (v1.5.0): Advanced Middleware & Content
+   ├── Directory listing (auto-generated HTML indexes)
+   ├── Server-Sent Events (SSE) for streaming
+   ├── Content negotiation (Accept header parsing)
+   ├── Request/response streaming (chunked transfer)
+   ├── Route groups with scoped middleware
+   ├── Regex-based route matching
+   └── ETag generation improvements (weak/strong)
+
+Phase 16 (v1.6.0): Multi-Process Architecture
+   ├── Master-worker process model (fork-based)
+   ├── Worker supervision and auto-restart
+   ├── SO_REUSEPORT per-worker accept
+   ├── Signal-based worker management (SIGUSR1/SIGUSR2)
+   ├── Zero-downtime reload (hot restart)
+   ├── `http_server_set_workers(n)` API
+   └── Per-worker metrics aggregation
+
+Phase 17 (v1.7.0): Cross-Platform Hardening
+   ├── Platform abstraction layer (`src/platform.h`)
+   ├── Windows IOCP event loop backend
+   ├── Windows named pipes for IPC
+   ├── BSD (FreeBSD/OpenBSD/NetBSD) testing + CI
+   ├── MSVC build support (CMake generator)
+   ├── CI matrix: Linux (GCC/Clang) + macOS (Clang) + Windows (MSVC) + FreeBSD
+   └── Platform compatibility documentation
+
+Phase 18 (v1.8.0): Developer Experience & Configuration
+   ├── INI configuration file parser
+   ├── Plugin/extension architecture (compile-time modules)
+   ├── Multiple template formats (Mustache-style, includes, inheritance)
+   ├── Auto-escaping (HTML/URL/JS context-aware)
+   ├── Debug mode (verbose logging, request inspection, timing)
+   ├── API versioning support (URL prefix + header-based)
+   └── Configuration validation and hot-reload
+
+Phase 19 (v1.9.0): HTTP/3 & QUIC
+   ├── UDP socket layer
+   ├── QUIC transport protocol (RFC 9000)
+   ├── QUIC handshake (integrates Phase 11-12 TLS 1.3)
+   ├── Connection migration
+   ├── HTTP/3 framing (RFC 9114)
+   ├── QPACK header compression (RFC 9204)
+   └── `http_server_enable_http3()` API
+
+Phase 20 (v2.0.0): Release Engineering & Ecosystem
+   ├── CLI tool (project scaffolding, route listing, config validator)
+   ├── Prometheus-compatible metrics export endpoint
+   ├── OpenTelemetry-compatible trace context propagation
+   ├── Comprehensive fuzz testing suite
+   ├── Performance regression CI gate
+   ├── Complete v2.0.0 documentation + migration guide
+   └── Semantic versioning enforcement + release automation
 ```
 
 ---
 
-## 7. Milestone Roadmap (1–2 Week Slices)
+## 6. Milestone Roadmap (1–2 Week Slices)
 
-### Phase 7: Server Hardening & CI — v0.7.0 (4 weeks)
-
-| Week | Milestone | Deliverables | Dependencies |
-|------|-----------|-------------|--------------|
-| **W1** | Socket Timeouts & Connection Hardening | `setsockopt(SO_RCVTIMEO)` on accept; partial-I/O `recv()`/`send()` loops; keep-alive request limit (100 req/conn default) | None |
-| **W2** | Thread Pool & Graceful Shutdown | Bounded thread pool (configurable size, default 16); server state machine (running→draining→stopped); `http_server_shutdown()` API; SIGTERM/SIGINT handler | W1 (timeout feeds drain logic) |
-| **W3** | GitHub Actions CI + Integration Tests | `.github/workflows/ci.yml` (Linux gcc + macOS clang); Valgrind memcheck gate; `tests/integration/` with raw-socket HTTP client; malformed input + concurrent connection tests | W1+W2 (stable server to test against) |
-| **W4** | Parser Hardening & Stabilization | Duplicate Transfer-Encoding detection; `Expect: 100-continue` handling; chunked-size overflow clamping; comprehensive edge-case unit tests; full regression pass | W1-W3 (CI catches regressions) |
-
-### Phase 8: Security & Observability — v0.8.0 (5 weeks)
+### Phase 11: TLS Foundation — Crypto Primitives — v1.1.0 (6 weeks)
 
 | Week | Milestone | Deliverables | Dependencies |
 |------|-----------|-------------|--------------|
-| **W5** | Crypto Primitives | `src/tls/crypto_sha256.c` (SHA-256); `src/tls/crypto_aes_gcm.c` (AES-128/256-GCM); `src/tls/crypto_rsa.c` (RSA PKCS#1 v1.5 + OAEP) | None (standalone modules) |
-| **W6** | TLS Record Layer & Handshake (Part 1) | `src/tls/tls_record.c` (record framing); `src/tls/tls_handshake.c` (ClientHello/ServerHello); PEM certificate parser; key loading | W5 (crypto primitives) |
-| **W7** | TLS Handshake (Part 2) & Integration | Complete handshake state machine; `http_server_enable_tls(server, cert, key)` API; HTTPS example server; TLS unit tests with test vectors | W6 |
-| **W8** | Logging & Error Handler Middleware | `src/middleware_log.c` (configurable log levels: DEBUG/INFO/WARN/ERROR; format: timestamp, method, path, status, duration); `src/middleware_error.c` (centralized error pages, custom error callbacks) | None |
-| **W9** | CSRF Middleware & Input Validation | `src/middleware_csrf.c` (double-submit cookie, per-request token generation, constant-time comparison); `src/input_validation.c` (string length check, allowed-character filter, integer range validation) | Phase 7 CI (validates correctness) |
+| **W1** | SHA-256 / SHA-384 | `src/tls/sha256.c` — FIPS 180-4 compliant; NIST test vectors (short, long, Monte Carlo); `sha256()` and `sha384()` APIs | None |
+| **W2** | AES-256-GCM | `src/tls/aes_gcm.c` — NIST SP 800-38D compliant; key schedule, GCM encrypt/decrypt with authentication tag; NIST test vectors | None |
+| **W3** | ChaCha20-Poly1305 | `src/tls/chacha20_poly1305.c` — RFC 8439 compliant; stream cipher + AEAD construction; IETF test vectors | None |
+| **W4** | X25519 Key Exchange | `src/tls/x25519.c` — RFC 7748 compliant; pure C big-integer field arithmetic (mod 2^255-19); scalar multiplication; RFC test vectors | None |
+| **W5** | HKDF + Key Derivation | `src/tls/hkdf.c` — RFC 5869 compliant; HKDF-Extract + HKDF-Expand using HMAC-SHA256/SHA384; TLS 1.3 key schedule helper functions | W1 (SHA-256) |
+| **W6** | Integration & Hardening | Constant-time comparison for all crypto ops; `explicit_bzero()` on key material; Valgrind clean; 60+ crypto unit tests; `src/tls/crypto.h` unified header | W1–W5 |
 
-### Phase 9: Performance & Protocol — v0.9.0 (5 weeks)
-
-| Week | Milestone | Deliverables | Dependencies |
-|------|-----------|-------------|--------------|
-| **W10** | HTTP/2 Framing & Streams | `src/http2/` directory; binary frame parser; stream multiplexing; HPACK header compression (static + dynamic tables); settings frame handling | Phase 7 (hardened connection layer) |
-| **W11** | HTTP/2 Integration | Server push; stream prioritization; integration with existing router; `http_server_enable_http2()` API; HTTP/2 unit tests | W10 |
-| **W12** | Response Compression | Pure C gzip (DEFLATE + gzip header, based on RFC 1951/1952); `Accept-Encoding` negotiation; `Content-Encoding: gzip` header; minimum size threshold (default 1KB) | None |
-| **W13** | Caching Layer & Async WebSocket | `src/cache.c` (LRU eviction, TTL, configurable max size); async WebSocket frame processing in event loop; non-blocking WebSocket sends with write queue | Phase 7 (event loop stability) |
-| **W14** | Benchmarking Suite | `tests/benchmark/` directory; throughput test (requests/sec); latency percentiles (p50/p95/p99); memory usage tracking; comparison scripts; CI integration for regression detection | All prior phases |
-
-### Phase 10: Release Readiness — v1.0.0 (3 weeks)
+### Phase 12: TLS 1.3 Handshake & HTTPS — v1.2.0 (6 weeks)
 
 | Week | Milestone | Deliverables | Dependencies |
 |------|-----------|-------------|--------------|
-| **W15** | Examples & Tutorials | `examples/rest_api_server.c` (full CRUD); `examples/websocket_chat.c`; `examples/file_upload.c`; step-by-step tutorial docs in `docs/tutorials/` | All features complete |
-| **W16** | Platform Hardening | Windows IOCP event loop backend; BSD (FreeBSD/OpenBSD) CI testing; platform-specific CI matrix expansion; `docs/PLATFORM.md` compatibility matrix | Phase 7 CI infrastructure |
-| **W17** | Release Engineering | Semantic versioning enforcement; `CHANGELOG.md` finalization; health check endpoint (`/healthz`); release automation in GitHub Actions; v1.0.0 tag and release | All prior phases |
+| **W7** | TLS Record Layer | `src/tls/tls_record.c` — record framing (type, version, length); content type encryption; padding; record size limits (16KB) | Phase 11 (AES-GCM / ChaCha20) |
+| **W8** | TLS Handshake Part 1 | `src/tls/tls_handshake.c` — ClientHello parsing; ServerHello generation; supported_versions extension; key_share extension (X25519) | W7, Phase 11 (X25519) |
+| **W9** | TLS Handshake Part 2 | EncryptedExtensions; server Certificate message; CertificateVerify; Finished message; handshake transcript hash | W8 |
+| **W10** | Certificate Handling | `src/tls/x509.c` — DER/PEM parser for X.509 certificates; certificate chain building; RSA/ECDSA signature verification for certificates | Phase 11 (SHA-256) |
+| **W11** | HTTPS Server Integration | `http_server_enable_tls(server, cert_path, key_path)` API; ALPN negotiation; `examples/https_server.c`; SNI callback support | W7–W10 |
+| **W12** | TLS Testing & Security Audit | Test against `curl --tlsv1.3`; browser compatibility; session resumption (0-RTT optional); 40+ TLS unit tests; Valgrind + timing leak analysis | W7–W11 |
+
+### Phase 13: HTTP/2 Protocol — v1.3.0 (5 weeks)
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W13** | Binary Framing | `src/http2/frame.c` — frame parser/serializer for all 10 frame types (DATA, HEADERS, PRIORITY, RST_STREAM, SETTINGS, PUSH_PROMISE, PING, GOAWAY, WINDOW_UPDATE, CONTINUATION) | None |
+| **W14** | HPACK Compression | `src/http2/hpack.c` — static table (61 entries); Huffman coding; integer encoding/decoding; header block encoding/decoding; HPACK test vectors | None |
+| **W15** | Stream Multiplexing | `src/http2/stream.c` — stream state machine (idle→open→half-closed→closed); stream priority tree; connection-level + stream-level flow control; MAX_CONCURRENT_STREAMS enforcement | W13 |
+| **W16** | HTTP/2 Server Integration | `http_server_enable_http2()` API; connection preface handling; settings negotiation; integration with existing router; server push API; h2c upgrade support | W13–W15, Phase 12 (ALPN) |
+| **W17** | HTTP/2 Testing | `curl --http2` validation; multiplexed request tests; flow control tests; HPACK bomb protection; 50+ HTTP/2 unit tests; performance comparison vs HTTP/1.1 | W13–W16 |
+
+### Phase 14: Persistent Storage Engine — v1.4.0 (5 weeks)
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W18** | B-tree Core | `src/storage/btree.c` — on-disk B-tree with configurable page size (4KB default); page allocation; node split/merge; key-value insert/lookup/delete | None |
+| **W19** | Write-Ahead Log | `src/storage/wal.c` — append-only WAL; fsync-on-commit; CRC32 checksums per record; WAL replay on crash recovery; WAL truncation after checkpoint | W18 |
+| **W20** | Transaction Support | `src/storage/transaction.c` — begin/commit/rollback; MVCC snapshot isolation; read-only transactions without locks; deadlock detection timeout | W18–W19 |
+| **W21** | Iterator & Query Interface | `storage_iterator_t` — forward/reverse iteration; range queries (start_key, end_key); prefix scan; cursor-based pagination | W18 |
+| **W22** | Integration & Persistence APIs | `storage_open(path)` / `storage_close()` lifecycle; `storage_get()` / `storage_put()` / `storage_delete()`; session store backend; cache persistence backend; 40+ storage tests | W18–W21 |
+
+### Phase 15: Advanced Middleware & Content — v1.5.0 (4 weeks)
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W23** | Directory Listing & SSE | `src/middleware_dirlist.c` — auto-generated HTML directory indexes with sortable columns; `src/sse.c` — Server-Sent Events (SSE) with event ID, retry, multi-line data | None |
+| **W24** | Content Negotiation & Streaming | `Accept` / `Accept-Language` / `Accept-Encoding` parsing with quality values; request body streaming (chunked read callback); response streaming (chunked write callback) | None |
+| **W25** | Route Groups & Regex Routes | `router_group_create(prefix)` — scoped middleware per group; `router_add_regex_route()` — POSIX `regcomp()`/`regexec()` based pattern matching; named captures | None |
+| **W26** | Testing & Integration | 30+ middleware tests; SSE example (`examples/sse_server.c`); directory listing example; streaming upload example; backward-compatible with existing router API | W23–W25 |
+
+### Phase 16: Multi-Process Architecture — v1.6.0 (5 weeks)
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W27** | Master-Worker Model | `src/worker.c` — `fork()`-based worker spawning; master process signal handling (SIGCHLD, SIGTERM, SIGHUP); worker PID tracking; automatic restart on crash | None |
+| **W28** | Socket Sharing & Accept | `SO_REUSEPORT` per-worker accept (Linux 3.9+); fallback to master-distributes-fd via `sendmsg()`/`SCM_RIGHTS` on older kernels/macOS; accept mutex for thundering herd prevention | W27 |
+| **W29** | Zero-Downtime Reload | SIGHUP triggers: master forks new workers → new workers start accepting → old workers drain and exit; binary upgrade via `execve()` with inherited listening socket | W27–W28 |
+| **W30** | Metrics Aggregation | Per-worker metrics collection; master aggregates via shared memory or pipe; `/metrics` endpoint serves combined JSON; worker health monitoring | W27, Phase 9 (metrics) |
+| **W31** | Testing & Stabilization | `http_server_set_workers(n)` API; multi-worker stress tests (10 workers, 10K requests); graceful shutdown of all workers; Valgrind on single-worker mode; 25+ worker tests | W27–W30 |
+
+### Phase 17: Cross-Platform Hardening — v1.7.0 (4 weeks)
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W32** | Platform Abstraction Layer | `src/platform.h` + `src/platform_posix.c` + `src/platform_win32.c` — unified API for: socket operations, file I/O, threading, time, random bytes, memory-mapped files | None |
+| **W33** | Windows IOCP Backend | `src/event_loop_iocp.c` — IOCP-based event loop; overlapped I/O; completion port per-thread; integration with platform abstraction; Windows socket initialization (`WSAStartup`) | W32 |
+| **W34** | BSD & CI Matrix | FreeBSD/OpenBSD CI runners (or cross-compilation); BSD-specific `kqueue` flags; `arc4random_buf()` for random bytes; platform compatibility matrix documentation | W32 |
+| **W35** | MSVC Build & Testing | CMake MSVC generator support; `#pragma` warning suppression mapping; Windows-specific test adaptations; end-to-end CI: Linux (GCC/Clang) + macOS (Clang) + Windows (MSVC) + FreeBSD | W32–W34 |
+
+### Phase 18: Developer Experience & Configuration — v1.8.0 (5 weeks)
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W36** | INI Configuration Parser | `src/config.c` — INI file parser with sections, key=value pairs, comments (`#`, `;`); `config_load(path)` / `config_get(section, key)` / `config_get_int()` / `config_get_bool()`; max value length enforcement | None |
+| **W37** | Plugin Architecture | `src/plugin.c` — compile-time plugin registration; `plugin_register(name, init_fn, cleanup_fn)` macro; plugin lifecycle hooks (on_server_start, on_request, on_response, on_server_stop); plugin dependency ordering | None |
+| **W38** | Advanced Templates | `src/template_v2.c` — Mustache-compatible syntax (`{{#section}}`, `{{/section}}`, `{{>partial}}`); template inheritance (`{{<base}}`); auto-escaping (HTML context by default, `{{{raw}}}` for unescaped); compiled template caching | None |
+| **W39** | Debug Mode & API Versioning | `http_server_set_debug(true)` — verbose request/response logging with headers, timing per middleware, memory allocation tracking; `router_version_group("v1", router_v1)` — URL-prefix and `Accept-Version` header-based API versioning | None |
+| **W40** | Testing & Documentation | 35+ developer experience tests; configuration example; plugin example; advanced template example; debug mode documentation; API versioning tutorial | W36–W39 |
+
+### Phase 19: HTTP/3 & QUIC — v1.9.0 (6 weeks)
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W41** | UDP Socket Layer | `src/quic/udp.c` — UDP socket creation; `recvmmsg()`/`sendmmsg()` for batch I/O; `SO_REUSEPORT` for multi-worker UDP; GSO/GRO support (Linux); event loop integration for UDP readability | None |
+| **W42** | QUIC Transport Core | `src/quic/transport.c` — QUIC packet parsing (Initial, Handshake, 0-RTT, 1-RTT); variable-length integer encoding; connection ID management; packet number encryption/decryption | Phase 11 (AES-GCM, ChaCha20) |
+| **W43** | QUIC Handshake | `src/quic/handshake.c` — integrates TLS 1.3 (Phase 12) as QUIC crypto; Initial packet protection; handshake completion; retry tokens for address validation; anti-amplification limits | Phase 12 (TLS 1.3), W42 |
+| **W44** | QUIC Streams & Flow Control | `src/quic/stream.c` — bidirectional and unidirectional streams; stream-level and connection-level flow control; MAX_STREAMS enforcement; stream prioritization | W42 |
+| **W45** | HTTP/3 Framing & QPACK | `src/http3/frame.c` — HTTP/3 frame types (DATA, HEADERS, CANCEL_PUSH, SETTINGS, PUSH_PROMISE, GOAWAY); `src/http3/qpack.c` — QPACK header compression (static table + dynamic table with encoder/decoder streams) | W44 |
+| **W46** | HTTP/3 Server Integration | `http_server_enable_http3()` API; Alt-Svc header for HTTP/3 discovery; connection migration support; `examples/http3_server.c`; 50+ QUIC/HTTP3 unit tests | W41–W45 |
+
+### Phase 20: Release Engineering & Ecosystem — v2.0.0 (4 weeks)
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W47** | CLI Tooling | `tools/weblib-cli.c` — `weblib init` (project scaffolding with CMakeLists.txt + main.c + Dockerfile); `weblib routes` (list registered routes from compiled server); `weblib config validate` (check INI file syntax) | Phase 18 (config) |
+| **W48** | Observability Export | `src/prometheus.c` — `/metrics` endpoint in Prometheus exposition format (counters, gauges, histograms); `src/tracing.c` — W3C Trace Context (`traceparent` header) propagation; span creation/completion; trace ID in log output | Phase 9 (metrics) |
+| **W49** | Fuzz Testing & Performance CI | `tests/fuzz/` — fuzz harnesses for HTTP parser, JSON parser, TLS handshake, HPACK decoder, QUIC packet parser (using libFuzzer-compatible API); benchmark regression CI gate (±10% tolerance on req/s) | All phases |
+| **W50** | v2.0.0 Release | `CHANGELOG.md` finalization; migration guide (v1→v2 breaking changes); complete API reference update; `docs/architecture.md` (system design document); semantic version tag; GitHub Release with binary artifacts | All phases |
 
 ---
 
-## 8. Atomic Task Breakdown
+## 7. Atomic Task Breakdown
 
-### Phase 7 — Server Hardening & CI
+### Phase 11 — TLS Foundation: Crypto Primitives
 
-#### 7.1 Socket Timeouts
+#### 11.1 SHA-256 / SHA-384
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 7.1.1 | Add `setsockopt(SO_RCVTIMEO)` on accepted client sockets | `src/http_server.c` | Read timeout triggers after configurable seconds (default 30s) | 2h |
-| 7.1.2 | Add `setsockopt(SO_SNDTIMEO)` on accepted client sockets | `src/http_server.c` | Write timeout triggers after configurable seconds (default 30s) | 1h |
-| 7.1.3 | Add `http_server_set_timeout(server, read_sec, write_sec)` API | `include/weblib.h`, `src/http_server.c` | API documented, validated (rejects negative values) | 2h |
-| 7.1.4 | Handle `EAGAIN`/`EWOULDBLOCK` in recv/send loops | `src/http_server.c` | Partial reads/writes retried; timeout returns error code | 3h |
-| 7.1.5 | Unit tests for timeout behavior | `tests/test_weblib.c` | Test verifies server rejects slow client simulation | 2h |
+| 11.1.1 | Implement SHA-256 core (init, update, final) | `src/tls/sha256.c`, `src/tls/sha256.h` | NIST short message test vectors pass | 4h |
+| 11.1.2 | Implement SHA-384 (truncated SHA-512) | `src/tls/sha384.c` | NIST SHA-384 test vectors pass | 3h |
+| 11.1.3 | HMAC-SHA256 / HMAC-SHA384 | `src/tls/hmac.c` | RFC 4231 test vectors pass | 2h |
+| 11.1.4 | Monte Carlo test (1M iterations) | `tests/test_crypto.c` | Final digest matches NIST expected value | 2h |
+| 11.1.5 | Constant-time comparison utility | `src/tls/crypto_util.c` | No early-exit on mismatch; timing-safe | 1h |
 
-#### 7.2 Thread Pool
+#### 11.2 AES-256-GCM
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 7.2.1 | Implement `thread_pool_t` with work queue | `src/thread_pool.c` (new), `src/thread_pool.h` (new) | Create/destroy; submit work items; bounded queue (default 256) | 4h |
-| 7.2.2 | Mutex + condition variable synchronization | `src/thread_pool.c` | No data races under concurrent submit; Valgrind clean | 3h |
-| 7.2.3 | Integrate thread pool into `http_server_t` | `src/http_server.c` | Threaded mode uses pool instead of thread-per-connection | 3h |
-| 7.2.4 | Add `http_server_set_thread_count(server, n)` API | `include/weblib.h`, `src/http_server.c` | Configurable thread count; default 16; min 1, max 256 | 1h |
-| 7.2.5 | Unit tests for thread pool | `tests/test_weblib.c` | Create/destroy; submit 100 items; all complete; no leaks | 2h |
+| 11.2.1 | AES key schedule (128/256-bit) | `src/tls/aes.c` | Encrypt single block matches NIST AESAVS vectors | 4h |
+| 11.2.2 | GCM mode (GHASH + CTR) | `src/tls/aes_gcm.c` | NIST SP 800-38D test cases 1–18 pass | 6h |
+| 11.2.3 | AEAD encrypt/decrypt API | `src/tls/aes_gcm.c` | Authenticated decryption rejects tampered ciphertext | 2h |
+| 11.2.4 | GCM tag verification (constant-time) | `src/tls/aes_gcm.c` | No timing side-channel on tag comparison | 1h |
 
-#### 7.3 Graceful Shutdown
+#### 11.3 ChaCha20-Poly1305
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 7.3.1 | Add server state enum (RUNNING, DRAINING, STOPPED) | `include/weblib.h`, `src/http_server.c` | State transitions are atomic (`sig_atomic_t`) | 1h |
-| 7.3.2 | Implement `http_server_shutdown(server, timeout_sec)` | `src/http_server.c`, `include/weblib.h` | Closes listening socket; waits for in-flight requests up to timeout | 3h |
-| 7.3.3 | SIGTERM/SIGINT handler (POSIX) | `src/http_server.c` | Signal triggers state → DRAINING; second signal → immediate exit | 2h |
-| 7.3.4 | Thread pool drain on shutdown | `src/thread_pool.c` | All queued work items complete or are cancelled; threads join | 2h |
-| 7.3.5 | Unit test: shutdown with active connections | `tests/test_weblib.c` | Server shuts down cleanly; no leaked sockets; Valgrind clean | 3h |
+| 11.3.1 | ChaCha20 quarter-round + block function | `src/tls/chacha20.c` | RFC 8439 §2.1–2.3 test vectors pass | 4h |
+| 11.3.2 | ChaCha20 stream cipher | `src/tls/chacha20.c` | RFC 8439 §2.4 test vector (encryption) | 2h |
+| 11.3.3 | Poly1305 one-time authenticator | `src/tls/poly1305.c` | RFC 8439 §2.5 test vectors pass | 4h |
+| 11.3.4 | AEAD_CHACHA20_POLY1305 construction | `src/tls/chacha20_poly1305.c` | RFC 8439 §2.8 AEAD test vector passes | 3h |
 
-#### 7.4 GitHub Actions CI
+#### 11.4 X25519 Key Exchange
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 7.4.1 | Create `.github/workflows/ci.yml` | `.github/workflows/ci.yml` (new) | Triggers on push + PR to main; Linux (gcc) + macOS (clang) matrix | 2h |
-| 7.4.2 | Build step: cmake + make | `.github/workflows/ci.yml` | Zero warnings (`-Werror`); both static and shared lib | 1h |
-| 7.4.3 | Test step: run `test_weblib` | `.github/workflows/ci.yml` | All tests pass; non-zero exit on failure | 1h |
-| 7.4.4 | Valgrind memcheck step (Linux only) | `.github/workflows/ci.yml` | Zero errors, zero leaks; fail build on Valgrind error | 2h |
-| 7.4.5 | Cache cmake build directory | `.github/workflows/ci.yml` | Incremental builds use cache; CI time < 5 min | 1h |
+| 11.4.1 | Field arithmetic (mod 2^255-19) | `src/tls/x25519.c` | Add, sub, mul, square, invert operations; test vectors | 8h |
+| 11.4.2 | Montgomery ladder scalar multiplication | `src/tls/x25519.c` | RFC 7748 §5.2 test vectors (Alice/Bob key exchange) | 6h |
+| 11.4.3 | Key generation (clamp + multiply) | `src/tls/x25519.c` | Generated shared secret matches RFC expected output | 2h |
+| 11.4.4 | Timing-safe implementation audit | `src/tls/x25519.c` | No secret-dependent branches or array indexing | 2h |
 
-#### 7.5 Integration Tests
+#### 11.5 HKDF Key Derivation
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 7.5.1 | Pure C test client (raw socket HTTP sender) | `tests/integration/test_client.c` (new) | Connect, send request, read response, verify status code | 4h |
-| 7.5.2 | HTTP protocol conformance tests | `tests/integration/test_http_protocol.c` (new) | GET/POST/PUT/DELETE; keep-alive; chunked encoding; correct headers | 4h |
-| 7.5.3 | Malformed request tests | `tests/integration/test_malformed.c` (new) | Oversized headers → 431; invalid method → 501; missing Host → 400 | 3h |
-| 7.5.4 | Concurrent connection tests | `tests/integration/test_concurrent.c` (new) | 100 simultaneous connections; all get correct responses; no crashes | 4h |
-| 7.5.5 | CMake integration test target | `CMakeLists.txt`, `tests/integration/CMakeLists.txt` (new) | `make integration_tests` builds and runs all integration tests | 2h |
-
-#### 7.6 Parser Hardening
-| # | Task | File(s) | Acceptance Criteria | Est. |
-|---|------|---------|-------------------|------|
-| 7.6.1 | Detect duplicate `Transfer-Encoding` headers | `src/http_server.c` | Returns 400 on duplicate; test case added | 2h |
-| 7.6.2 | Handle `Expect: 100-continue` | `src/http_server.c` | Send `100 Continue` response before reading body | 2h |
-| 7.6.3 | Clamp chunked size to `MAX_BODY_BYTES` | `src/http_server.c` | `strtoul()` result checked against limit; returns 413 on overflow | 1h |
-| 7.6.4 | Add request line length validation | `src/http_server.c` | URI > 8192 bytes → 414 (already exists, verify edge cases) | 1h |
-| 7.6.5 | Edge-case unit tests (20+ cases) | `tests/test_weblib.c` | Empty body, zero-length chunks, trailing whitespace, null bytes | 4h |
+| 11.5.1 | HKDF-Extract | `src/tls/hkdf.c` | RFC 5869 test vectors (SHA-256) pass | 2h |
+| 11.5.2 | HKDF-Expand | `src/tls/hkdf.c` | RFC 5869 test vectors pass; output length up to 255*HashLen | 2h |
+| 11.5.3 | TLS 1.3 key schedule helpers | `src/tls/hkdf.c` | `derive_secret()`, `hkdf_expand_label()` per RFC 8446 §7.1 | 3h |
 
 ---
 
-### Phase 8 — Security & Observability (Summary)
+### Phase 12 — TLS 1.3 Handshake & HTTPS
+
+#### 12.1 TLS Record Layer
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 12.1.1 | Record framing (read/write) | `src/tls/tls_record.c` | Parse TLS record header; enforce 16KB max payload | 4h |
+| 12.1.2 | Record encryption (AEAD) | `src/tls/tls_record.c` | Encrypt/decrypt with per-record nonce; content type hiding | 4h |
+| 12.1.3 | Record layer buffering | `src/tls/tls_record.c` | Handle partial TCP reads; reassemble multi-record messages | 3h |
+
+#### 12.2 Handshake State Machine
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 12.2.1 | ClientHello parsing | `src/tls/tls_handshake.c` | Parse extensions: supported_versions, key_share, signature_algorithms, server_name | 6h |
+| 12.2.2 | ServerHello generation | `src/tls/tls_handshake.c` | Select cipher suite; include key_share with X25519 public key | 4h |
+| 12.2.3 | Key schedule computation | `src/tls/tls_handshake.c` | Derive handshake_secret, client/server handshake keys | 4h |
+| 12.2.4 | EncryptedExtensions + Certificate | `src/tls/tls_handshake.c` | Send EncryptedExtensions (ALPN); send Certificate chain | 4h |
+| 12.2.5 | CertificateVerify + Finished | `src/tls/tls_handshake.c` | RSA-PSS or ECDSA signature over transcript; verify client Finished | 4h |
+| 12.2.6 | Application data key derivation | `src/tls/tls_handshake.c` | Derive application traffic keys; transition record layer to app data | 3h |
+
+#### 12.3 Certificate & Key Management
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 12.3.1 | PEM parser (certificate + key) | `src/tls/pem.c` | Load PEM files with `-----BEGIN CERTIFICATE-----` markers; Base64 decode | 3h |
+| 12.3.2 | DER/ASN.1 parser for X.509 | `src/tls/x509.c` | Parse tbsCertificate, issuer, subject, validity, public key | 6h |
+| 12.3.3 | RSA public key operations | `src/tls/rsa.c` | RSA-PSS signature verification; PKCS#1 v1.5 for legacy certificates | 6h |
+| 12.3.4 | ECDSA P-256 signature verification | `src/tls/ecdsa.c` | Verify ECDSA-P256-SHA256 signatures on certificates | 6h |
+
+#### 12.4 HTTPS Integration
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 12.4.1 | `http_server_enable_tls()` API | `include/weblib.h`, `src/http_server.c` | Accepts cert_path + key_path; wraps accepted sockets in TLS | 4h |
+| 12.4.2 | TLS I/O wrapper (read/write) | `src/tls/tls_io.c` | Transparent encryption/decryption; integrates with event loop | 4h |
+| 12.4.3 | ALPN negotiation | `src/tls/tls_handshake.c` | Advertise `h2` and `http/1.1`; select based on client preference | 2h |
+| 12.4.4 | SNI callback | `src/tls/tls_handshake.c` | `http_server_set_sni_callback()` for virtual hosting | 2h |
+| 12.4.5 | HTTPS example server | `examples/https_server.c` | Self-signed cert generation instructions; curl validation | 3h |
+
+---
+
+### Phase 13 — HTTP/2 Protocol
+
+#### 13.1 Binary Framing
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 13.1.1 | Frame parser (9-byte header + payload) | `src/http2/frame.c` | Parse all 10 frame types; reject oversized frames | 4h |
+| 13.1.2 | Frame serializer | `src/http2/frame.c` | Serialize DATA, HEADERS, SETTINGS, PING, GOAWAY, WINDOW_UPDATE | 3h |
+| 13.1.3 | Connection preface handling | `src/http2/connection.c` | Validate client magic string `PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n` | 2h |
+| 13.1.4 | Settings negotiation | `src/http2/connection.c` | Exchange SETTINGS frames; acknowledge with ACK; enforce limits | 3h |
+
+#### 13.2 HPACK Compression
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 13.2.1 | Static table (61 entries) | `src/http2/hpack.c` | Lookup by index; reverse lookup by name+value | 2h |
+| 13.2.2 | Integer encoding/decoding | `src/http2/hpack.c` | RFC 7541 §5.1 prefix encoding; test vectors pass | 2h |
+| 13.2.3 | Huffman encoding/decoding | `src/http2/hpack.c` | RFC 7541 Appendix B Huffman table; encode/decode test vectors | 4h |
+| 13.2.4 | Header block decoding | `src/http2/hpack.c` | Decode indexed, literal w/o indexing, literal never indexed | 4h |
+| 13.2.5 | Dynamic table with size limit | `src/http2/hpack.c` | SETTINGS_HEADER_TABLE_SIZE enforcement; eviction on overflow | 3h |
+
+#### 13.3 Stream Multiplexing
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 13.3.1 | Stream state machine | `src/http2/stream.c` | idle→open→half-closed→closed transitions per RFC 7540 §5.1 | 4h |
+| 13.3.2 | Stream priority (weight + dependency) | `src/http2/stream.c` | Priority tree; weighted fair queueing for data frames | 4h |
+| 13.3.3 | Flow control (window update) | `src/http2/stream.c` | Connection-level + stream-level windows; WINDOW_UPDATE frames | 3h |
+| 13.3.4 | MAX_CONCURRENT_STREAMS enforcement | `src/http2/connection.c` | Reject new streams above limit with REFUSED_STREAM | 2h |
+| 13.3.5 | Server push | `src/http2/stream.c` | PUSH_PROMISE frame; push response on server-initiated stream | 4h |
+
+---
+
+### Phase 14 — Persistent Storage Engine
+
+#### 14.1 B-tree Core
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 14.1.1 | Page allocator (4KB pages) | `src/storage/pager.c` | Allocate/free pages; memory-mapped file backing; page cache | 4h |
+| 14.1.2 | B-tree node structure | `src/storage/btree.c` | Internal nodes (keys + child pointers); leaf nodes (keys + values) | 4h |
+| 14.1.3 | Insert with split | `src/storage/btree.c` | Insert key-value; split full nodes; maintain balance | 6h |
+| 14.1.4 | Lookup | `src/storage/btree.c` | Binary search within nodes; O(log n) key lookup | 2h |
+| 14.1.5 | Delete with merge/redistribute | `src/storage/btree.c` | Remove key; merge underfull nodes; maintain balance | 6h |
+
+#### 14.2 Write-Ahead Log
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 14.2.1 | WAL record format | `src/storage/wal.c` | Type + length + CRC32 + payload; sequential write | 3h |
+| 14.2.2 | WAL append + fsync | `src/storage/wal.c` | Durable writes; configurable sync mode (per-commit / periodic) | 3h |
+| 14.2.3 | WAL replay on recovery | `src/storage/wal.c` | Replay uncommitted records; skip corrupted (CRC mismatch) | 4h |
+| 14.2.4 | WAL checkpoint + truncation | `src/storage/wal.c` | Flush dirty pages to B-tree file; truncate WAL | 3h |
+
+#### 14.3 Transactions
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 14.3.1 | Begin / commit / rollback | `src/storage/transaction.c` | Transaction isolation; rollback discards WAL records | 4h |
+| 14.3.2 | Read-only transactions | `src/storage/transaction.c` | Snapshot reads without locks; no WAL writes | 2h |
+| 14.3.3 | Concurrent read-write | `src/storage/transaction.c` | Single writer + multiple readers; no blocking reads | 3h |
+
+#### 14.4 Iterator & Public API
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 14.4.1 | Forward/reverse iterator | `src/storage/iterator.c` | Cursor-based traversal; `storage_iterator_next()` / `_prev()` | 3h |
+| 14.4.2 | Range query | `src/storage/iterator.c` | `storage_iterator_seek(start_key)` + iterate until end_key | 2h |
+| 14.4.3 | Public API surface | `include/weblib.h`, `src/storage/storage.c` | `storage_open()`, `storage_close()`, `storage_get()`, `storage_put()`, `storage_delete()` | 3h |
+| 14.4.4 | Integration with session store | `src/session.c` | Optional persistent session backend via storage engine | 2h |
+
+---
+
+### Phase 15 — Advanced Middleware & Content (Summary)
 
 | # | Task | Est. |
 |---|------|------|
-| 8.1.1–8.1.5 | SHA-256 implementation + NIST test vectors | 3d |
-| 8.2.1–8.2.5 | AES-128/256-GCM implementation + NIST test vectors | 4d |
-| 8.3.1–8.3.4 | RSA PKCS#1 v1.5 sign/verify + test vectors | 3d |
-| 8.4.1–8.4.6 | TLS 1.2 record layer + handshake state machine | 5d |
-| 8.5.1–8.5.3 | PEM certificate parser + key loading | 2d |
-| 8.6.1–8.6.3 | `http_server_enable_tls()` API + integration | 2d |
-| 8.7.1–8.7.4 | Logging middleware (levels, format, destination) | 2d |
-| 8.8.1–8.8.3 | Error handler middleware (centralized 4xx/5xx) | 1d |
-| 8.9.1–8.9.4 | CSRF middleware (token gen, validation, cookie) | 2d |
-| 8.10.1–8.10.3 | Input validation helpers (length, charset, range) | 1d |
+| 15.1.1–15.1.3 | Directory listing middleware (HTML index, sortable, configurable) | 2d |
+| 15.2.1–15.2.3 | Server-Sent Events (SSE) with event ID, retry, keep-alive | 2d |
+| 15.3.1–15.3.3 | Content negotiation (Accept parsing, quality values, format selection) | 2d |
+| 15.4.1–15.4.3 | Request/response streaming (chunked read/write callbacks) | 2d |
+| 15.5.1–15.5.4 | Route groups with scoped middleware + regex routes (POSIX regex) | 3d |
+| 15.6.1–15.6.2 | Testing + examples (SSE server, streaming upload) | 2d |
 
-### Phase 9 — Performance & Protocol (Summary)
+### Phase 16 — Multi-Process Architecture (Summary)
 
 | # | Task | Est. |
 |---|------|------|
-| 9.1.1–9.1.6 | HTTP/2 binary framing + HPACK compression | 5d |
-| 9.2.1–9.2.4 | HTTP/2 stream multiplexing + server push | 4d |
-| 9.3.1–9.3.4 | Pure C DEFLATE/gzip compression | 4d |
-| 9.4.1–9.4.4 | LRU cache with TTL | 3d |
-| 9.5.1–9.5.4 | Async WebSocket event loop integration | 3d |
-| 9.6.1–9.6.3 | Benchmarking suite + CI regression tracking | 3d |
+| 16.1.1–16.1.4 | Master-worker fork model with PID tracking and signal handling | 3d |
+| 16.2.1–16.2.3 | Socket sharing (SO_REUSEPORT or SCM_RIGHTS) with accept balancing | 3d |
+| 16.3.1–16.3.3 | Zero-downtime reload (SIGHUP, new workers, old workers drain) | 3d |
+| 16.4.1–16.4.3 | Per-worker metrics aggregation via pipe/shared memory | 2d |
+| 16.5.1–16.5.3 | Multi-worker stress tests + API (`http_server_set_workers()`) | 2d |
 
-### Phase 10 — Release Readiness (Summary)
+### Phase 17 — Cross-Platform Hardening (Summary)
 
 | # | Task | Est. |
 |---|------|------|
-| 10.1.1–10.1.3 | REST API example + WebSocket chat example | 3d |
-| 10.2.1–10.2.3 | Tutorial docs (getting started, REST API, real-time) | 3d |
-| 10.3.1–10.3.3 | Windows IOCP event loop backend | 4d |
-| 10.4.1–10.4.2 | BSD testing + CI matrix expansion | 2d |
-| 10.5.1–10.5.3 | Health check endpoint + release automation | 2d |
+| 17.1.1–17.1.4 | Platform abstraction layer (socket, file, thread, time, random) | 3d |
+| 17.2.1–17.2.4 | Windows IOCP event loop backend with completion ports | 4d |
+| 17.3.1–17.3.3 | BSD kqueue refinements + FreeBSD/OpenBSD CI | 2d |
+| 17.4.1–17.4.3 | MSVC build support + Windows CI runner | 3d |
+| 17.5.1–17.5.2 | Platform compatibility documentation + matrix | 1d |
+
+### Phase 18 — Developer Experience & Configuration (Summary)
+
+| # | Task | Est. |
+|---|------|------|
+| 18.1.1–18.1.4 | INI configuration parser with sections, validation, defaults | 2d |
+| 18.2.1–18.2.4 | Plugin architecture (compile-time registration, lifecycle hooks) | 3d |
+| 18.3.1–18.3.4 | Advanced templates (Mustache, includes, inheritance, auto-escape) | 3d |
+| 18.4.1–18.4.3 | Debug mode (verbose logging, timing, memory tracking) | 2d |
+| 18.5.1–18.5.3 | API versioning (URL prefix + Accept-Version header) | 2d |
+
+### Phase 19 — HTTP/3 & QUIC (Summary)
+
+| # | Task | Est. |
+|---|------|------|
+| 19.1.1–19.1.3 | UDP socket layer with batch I/O and event loop integration | 3d |
+| 19.2.1–19.2.4 | QUIC transport (packet parsing, connection IDs, packet number encryption) | 5d |
+| 19.3.1–19.3.3 | QUIC handshake (TLS 1.3 integration, retry tokens, anti-amplification) | 4d |
+| 19.4.1–19.4.3 | QUIC streams and flow control (bidirectional/unidirectional) | 3d |
+| 19.5.1–19.5.3 | HTTP/3 framing + QPACK header compression | 4d |
+| 19.6.1–19.6.3 | HTTP/3 server integration + connection migration + example | 3d |
+
+### Phase 20 — Release Engineering & Ecosystem (Summary)
+
+| # | Task | Est. |
+|---|------|------|
+| 20.1.1–20.1.4 | CLI tool (init, routes, config validate, build) | 3d |
+| 20.2.1–20.2.3 | Prometheus metrics export (exposition format, histograms) | 2d |
+| 20.3.1–20.3.3 | Trace context propagation (W3C traceparent, span lifecycle) | 2d |
+| 20.4.1–20.4.3 | Fuzz testing suite (HTTP, JSON, TLS, HPACK, QUIC parsers) | 3d |
+| 20.5.1–20.5.2 | Performance regression CI gate (benchmark baseline ±10%) | 1d |
+| 20.6.1–20.6.3 | v2.0.0 release (CHANGELOG, migration guide, API docs, release automation) | 2d |
 
 ---
 
-## 9. Parallel Build Strategy
+## 8. Parallel Build Strategy
 
-Tasks that share no data dependencies can be developed simultaneously:
+Tasks with no data dependencies can be developed simultaneously:
 
 ```
-PARALLEL GROUP A (Week 1-2):
-├── 7.1 Socket Timeouts       ← touches http_server.c (connection accept path)
-├── 7.4 GitHub Actions CI      ← touches .github/workflows/ only
-└── 7.6 Parser Hardening       ← touches http_server.c (parse path, non-overlapping)
+PARALLEL GROUP A (W1–W4, Phase 11):
+├── 11.1 SHA-256/384          ← src/tls/sha256.c (standalone)
+├── 11.2 AES-256-GCM          ← src/tls/aes_gcm.c (standalone)
+├── 11.3 ChaCha20-Poly1305    ← src/tls/chacha20_poly1305.c (standalone)
+└── 11.4 X25519               ← src/tls/x25519.c (standalone)
 
-PARALLEL GROUP B (Week 2-3):
-├── 7.2 Thread Pool            ← new files (thread_pool.c/h)
-└── 7.5 Integration Tests      ← new files (tests/integration/)
+SEQUENTIAL (W5–W6, Phase 11):
+└── 11.5 HKDF                 ← depends on 11.1 (HMAC-SHA256)
 
-SEQUENTIAL:
-└── 7.3 Graceful Shutdown      ← depends on 7.1 (timeouts) + 7.2 (thread pool drain)
+PARALLEL GROUP B (W7–W10, Phase 12):
+├── 12.1 TLS Record Layer     ← depends on Phase 11 (crypto)
+├── 12.3 Certificate Handling  ← depends on Phase 11 (SHA-256)
+└── 13.1 HTTP/2 Framing        ← src/http2/frame.c (standalone, no TLS dependency)
 
-PARALLEL GROUP C (Week 5-7):
-├── 8.1-8.3 Crypto Primitives  ← new files (src/tls/crypto_*)
-├── 8.7 Logging Middleware      ← new file (src/middleware_log.c)
-└── 8.8 Error Handler          ← new file (src/middleware_error.c)
+PARALLEL GROUP C (W8–W10, Phase 12+13):
+├── 12.2 TLS Handshake        ← depends on 12.1 + 11.4 (X25519)
+├── 13.2 HPACK Compression    ← src/http2/hpack.c (standalone)
+└── 14.1 B-tree Core          ← src/storage/btree.c (standalone)
 
-PARALLEL GROUP D (Week 10-13):
-├── 9.1-9.2 HTTP/2             ← new directory (src/http2/)
-├── 9.3 Compression            ← new file (src/compression.c)
-└── 9.4 Caching Layer          ← new file (src/cache.c)
+PARALLEL GROUP D (W18–W22, Phase 14+15):
+├── 14.2 Write-Ahead Log      ← depends on 14.1 (B-tree)
+├── 15.1 Directory Listing    ← src/middleware_dirlist.c (standalone)
+├── 15.2 Server-Sent Events   ← src/sse.c (standalone)
+└── 15.5 Route Groups         ← src/router.c (independent feature)
+
+PARALLEL GROUP E (W27–W35, Phase 16+17):
+├── 16.1 Master-Worker Model  ← src/worker.c (standalone)
+├── 17.1 Platform Abstraction ← src/platform.h (standalone)
+└── 18.1 INI Parser           ← src/config.c (standalone)
+
+PARALLEL GROUP F (W36–W40, Phase 18):
+├── 18.2 Plugin Architecture  ← src/plugin.c (standalone)
+├── 18.3 Advanced Templates   ← src/template_v2.c (standalone)
+└── 18.4 Debug Mode           ← src/http_server.c (non-overlapping)
+
+PARALLEL GROUP G (W41–W46, Phase 19):
+├── 19.1 UDP Socket Layer     ← src/quic/udp.c (standalone)
+└── 20.1 CLI Tool             ← tools/weblib-cli.c (standalone)
+
+SEQUENTIAL (W42–W46, Phase 19):
+└── 19.2–19.6 QUIC/HTTP3      ← each depends on previous
 ```
 
 ---
 
-## 10. Build Validation — Success Criteria per Module
+## 9. Build Validation — Success Criteria per Phase
 
-### Phase 7 Checkpoints
+### Phase 11 Checkpoints (Crypto Primitives)
 
-| Module | Unit Test Gate | Integration Test Gate | Performance Gate |
-|--------|---------------|----------------------|-----------------|
-| Socket Timeouts | Slow-client simulation completes with timeout error | Server rejects Slowloris-style connections | Accept-to-timeout < 31s (default 30s + 1s tolerance) |
-| Thread Pool | 100 work items submitted and completed; zero leaks | 100 concurrent connections served correctly | Pool creation < 1ms; work item latency < 100μs overhead |
-| Graceful Shutdown | In-flight request completes before server exits | Integration test: send request during shutdown → 200 OK | Shutdown completes in < 1s with 50 idle connections |
-| CI Pipeline | All 71+ tests pass on Linux + macOS | Integration test suite green | CI total time < 5 minutes |
-| Integration Tests | N/A (these ARE the tests) | All protocol conformance tests pass | 100 concurrent connections, zero failures |
-| Parser Hardening | 20+ edge-case tests pass | Malformed requests return correct 4xx codes | Parser throughput ≥ 50,000 req/s (single-threaded) |
+| Module | Unit Test Gate | Security Gate | Performance Gate |
+|--------|---------------|--------------|-----------------|
+| SHA-256 | NIST FIPS 180-4 test vectors (3 sets) | No timing side-channels in compression function | ≥ 200 MB/s on x86-64 |
+| AES-256-GCM | NIST SP 800-38D test cases 1–18 | Constant-time tag verification | ≥ 100 MB/s (software) |
+| ChaCha20-Poly1305 | RFC 8439 §A test vectors | No secret-dependent branches | ≥ 300 MB/s on x86-64 |
+| X25519 | RFC 7748 §5.2 Alice/Bob test vectors | Montgomery ladder constant-time | Key exchange < 1ms |
+| HKDF | RFC 5869 test vectors (3 test cases) | Key material zeroed after use | N/A (not a bottleneck) |
 
-### Phase 8 Checkpoints
+### Phase 12 Checkpoints (TLS 1.3)
 
 | Module | Validation |
 |--------|-----------|
-| SHA-256 | NIST FIPS 180-4 test vectors pass (short msg, long msg, Monte Carlo) |
-| AES-GCM | NIST SP 800-38D test vectors pass (128-bit + 256-bit keys) |
-| RSA | PKCS#1 v1.5 sign/verify test vectors pass |
-| TLS 1.2 | `curl --tlsv1.2 https://localhost:8443/` returns 200; browser connects |
-| Logging | Log output matches format spec; level filtering works; file rotation |
-| CSRF | Double-submit cookie validates; missing token → 403; replay → 403 |
+| TLS Record Layer | Encrypt/decrypt round-trip; reject oversized records; handle partial TCP reads |
+| TLS Handshake | Complete handshake with `curl --tlsv1.3`; browser green lock icon |
+| Certificate Handling | Parse Let's Encrypt cert chain; verify signature; reject expired certs |
+| HTTPS Integration | `https://localhost:8443/` returns 200; ALPN negotiates `h2` or `http/1.1` |
 
-### Phase 9 Checkpoints
+### Phase 13 Checkpoints (HTTP/2)
 
 | Module | Validation |
 |--------|-----------|
-| HTTP/2 | `curl --http2 http://localhost:8080/` returns 200; multiplexed streams |
-| Compression | `Accept-Encoding: gzip` → compressed response; size < 50% of original |
-| Cache | Cache hit returns in < 1μs; LRU eviction correct; TTL expiry correct |
-| Async WebSocket | 1000 concurrent WebSocket connections; echo latency < 1ms |
+| Binary Framing | Parse/serialize all 10 frame types; reject unknown flags with PROTOCOL_ERROR |
+| HPACK | Static table lookup; Huffman round-trip; decode h2spec test cases |
+| Stream Multiplexing | 100 concurrent streams; priority-weighted DATA frame scheduling |
+| Integration | `curl --http2 https://localhost:8443/` returns 200; server push delivered |
+
+### Phase 14 Checkpoints (Storage)
+
+| Module | Validation |
+|--------|-----------|
+| B-tree | Insert 100K keys; all retrieved correctly; balanced tree depth ≤ log(N) |
+| WAL | Kill process mid-write; restart; no data corruption; WAL replay recovers |
+| Transactions | Concurrent read + write; read sees consistent snapshot; rollback discards writes |
+| Iterator | Forward/reverse scan matches sorted order; range query returns correct subset |
+
+### Phase 15 Checkpoints (Middleware)
+
+| Module | Validation |
+|--------|-----------|
+| Directory Listing | Navigate directories via browser; sorted columns; correct file sizes |
+| SSE | `EventSource` client receives events; reconnects with Last-Event-ID |
+| Route Groups | Scoped middleware applies only within group; regex routes match patterns |
+| Streaming | 100MB chunked upload completes; chunked response streams to client |
+
+### Phase 16 Checkpoints (Multi-Process)
+
+| Module | Validation |
+|--------|-----------|
+| Master-Worker | `http_server_set_workers(4)` spawns 4 child processes; all accept connections |
+| Zero-Downtime Reload | Send SIGHUP; new workers start; old workers drain; zero dropped requests |
+| Metrics Aggregation | `/metrics` shows combined counts from all workers |
+
+### Phase 17 Checkpoints (Cross-Platform)
+
+| Module | Validation |
+|--------|-----------|
+| Platform Abstraction | Same application code compiles on Linux + macOS + Windows + FreeBSD |
+| Windows IOCP | Server accepts 100 concurrent connections on Windows; async I/O works |
+| CI Matrix | Green builds on all 4 platforms in GitHub Actions |
+
+### Phase 18 Checkpoints (Developer Experience)
+
+| Module | Validation |
+|--------|-----------|
+| INI Parser | Load config file; `config_get("server", "port")` returns correct value |
+| Plugin Architecture | Register plugin; lifecycle hooks fire in order; plugin adds custom route |
+| Advanced Templates | Mustache sections render correctly; includes resolve; auto-escaping prevents XSS |
+| Debug Mode | Request/response headers logged; per-middleware timing displayed |
+
+### Phase 19 Checkpoints (HTTP/3 & QUIC)
+
+| Module | Validation |
+|--------|-----------|
+| UDP Layer | Send/receive UDP datagrams; event loop triggers on UDP readability |
+| QUIC Transport | Complete QUIC handshake; reliable data transfer over unreliable UDP |
+| HTTP/3 | `curl --http3 https://localhost:8443/` returns 200 (requires curl 7.66+) |
+| Connection Migration | Client changes IP; connection continues without re-handshake |
+
+### Phase 20 Checkpoints (Release)
+
+| Module | Validation |
+|--------|-----------|
+| CLI Tool | `weblib init myapp` generates buildable project; `weblib routes` lists routes |
+| Prometheus Export | `/metrics` returns valid Prometheus exposition format; Grafana imports |
+| Fuzz Testing | 1M iterations per harness; zero crashes; zero memory errors |
+| v2.0.0 Release | All 250+ tests pass; zero warnings; CHANGELOG complete; migration guide accurate |
 
 ---
 
-## 11. QA Pipeline
+## 10. QA Pipeline
 
 ### Automated Testing (Every Commit)
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  GitHub Actions CI Pipeline                          │
-│                                                      │
-│  1. Build (Linux gcc + macOS clang)                  │
-│     └── cmake -DCMAKE_C_FLAGS="-Werror" ..           │
-│                                                      │
-│  2. Unit Tests                                       │
-│     └── ./tests/test_weblib  (all must pass)         │
-│                                                      │
-│  3. Integration Tests                                │
-│     └── ./tests/integration/run_all  (protocol +     │
-│         malformed + concurrent)                      │
-│                                                      │
-│  4. Memory Safety (Linux only)                       │
-│     └── valgrind --leak-check=full --error-          │
-│         exitcode=1 ./tests/test_weblib               │
-│                                                      │
-│  5. Static Analysis (optional)                       │
-│     └── cppcheck --enable=all --error-exitcode=1     │
-│                                                      │
-│  6. Benchmark Regression (Phase 9+)                  │
-│     └── Compare req/s against baseline ±10%          │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  GitHub Actions CI Pipeline (v2.0.0)                         │
+│                                                              │
+│  Stage 1: Build Matrix                                       │
+│  ├── Linux (GCC 12 + Clang 15)                               │
+│  ├── macOS (Apple Clang 15)                                  │
+│  ├── Windows (MSVC 2022)                                     │
+│  └── FreeBSD (Clang 15, cross-compilation)                   │
+│     └── cmake -DCMAKE_C_FLAGS="-Wall -Wextra -Werror" ..    │
+│                                                              │
+│  Stage 2: Unit Tests                                         │
+│  ├── ./tests/test_weblib          (core library tests)       │
+│  ├── ./tests/test_crypto          (crypto test vectors)      │
+│  ├── ./tests/test_tls             (TLS handshake tests)      │
+│  ├── ./tests/test_http2           (HTTP/2 protocol tests)    │
+│  ├── ./tests/test_storage         (B-tree + WAL tests)       │
+│  ├── ./tests/test_quic            (QUIC transport tests)     │
+│  └── ./tests/test_http3           (HTTP/3 framing tests)     │
+│                                                              │
+│  Stage 3: Integration Tests                                  │
+│  ├── TLS handshake with curl                                 │
+│  ├── HTTP/2 multiplexed requests                             │
+│  ├── Multi-worker concurrent load                            │
+│  └── Storage crash recovery (kill + restart)                 │
+│                                                              │
+│  Stage 4: Memory Safety (Linux only)                         │
+│  └── valgrind --leak-check=full --error-exitcode=1           │
+│      (all test binaries)                                     │
+│                                                              │
+│  Stage 5: Fuzz Testing (Phase 20+)                           │
+│  └── 60-second fuzz runs per harness (HTTP, JSON, TLS,       │
+│      HPACK, QUIC); zero crashes = pass                       │
+│                                                              │
+│  Stage 6: Benchmark Regression                               │
+│  └── Compare req/s and latency against baseline ±10%         │
+│                                                              │
+│  Stage 7: Static Analysis                                    │
+│  └── cppcheck --enable=all --error-exitcode=1                │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### Manual Testing Checkpoints (Per Release)
 
 | # | Test | Method | Pass Criteria |
 |---|------|--------|--------------|
-| M1 | Slow client resistance | `slowhttptest -c 1000` against server | Zero crashes; all slow connections timeout |
-| M2 | Large file upload | `curl -F "file=@100MB.bin" http://...` | Server accepts up to configured limit; rejects larger |
-| M3 | Browser TLS handshake | Chrome/Firefox navigate to `https://localhost:8443` | Green lock icon; certificate details visible |
-| M4 | Graceful shutdown under load | Send SIGTERM during `wrk` benchmark run | All in-flight requests complete; zero dropped |
-| M5 | Memory under sustained load | Run 1M requests via `wrk`; monitor RSS | RSS stable (no unbounded growth); Valgrind clean |
-| M6 | Cross-platform build | Build on Linux (gcc), macOS (clang), Windows (MSVC) | Zero errors, zero warnings on all platforms |
+| M1 | TLS browser compatibility | Chrome + Firefox → `https://localhost:8443` | Green lock; TLS 1.3 in certificate info |
+| M2 | HTTP/2 multiplexing | `h2load -n 10000 -c 100 https://localhost:8443/` | All 10K requests succeed; streams multiplexed |
+| M3 | HTTP/3 connectivity | `curl --http3 https://localhost:8443/` | Response received over QUIC |
+| M4 | Storage durability | Insert 10K records; `kill -9` server; restart; verify all records | Zero data loss |
+| M5 | Multi-worker load test | 4 workers; `wrk -t4 -c400 -d30s` | Linear throughput scaling vs single worker |
+| M6 | Zero-downtime reload | Continuous `wrk` load + send SIGHUP | Zero failed requests during reload |
+| M7 | Windows build | Build on Windows with MSVC 2022 | Zero errors, zero warnings, tests pass |
+| M8 | Memory under sustained load | Run 10M requests; monitor RSS per worker | RSS stable (no unbounded growth) |
+| M9 | CLI scaffolding | `weblib init myapp && cd myapp && mkdir build && cd build && cmake .. && make && ./myapp` | Server starts and responds to curl |
+| M10 | Fuzz testing marathon | 24-hour fuzz run on all harnesses | Zero crashes; zero memory errors |
 
 ---
 
-## 12. Security Review — Threat Model
+## 11. Security Review — Threat Model (v2.0.0)
 
 ### Assets Under Protection
 
-| Asset | Location | Sensitivity |
-|-------|----------|-------------|
-| HTTP request data | `http_request_t` in memory | Contains credentials (cookies, auth headers) |
-| Session store | `session_store_t` in-process memory | Session IDs = authentication tokens |
-| TLS private keys | Loaded from PEM file at startup | Compromise = full traffic decryption |
-| User file uploads | Temporary buffer in `body_parser_data_t` | User-supplied; potential malware |
+| Asset | Location | Sensitivity | New in v2 |
+|-------|----------|-------------|-----------|
+| HTTP request data | `http_request_t` in memory | Contains credentials (cookies, auth headers) | — |
+| Session store | `session_store_t` / storage engine | Session IDs = authentication tokens | Persistent backend |
+| TLS private keys | Loaded from PEM at startup | Compromise = full traffic decryption | **New** |
+| TLS session keys | In-memory per connection | Compromise = decrypt single session | **New** |
+| Storage engine files | On-disk B-tree + WAL | User data at rest; potential PII | **New** |
+| QUIC connection state | In-memory per connection | Connection IDs, crypto state | **New** |
+| Worker process memory | Per-process address space | Isolated but shares listening socket | **New** |
+| Configuration files | On-disk INI files | May contain secrets (API keys, DB paths) | **New** |
 
-### Threat Model (STRIDE)
+### Threat Model (STRIDE) — v2.0.0 Additions
 
 | Threat | Category | Target | Mitigation |
 |--------|----------|--------|-----------|
-| **Slowloris / Slow POST** | Denial of Service | Connection pool | Socket timeouts (Phase 7.1); thread pool bounds (Phase 7.2) |
-| **Request smuggling** | Tampering | HTTP parser | Duplicate header detection (Phase 7.6); strict parser mode |
-| **Path traversal** | Information Disclosure | Static file middleware | Already mitigated (`../` prevention in `middleware_static.c`); add canonicalization |
-| **Session hijacking** | Spoofing | Session cookies | `Secure` + `HttpOnly` + `SameSite=Strict` flags (already in v0.6.0); add CSRF tokens (Phase 8) |
-| **Credential exposure** | Information Disclosure | HTTP transport | TLS encryption (Phase 8); HSTS header |
-| **Buffer overflow** | Elevation of Privilege | All parsers | `MAX_HEADER_BYTES`, `MAX_BODY_BYTES` limits (already enforced); add fuzz testing (Phase 9) |
-| **Timing attacks** | Information Disclosure | Auth middleware | Constant-time comparison for JWT signature verification (verify in Phase 8) |
-| **Memory disclosure** | Information Disclosure | Error responses | Never include stack traces or internal paths in HTTP error bodies |
-| **TLS downgrade** | Tampering | TLS handshake | Reject protocols < TLS 1.2; no SSLv3/TLS 1.0/1.1 (Phase 8) |
-| **Private key theft** | Information Disclosure | TLS key material | Zero key material in logs; `mlock()` key pages; zero on free (Phase 8) |
+| **TLS implementation bugs** | Tampering / Disclosure | TLS handshake | NIST test vectors; constant-time ops; fuzz testing; security audit (Phase 12) |
+| **TLS downgrade to 1.2** | Tampering | TLS negotiation | Only support TLS 1.3; reject lower versions in ClientHello (Phase 12) |
+| **TLS private key extraction** | Disclosure | Key material in memory | `mlock()` key pages; `explicit_bzero()` before free; never log key material (Phase 12) |
+| **HTTP/2 stream flood** | Denial of Service | Stream table | MAX_CONCURRENT_STREAMS (default 100); RST_STREAM rate limiting (Phase 13) |
+| **HPACK bomb** | Denial of Service | Memory | Dynamic table hard cap (4KB default); reject oversized header blocks (Phase 13) |
+| **HTTP/2 slow read** | Denial of Service | Flow control | Connection-level flow control timeout; close slow-consuming streams (Phase 13) |
+| **Storage corruption** | Tampering | B-tree files | CRC32 per page; WAL replay validation; fsync on commit (Phase 14) |
+| **Storage path traversal** | Disclosure | File system | Canonicalize storage path; reject `..` sequences; sandbox to data directory (Phase 14) |
+| **Fork bomb via worker API** | Denial of Service | Process table | Hard cap on `http_server_set_workers()` (max 64); rate-limit respawns (Phase 16) |
+| **QUIC amplification** | Denial of Service | Network | Retry token validation; 3x amplification limit before address validation (Phase 19) |
+| **QUIC connection ID spoofing** | Spoofing | Connection table | Server-generated connection IDs with HMAC; reject unknown IDs (Phase 19) |
+| **Config file injection** | Tampering | Configuration | Max value length; no shell expansion; no template evaluation in config values (Phase 18) |
+| **Plugin code execution** | Elevation of Privilege | Server process | Compile-time only (no dlopen); no runtime plugin loading; code review required (Phase 18) |
 
 ### Vulnerability Checklist (Per-Phase Gate)
 
-Each phase release MUST pass:
+Each phase release MUST pass all v1.0.0 checks plus:
 
-- [ ] No compiler warnings with `-Wall -Wextra -Werror -pedantic`
+- [ ] No compiler warnings with `-Wall -Wextra -Werror -pedantic` on all 4 platforms
 - [ ] Valgrind memcheck: zero errors, zero leaks (definite + indirect)
-- [ ] No unbounded allocations from user input
-- [ ] All `malloc()` return values checked
-- [ ] All `sprintf()` replaced with `snprintf()` (bounded writes)
-- [ ] No `strcpy()` — only `strncpy()` or manual bounds-checked copies
-- [ ] Session IDs generated from `/dev/urandom` (or `CryptGenRandom` on Windows)
-- [ ] TLS key material zeroed with `explicit_bzero()` / `SecureZeroMemory()` before `free()`
-- [ ] All public APIs validate NULL pointers and return error codes
-- [ ] No information leakage in error responses (status code only, no internals)
+- [ ] All crypto operations use constant-time comparison (`crypto_memcmp()`)
+- [ ] All crypto key material zeroed with `explicit_bzero()` / `SecureZeroMemory()` before free
+- [ ] TLS key pages locked with `mlock()` (POSIX) / `VirtualLock()` (Windows)
+- [ ] No secret-dependent branches in crypto code (verify with timing analysis)
+- [ ] Storage engine validates CRC32 on every page read
+- [ ] WAL replay rejects records with CRC mismatch
+- [ ] Multi-process worker count hard-limited to MAX_WORKERS (64)
+- [ ] QUIC retry tokens are HMAC-validated and time-limited
+- [ ] Configuration values are length-bounded (MAX_CONFIG_VALUE_LEN = 4096)
+- [ ] No `dlopen()` or runtime code loading — plugins are compile-time only
+- [ ] Fuzz testing produces zero crashes after 1M iterations per harness
+- [ ] All `malloc()` return values checked; all `snprintf()` bounded
+- [ ] No information leakage in error responses (status code only)
 
-### Access Control Matrix
+### Access Control Matrix (v2.0.0)
 
 | Component | Read Access | Write Access | Notes |
 |-----------|------------|-------------|-------|
-| `http_request_t` fields | Route handlers, middleware | Parser only (immutable after parse) | Enforce via const pointers in API |
-| Session data | `session_get_data()` only | `session_set_data()` only | Key-scoped; no bulk enumeration API |
-| TLS private key | TLS handshake module only | Loaded once at startup | Never exposed via any API |
-| Rate limit counters | Rate limit middleware | Rate limit middleware | IP-scoped; auto-expire |
+| TLS private key | TLS handshake module only | Loaded once at startup | `mlock()`'d; zeroed on server destroy |
+| TLS session keys | TLS record layer only | TLS handshake only | Per-connection; zeroed on close |
+| Storage B-tree | Storage API only | Transaction commit only | Page-level CRC validation |
+| Storage WAL | Recovery module only | Transaction module only | Append-only; fsync on commit |
+| Worker process table | Master process only | Master process only | PID tracking; signal-based control |
+| QUIC connection IDs | QUIC transport only | QUIC handshake only | HMAC-validated; server-generated |
+| Configuration data | `config_get()` API only | `config_load()` only (startup) | Immutable after load |
 
 ---
 
-## 13. Risk Mitigation Notes
+## 12. Risk Mitigation Notes
 
 | Risk | Probability | Impact | Mitigation Strategy |
 |------|------------|--------|-------------------|
-| Pure C TLS is insecure / buggy | HIGH | CRITICAL | Extensive test vector validation; optional compile-time flag to disable; security audit before v1.0 |
-| HTTP/2 complexity causes regressions | MEDIUM | HIGH | Feature-flag behind `http_server_enable_http2()`; default off; comprehensive integration tests |
-| Thread pool deadlock | LOW | HIGH | No nested locks; work items never wait on pool; timeout on condition variable wait |
-| Windows platform divergence | MEDIUM | MEDIUM | Abstract platform APIs behind `src/platform.h`; CI matrix validates Windows build |
-| Performance regression between versions | MEDIUM | MEDIUM | Benchmark suite in CI with ±10% tolerance gate |
-| API breaking changes | LOW | HIGH | Semantic versioning; deprecated API kept for one major version |
+| Pure C TLS 1.3 has security bugs | HIGH | CRITICAL | Comprehensive test vectors (NIST + RFC); constant-time audit; fuzz testing; optional compile-time `WEBLIB_DISABLE_TLS` flag; recommend reverse proxy (nginx) for high-security deployments |
+| X25519 field arithmetic bugs | MEDIUM | CRITICAL | RFC 7748 test vectors; comparison against known-good implementation output; timing analysis for side channels |
+| HTTP/2 complexity causes regressions | MEDIUM | HIGH | Feature-flagged (`http_server_enable_http2()`); disabled by default; h2spec conformance testing |
+| QUIC implementation incomplete or buggy | HIGH | HIGH | Feature-flagged; disabled by default; extensive quic-interop-runner testing; clearly marked as experimental in v2.0 |
+| B-tree data corruption | LOW | CRITICAL | CRC32 checksums; WAL replay; fsync discipline; crash recovery test (kill -9 + restart) |
+| Multi-process deadlock | LOW | HIGH | Shared-nothing design (no shared memory by default); each worker is independent; master only signals |
+| Windows IOCP divergence | MEDIUM | MEDIUM | Platform abstraction layer; CI validates Windows build; Windows-specific integration tests |
+| Performance regression vs v1.0.0 | MEDIUM | MEDIUM | Benchmark CI gate (±10%); per-phase benchmark comparison; optimize hot paths |
+| API breaking changes v1→v2 | MEDIUM | MEDIUM | Migration guide; deprecated v1 APIs retained with `WEBLIB_DEPRECATED` macro; compile-time warnings |
+| Scope creep delays v2.0.0 | MEDIUM | MEDIUM | Strict phase gating; each phase ships independently; HTTP/3 can be deferred to v2.1 if needed |
+
+---
+
+## 13. Estimated Timeline Summary
+
+| Phase | Version | Duration | Cumulative | Key Deliverable |
+|-------|---------|----------|-----------|-----------------|
+| Phase 11 | v1.1.0 | 6 weeks | W1–W6 | Crypto primitives (SHA, AES-GCM, ChaCha20, X25519, HKDF) |
+| Phase 12 | v1.2.0 | 6 weeks | W7–W12 | TLS 1.3 handshake + HTTPS server |
+| Phase 13 | v1.3.0 | 5 weeks | W13–W17 | HTTP/2 protocol (framing, HPACK, streams, push) |
+| Phase 14 | v1.4.0 | 5 weeks | W18–W22 | Persistent storage engine (B-tree, WAL, transactions) |
+| Phase 15 | v1.5.0 | 4 weeks | W23–W26 | Advanced middleware (directory listing, SSE, route groups) |
+| Phase 16 | v1.6.0 | 5 weeks | W27–W31 | Multi-process architecture (fork, reload, metrics) |
+| Phase 17 | v1.7.0 | 4 weeks | W32–W35 | Cross-platform (Windows IOCP, BSD, MSVC, CI matrix) |
+| Phase 18 | v1.8.0 | 5 weeks | W36–W40 | Developer experience (config, plugins, templates, debug) |
+| Phase 19 | v1.9.0 | 6 weeks | W41–W46 | HTTP/3 & QUIC (UDP, transport, handshake, streams) |
+| Phase 20 | v2.0.0 | 4 weeks | W47–W50 | Release engineering (CLI, observability, fuzz, release) |
+| **Total** | | **50 weeks** | | **~12 months from v1.0.0 to v2.0.0** |
+
+---
+
+## Appendix A: v1.0.0 Phase Reference (Phases 1–10)
+
+| Phase | Version | Date | Highlights |
+|-------|---------|------|------------|
+| Phase 1 | v0.1.0 | 2024-12 | HTTP server, event loop, routing, middleware, JSON, CMake |
+| Phase 2 | v0.2.0 | 2025-01 | WebSocket RFC 6455 (handshake, framing, control frames) |
+| Phase 3 | v0.3.0 | 2025-11 | WebSocket threaded mode, persistent connections, ping/pong |
+| Phase 4 | v0.4.0 | 2026-02 | HTTP parser hardening, headers, JSON arrays, connections |
+| Phase 5 | v0.5.0 | 2026-02 | Body parsing, cookies, CORS, rate limiting, static files |
+| Phase 6 | v0.6.0 | 2026-02 | Sessions, templates, auth (Basic/JWT/API-Key), DB pooling |
+| Phase 7 | v0.7.0 | 2026-02 | Socket timeouts, thread pool, graceful shutdown, CI |
+| Phase 8 | v0.8.0 | 2026-02 | CSRF, logging, error handler, input validation, health check |
+| Phase 9 | v0.9.0 | 2026-02 | Compression, caching, metrics, async WebSocket, benchmarking |
+| Phase 10 | v1.0.0 | 2026-02 | REST API example, tutorials, documentation, release |
 
 ---
 
@@ -435,12 +846,13 @@ Each phase release MUST pass:
 |---------|------|---------|
 | 1.0 | 2025-01-12 | Initial roadmap (Phases 4–6) |
 | 2.0 | 2026-02-19 | Complete rewrite for Phases 7–10: first-principles design, adversarial review, atomic task breakdown, security threat model |
+| 3.0 | 2026-02-22 | v2.0.0 roadmap: Phases 11–20 with TLS 1.3, HTTP/2, HTTP/3, persistent storage, multi-process, cross-platform, developer tooling |
 
 ---
 
 **Maintained by**: MCWL Core Team
 **Last Updated**: 2026-02-22
-**Status**: Complete — v1.0.0 released
+**Status**: v1.0.0 released · v2.0.0 roadmap active
 **License**: MIT (see LICENSE file)
 
 For questions or discussions about this roadmap, please open an issue on GitHub or contact the maintainers.
