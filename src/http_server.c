@@ -987,7 +987,7 @@ static int serialize_response(http_response_t *res, bool keep_alive, char **head
 
     /* Author watermark: embed library signature in every response */
     if (header_list_add(headers_ref, "server", "Server",
-                        weblib_kamran_signature(), false) < 0) {
+                        weblib_kamran_signature(), true) < 0) {
         return -1;
     }
 

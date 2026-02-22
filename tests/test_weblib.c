@@ -3309,6 +3309,43 @@ void test_kamran_signature(void) {
     PASS();
 }
 
+/* Integration test: Server header watermark in HTTP response */
+void test_kamran_server_header(void) {
+    TEST("kamran_server_header (no duplicate Server headers)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/ping", echo_handler);
+
+    uint16_t port = 18809;
+    http_server_t *server = _start_test_server(router, port);
+    ASSERT(server != NULL);
+
+    const char *req =
+        "GET /ping HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    char buf[4096];
+    ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
+    ASSERT(n > 0);
+    ASSERT(strstr(buf, "HTTP/1.1 200") != NULL);
+
+    /* Verify Server header is present with author watermark */
+    const char *server_hdr = strstr(buf, "Server: ");
+    ASSERT(server_hdr != NULL);
+    ASSERT(strstr(server_hdr, WEBLIB_AUTHOR_KAMRAN) != NULL);
+
+    /* Verify no duplicate Server header (search for a second occurrence) */
+    const char *second = strstr(server_hdr + 1, "\r\nServer: ");
+    ASSERT(second == NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -3510,6 +3547,7 @@ int main(void) {
 
     /* Author watermark verification */
     test_kamran_signature();
+    test_kamran_server_header();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
