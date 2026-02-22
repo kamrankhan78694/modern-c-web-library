@@ -1,6 +1,6 @@
 # Modern C Web Library - API Reference
 
-**Version 0.6.0** — Production Ready
+**Version 1.0.0** — Production Ready
 
 This document provides a comprehensive API reference for the Modern C Web Library.
 
@@ -23,6 +23,16 @@ This document provides a comprehensive API reference for the Modern C Web Librar
 13. [Template Engine](#template-engine)
 14. [Authentication Middleware](#authentication-middleware)
 15. [Database Connection Pool](#database-connection-pool)
+16. [Thread Pool & Server Hardening](#thread-pool--server-hardening)
+17. [CSRF Middleware](#csrf-middleware)
+18. [Logging Middleware](#logging-middleware)
+19. [Error Handler Middleware](#error-handler-middleware)
+20. [Input Validation](#input-validation)
+21. [Health Check](#health-check)
+22. [In-Memory Cache](#in-memory-cache)
+23. [Metrics Middleware](#metrics-middleware)
+24. [Response Compression](#response-compression)
+25. [Benchmarking](#benchmarking)
 
 ---
 
@@ -332,4 +342,162 @@ HTTP_INTERNAL_ERROR = 500
 
 ---
 
-*Generated for Modern C Web Library v0.6.0 — Pure C, Zero Dependencies*
+---
+
+## Thread Pool & Server Hardening
+
+### Server Lifecycle
+```c
+void http_server_set_timeout(http_server_t *server, int read_sec, int write_sec);
+void http_server_set_thread_count(http_server_t *server, int count);  // Clamped to [1, 256]
+int http_server_shutdown(http_server_t *server, int timeout_sec);     // Graceful shutdown with drain
+int http_server_get_state(http_server_t *server);  // STOPPED=0, RUNNING=1, DRAINING=2
+```
+
+Server state transitions: `STOPPED → RUNNING → DRAINING → STOPPED`
+
+---
+
+## CSRF Middleware
+
+```c
+typedef struct {
+    const char *cookie_name;   // Default: "_csrf"
+    const char *header_name;   // Default: "X-CSRF-Token"
+    int token_length;          // Default: 32
+} csrf_config_t;
+
+middleware_fn_t csrf_middleware_create(const csrf_config_t *config);
+void csrf_middleware_destroy(void);
+```
+
+Safe methods (GET, HEAD, OPTIONS) pass through. Unsafe methods require a valid token in the header that matches the cookie value.
+
+---
+
+## Logging Middleware
+
+```c
+typedef struct {
+    int level;       // LOG_LEVEL_DEBUG=0, LOG_LEVEL_INFO=1, LOG_LEVEL_WARN=2, LOG_LEVEL_ERROR=3
+    FILE *output;    // Output stream (default: stderr)
+} log_config_t;
+
+middleware_fn_t log_middleware_create(const log_config_t *config);
+void log_middleware_destroy(void);
+```
+
+Output format: `[YYYY-MM-DD HH:MM:SS] LEVEL METHOD /path`
+
+---
+
+## Error Handler Middleware
+
+```c
+middleware_fn_t error_handler_middleware_create(void *config);
+void error_handler_middleware_destroy(void);
+void error_handler_apply(http_response_t *res);
+```
+
+Automatically generates `{"error":"Not Found","status":404}` JSON responses for unhandled 4xx/5xx status codes.
+
+---
+
+## Input Validation
+
+```c
+bool input_validate_length(const char *input, size_t min_len, size_t max_len);
+bool input_validate_charset(const char *input, const char *allowed_chars);
+bool input_validate_integer(const char *input, int min_val, int max_val);
+bool input_validate_email(const char *input);
+bool input_is_alphanumeric(const char *input);
+char *input_sanitize_html(const char *input);  // Caller must free; escapes < > & " '
+```
+
+---
+
+## Health Check
+
+```c
+void health_check_register(router_t *router);  // Registers GET /healthz
+```
+
+Response: `{"status":"ok","uptime_seconds":N}`
+
+---
+
+## In-Memory Cache
+
+```c
+cache_t *cache_create(size_t max_entries);
+void cache_destroy(cache_t *cache);
+int cache_set(cache_t *cache, const char *key, const void *value, size_t value_len, int ttl_sec);
+const void *cache_get(cache_t *cache, const char *key, size_t *value_len);
+int cache_delete(cache_t *cache, const char *key);
+void cache_clear(cache_t *cache);
+```
+
+LRU eviction when `max_entries` is reached. TTL of 0 means no expiration.
+
+---
+
+## Metrics Middleware
+
+```c
+middleware_fn_t metrics_middleware_create(void);
+void metrics_middleware_destroy(void);
+void metrics_register(router_t *router);       // Registers GET /metrics
+void metrics_record_status(int status_code);   // Record a status code
+```
+
+Returns JSON metrics: request count, per-method counts, status code ranges (2xx/3xx/4xx/5xx).
+
+---
+
+## Response Compression
+
+```c
+int compression_negotiate(const char *accept_encoding);  // Returns COMPRESS_GZIP or COMPRESS_NONE
+bool compression_should_compress(const char *content_type, size_t content_length);
+int gzip_compress(const void *input, size_t input_len, void **output, size_t *output_len);
+uint32_t crc32_compute(const void *data, size_t len);
+```
+
+Pure C gzip (RFC 1952) with DEFLATE (RFC 1951). Automatically applied when client sends `Accept-Encoding: gzip`.
+
+---
+
+## Benchmarking
+
+```c
+benchmark_t *benchmark_create(const char *name, const char *url);
+void benchmark_destroy(benchmark_t *bench);
+int benchmark_run(benchmark_t *bench, int num_requests, int concurrency);
+void benchmark_print(benchmark_t *bench);
+uint64_t benchmark_timestamp_us(void);  // Microsecond timestamp
+```
+
+Measures throughput (requests/sec), latency percentiles (p50/p95/p99), and success rate.
+
+---
+
+## Status Codes
+
+```c
+HTTP_SWITCHING_PROTOCOLS = 101
+HTTP_OK                  = 200
+HTTP_CREATED             = 201
+HTTP_ACCEPTED            = 202
+HTTP_NO_CONTENT          = 204
+HTTP_NOT_MODIFIED        = 304
+HTTP_BAD_REQUEST         = 400
+HTTP_UNAUTHORIZED        = 401
+HTTP_FORBIDDEN           = 403
+HTTP_NOT_FOUND           = 404
+HTTP_TOO_MANY_REQUESTS   = 429
+HTTP_INTERNAL_ERROR      = 500
+```
+
+---
+
+*Generated for Modern C Web Library v1.0.0 — Pure C, Zero Dependencies*

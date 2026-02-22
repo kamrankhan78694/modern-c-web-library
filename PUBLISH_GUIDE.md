@@ -32,7 +32,7 @@ If you have Docker running locally:
 open -a Docker  # macOS
 
 # Then run the publish script
-./publish-package.sh 0.3.0
+./publish-package.sh 1.0.0
 ```
 
 You'll need a GitHub Personal Access Token with `write:packages` permission:
@@ -51,7 +51,7 @@ open -a Docker  # macOS
 
 # 2. Build the image
 docker build -f Dockerfile.release \
-  -t ghcr.io/kamrankhan78694/modern-c-web-library:v0.3.0 \
+  -t ghcr.io/kamrankhan78694/modern-c-web-library:v1.0.0 \
   -t ghcr.io/kamrankhan78694/modern-c-web-library:latest \
   .
 
@@ -59,7 +59,7 @@ docker build -f Dockerfile.release \
 echo $GITHUB_TOKEN | docker login ghcr.io -u kamrankhan78694 --password-stdin
 
 # 4. Push the images
-docker push ghcr.io/kamrankhan78694/modern-c-web-library:v0.3.0
+docker push ghcr.io/kamrankhan78694/modern-c-web-library:v1.0.0
 docker push ghcr.io/kamrankhan78694/modern-c-web-library:latest
 ```
 
