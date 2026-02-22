@@ -16,7 +16,7 @@ jobs:
   # ubuntu/gcc job.  GCC build, full test suite, and Valgrind memcheck
   # all happen inside Dockerfile.dev (which already ships gcc + valgrind).
   # Docker Buildx layer caching keeps rebuilds fast.
-  build-and-test:
+  primary-checks:
     name: Build, Test & Memcheck (Docker)
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -64,7 +64,7 @@ jobs:
   # No valgrind (already covered above), so this is a lightweight job.
   clang-check:
     name: Clang Build & Test
-    needs: build-and-test
+    needs: primary-checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -96,7 +96,7 @@ jobs:
   # burning expensive macOS minutes on every push to main.
   macos-check:
     name: macOS Compatibility
-    needs: build-and-test
+    needs: primary-checks
     if: github.event_name == 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 10
@@ -128,7 +128,7 @@ jobs:
   # source code change (skipped for docs-only / CI-only edits).
   docker-image-check:
     name: Production Docker Image
-    needs: build-and-test
+    needs: primary-checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
