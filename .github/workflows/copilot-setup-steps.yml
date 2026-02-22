@@ -26,22 +26,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake gcc build-essential valgrind
+      - name: Build development Docker image
+        run: docker build -f Dockerfile.dev -t modern-c-weblib:dev .
 
-      - name: Build project
+      - name: Run tests inside Docker
+        run: docker run --rm modern-c-weblib:dev /bin/bash -c "cd build && ctest --output-on-failure --timeout 120"
+
+      - name: Verify examples are built
+        run: docker run --rm modern-c-weblib:dev /bin/bash -c "test -x build/examples/simple_server && test -x build/examples/async_server"
+
+      - name: Install build dependencies for native tooling
         run: |
-          mkdir -p build
-          cd build
+          sudo apt-get update -q
+          sudo apt-get install -y -q cmake gcc build-essential valgrind
+
+      - name: Build project natively
+        run: |
+          mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Debug
           make -j$(nproc)
-
-      - name: Verify build (run tests)
-        run: |
-          cd build
-          ./tests/test_weblib
 
       - name: Install library into system
         run: |
