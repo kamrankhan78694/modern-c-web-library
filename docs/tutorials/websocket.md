@@ -536,7 +536,7 @@ You've learned how to:
 
 **References:**
 - See `examples/websocket_echo_server.c` for a complete working example
-- Read `docs/api/websocket.md` for full API documentation
+- Read `docs/api/README.md` for full API documentation
 - Check RFC 6455 for WebSocket protocol details
 
 WebSockets enable powerful real-time applications. Experiment with the examples, build your own projects, and leverage the Modern C Web Library's efficient WebSocket implementation for production use!

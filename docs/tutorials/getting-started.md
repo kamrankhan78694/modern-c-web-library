@@ -425,14 +425,13 @@ http_server_set_debug(server, true);
 Congratulations! You've built your first web server with MCWL. Here's what to explore next:
 
 ### Tutorials
-- **[Building a REST API](rest-api-tutorial.md)** - Create a full CRUD API with database integration
-- **[WebSocket Chat Server](websocket-tutorial.md)** - Build real-time applications with WebSockets
-- **[Async I/O](async-io-tutorial.md)** - Leverage non-blocking I/O for high concurrency
+- **[Building a REST API](rest-api.md)** - Create a full CRUD API with JSON and middleware
+- **[WebSocket Applications](websocket.md)** - Build real-time applications with WebSockets
 
 ### Documentation
-- **[API Reference](../api-reference.md)** - Complete API documentation
+- **[API Reference](../api/README.md)** - Complete API documentation
 - **[Examples](../../examples/)** - More code examples and patterns
-- **[Architecture Guide](../architecture.md)** - Understanding MCWL internals
+- **[Deployment Guide](../DEPLOYMENT.md)** - Production deployment strategies
 
 ### Advanced Topics
 - **Error Handling** - Proper error handling patterns
