@@ -1246,7 +1246,7 @@ void test_session_cleanup(void) {
     ASSERT(sid_short != NULL);
     ASSERT(session_get(store, sid_short) != NULL);
 
-    /* Wait for the short session to expire */
+    /* Wait for the short session to expire (max_age=1s, so 2s is sufficient) */
     sleep(2);
 
     /* Cleanup should now remove the expired session */
@@ -3083,6 +3083,7 @@ void test_gzip_compress_valid(void) {
                         "Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello "
                         "World World World World World World World World World World.";
     size_t input_len = strlen(input);
+    /* Body must exceed the 256-byte minimum compression threshold */
     ASSERT(input_len >= 256);
 
     /* Use the public http_response_send_compressed API to exercise gzip */
