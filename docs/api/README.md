@@ -500,4 +500,80 @@ HTTP_INTERNAL_ERROR      = 500
 
 ---
 
+## Planned v2.0 APIs
+
+> The following APIs are planned for v2.0 (Phases 11–20) and are not yet implemented.
+
+### Arena Allocator (Phase 11 — v1.1.0)
+
+```c
+arena_t *arena_create(size_t block_size);       // Create arena (4KB/16KB/64KB blocks)
+void *arena_alloc(arena_t *arena, size_t size);  // O(1) pointer-bump allocation
+void arena_reset(arena_t *arena);                // Reset for reuse (per-connection)
+void arena_destroy(arena_t *arena);              // Free all blocks
+```
+
+### Object Pool (Phase 11 — v1.1.0)
+
+```c
+pool_t *pool_create(size_t object_size, size_t count);  // Pre-allocate pool
+void *pool_acquire(pool_t *pool);                        // Lock-free acquire (CAS)
+void pool_release(pool_t *pool, void *object);           // Lock-free release
+void pool_destroy(pool_t *pool);                         // Free pool
+```
+
+### io_uring Backend (Phase 12 — v1.2.0)
+
+```c
+// Automatic backend selection: io_uring → epoll → kqueue → poll
+// No API changes — event_loop_create() selects the best available backend at runtime
+```
+
+### TLS 1.3 (Phase 14 — v1.4.0)
+
+```c
+int http_server_enable_tls(http_server_t *server, const char *cert_path, const char *key_path);
+int http_server_set_tls_cipher(http_server_t *server, const char *cipher_list);
+```
+
+### HTTP/2 (Phase 15 — v1.5.0)
+
+```c
+int http_server_enable_http2(http_server_t *server);  // Enable HTTP/2 with ALPN
+```
+
+### Server-Sent Events (Phase 16 — v1.6.0)
+
+```c
+sse_stream_t *sse_stream_create(http_response_t *res);
+int sse_stream_send(sse_stream_t *stream, const char *event, const char *data);
+int sse_stream_send_id(sse_stream_t *stream, const char *event, const char *data, const char *id);
+void sse_stream_close(sse_stream_t *stream);
+```
+
+### Batch Coalescing (Phase 16 — v1.6.0)
+
+```c
+batch_config_t batch_cfg = { .window_ms = 50, .max_batch_size = 32 };
+middleware_fn_t batch_mw = batch_middleware_create(&batch_cfg);
+```
+
+### AI Agent Orchestration (Phase 18 — v1.8.0)
+
+```c
+agent_registry_t *agent_registry_create(void);
+int agent_register(agent_registry_t *reg, const char *agent_id, agent_handler_t handler);
+int agent_send_message(agent_registry_t *reg, const char *from, const char *to, json_value_t *msg);
+void agent_registry_destroy(agent_registry_t *reg);
+```
+
+### Prometheus Metrics (Phase 19 — v1.9.0)
+
+```c
+void prometheus_register(router_t *router);  // Registers GET /metrics (Prometheus format)
+```
+
+---
+
 *Generated for Modern C Web Library v1.0.0 — Pure C, Zero Dependencies*
+*v2.0 planned APIs are subject to change during implementation.*
