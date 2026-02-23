@@ -307,22 +307,50 @@ Success rate: 100%
 
 ---
 
-## Future Roadmap (Post-v1.0.0)
+## Future Roadmap — v2.0: AI-Native Performance (Phases 11–20)
 
-### Near-Term
-- **SSL/TLS Support**: Pure C TLS 1.2+ implementation (AES-GCM, SHA-256, RSA/ECDSA)
-- **HTTP/2 Support**: Binary framing, stream multiplexing, HPACK compression
-- **Directory Listing**: Auto-generated directory indexes for static file serving
+> **Objective**: Transform the world's only zero-dependency pure C web library into the **world's fastest AI-native HTTP infrastructure**.
 
-### Medium-Term
-- **Multiple Template Formats**: Mustache, Jinja2-style templates
-- **Load Balancing**: Round-robin, least connections, IP hash
-- **Worker Pool**: Multi-process model with process supervision
+### Phase Summary
 
-### Long-Term
-- **HTTP/3 / QUIC**: UDP-based transport with built-in TLS
-- **Windows IOCP**: Native Windows async I/O backend
-- **OpenTelemetry**: Distributed tracing support
+| Phase | Version | Codename | Disruption Target | Est. New Tests |
+|-------|---------|----------|-------------------|----------------|
+| 11 | v1.1.0 | Memory Revolution | 0 heap allocs/request | +15 |
+| 12 | v1.2.0 | io_uring Warp Drive | 1M+ RPS plaintext | +20 |
+| 13 | v1.3.0 | SIMD Parser | 2GB/s header parsing | +15 |
+| 14 | v1.4.0 | Pure C TLS 1.3 | Zero-dep HTTPS | +25 |
+| 15 | v1.5.0 | HTTP/2 Engine | Full multiplexing | +20 |
+| 16 | v1.6.0 | AI Inference Layer | Purpose-built AI serving | +20 |
+| 17 | v1.7.0 | Lock-Free Concurrency | Linear 128-core scaling | +15 |
+| 18 | v1.8.0 | Agent Protocol | AI agent orchestration | +20 |
+| 19 | v1.9.0 | Observable Server | Production-grade telemetry | +15 |
+| 20 | v2.0.0 | World's Fastest | TechEmpower #1 · Viral launch | +35 |
+
+**Total projected tests at v2.0.0: ~330+**
+
+### Key v2.0 Milestones
+
+- **Memory Architecture Revolution** (Phase 11): Eliminate every `malloc()` from the hot path. Arena/slab allocator per connection. Object pools for hot structures with lock-free freelists.
+- **io_uring & Zero-Copy I/O** (Phase 12): Achieve 1M+ RPS plaintext on a single machine. Beat every C framework on TechEmpower.
+- **SIMD-Accelerated Parsing** (Phase 13): Parse HTTP headers at memory bandwidth speed — 16 bytes per cycle minimum using SSE4.2/AVX2/NEON.
+- **Pure C TLS 1.3** (Phase 14): Implement TLS 1.3 from RFC 8446 in pure C with AES-NI/ARM-CE hardware acceleration. No OpenSSL.
+- **HTTP/2 Protocol Engine** (Phase 15): Full HTTP/2 binary framing with HPACK compression and stream multiplexing.
+- **AI Inference Serving** (Phase 16): Server-Sent Events for LLM token streaming, batch request coalescing, tensor binary protocol, model routing.
+- **Lock-Free Concurrency** (Phase 17): Eliminate all mutex contention. Lock-free MPMC queue, work-stealing scheduler, RCU routing table.
+- **AI Agent Orchestration** (Phase 18): JSON-RPC 2.0 over WebSocket, agent-to-agent routing, tool calling protocol, context window management.
+- **Observability & Profiling** (Phase 19): Prometheus metrics exporter, OpenTelemetry trace context, structured JSON logging, built-in profiler.
+- **v2.0.0 Release** (Phase 20): TechEmpower benchmark submission, AI inference example, agent orchestration example, migration guide, viral documentation.
+
+### What Makes This Project Go Viral
+
+| Factor | Strategy |
+|--------|----------|
+| **Speed proof** | TechEmpower submission + reproducible benchmarks in CI |
+| **AI-native positioning** | "The only pure C web library built for AI inference" |
+| **llama.cpp synergy** | Integration guide: llama.cpp + this library = complete AI inference stack in pure C |
+| **Zero-dependency legend** | TLS 1.3, HTTP/2, gzip, SIMD parsing — all without a single external `#include` |
+| **50-line AI backend** | Tutorial: complete AI inference endpoint in 50 lines of C |
+| **Edge/IoT angle** | "Run an AI inference server on a Raspberry Pi" — pure C's memory efficiency makes this possible |
 
 ---
 
