@@ -692,6 +692,7 @@ For a list of planned features and enhancements, check out [TODO.md](TODO.md).
 - **Security**: All buffer operations bounds-checked, HMAC-SHA256 with constant-time comparison
 - **Debugging**: Full IDE integration with LLDB/GDB
 - **WebSocket**: RFC 6455 compliant implementation (threaded + async modes)
+- **Roadmap**: v2.0 phases 11–20 planned — see [NEXT_PHASE.md](NEXT_PHASE.md) and [TODO.md](TODO.md)
 
 For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMENTS.md**](ACHIEVEMENTS.md).
 
@@ -726,8 +727,16 @@ For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMEN
 - [x] Benchmarking suite
 - [x] REST API example
 - [x] Tutorial documentation
-- [ ] SSL/TLS support (pure C implementation)
-- [ ] HTTP/2 support
+- [ ] Pure C TLS 1.3 — RFC 8446, AES-NI/ARM-CE (v1.4.0)
+- [ ] HTTP/2 protocol engine — binary framing, HPACK, multiplexing (v1.5.0)
+- [ ] Arena/slab memory allocator (v1.1.0)
+- [ ] io_uring & zero-copy I/O (v1.2.0)
+- [ ] SIMD-accelerated HTTP parser (v1.3.0)
+- [ ] AI inference serving primitives — SSE, batch coalescing (v1.6.0)
+- [ ] Lock-free concurrency & work-stealing (v1.7.0)
+- [ ] AI agent orchestration protocol (v1.8.0)
+- [ ] Observability & profiling (v1.9.0)
+- [ ] v2.0.0 — World's fastest AI-native C web library
 
 ## Community & Support
 
