@@ -31,17 +31,20 @@ This document tracks planned features, enhancements, and improvements for the Mo
     - Single-threaded high-concurrency support
     - Write queue for non-blocking sends
   
-- [ ] 🎯 **SSL/TLS Support** - Secure HTTPS connections
-  - Custom TLS implementation in pure C
-  - Certificate management
-  - SNI support
-  - TLS 1.2+ support
+- [ ] 🎯 **Pure C TLS 1.3** (Phase 14, v1.4.0) — Secure HTTPS connections
+  - RFC 8446 TLS 1.3 implementation in pure C
+  - AES-NI/ARM-CE hardware acceleration
+  - X25519 key exchange, certificate parsing
+  - SNI support, 0-RTT early data
+  - No OpenSSL dependency
 
-- [ ] 🔧 **HTTP/2 Support** - Implement HTTP/2 protocol
-  - Binary framing
-  - Stream multiplexing
+- [ ] 🔧 **HTTP/2 Protocol Engine** (Phase 15, v1.5.0) — Full HTTP/2 implementation
+  - Binary framing layer
+  - HPACK header compression
+  - Stream multiplexing with priority
+  - Flow control (connection and stream level)
   - Server push
-  - Header compression (HPACK)
+  - Graceful connection shutdown (GOAWAY)
 
 - [ ] 💡 **HTTP/3 / QUIC Support** - Next-generation HTTP protocol
   - UDP-based transport
@@ -277,7 +280,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Monitoring & Observability
 
-- [ ] 💡 **Prometheus Metrics** - Metrics export
+- [ ] 💡 **Prometheus Metrics** (Phase 19, v1.9.0) — Metrics export
   - HTTP metrics
   - Custom metrics
   - Metric labels
@@ -286,10 +289,23 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - GET /healthz with JSON status and uptime
   - Suitable for load-balancer and Kubernetes probes
 
-- [ ] 💡 **OpenTelemetry Support** - Distributed tracing
+- [ ] 💡 **OpenTelemetry Support** (Phase 19, v1.9.0) — Distributed tracing
   - Trace context propagation
   - Span creation
   - Exporter integration
+
+### v2.0 — AI-Native Performance (Phases 11–20)
+
+- [ ] 🎯 **Arena/Slab Memory Allocator** (Phase 11, v1.1.0) — Per-connection memory pools, object pooling, cache-line alignment, zero heap allocations per request
+- [ ] 🎯 **io_uring & Zero-Copy I/O** (Phase 12, v1.2.0) — io_uring event backend, registered buffers, sendfile(), multishot accept. Target: 1M+ RPS
+- [ ] 🎯 **SIMD-Accelerated HTTP Parser** (Phase 13, v1.3.0) — SSE4.2/AVX2/NEON vectorized parsing. Target: 2GB/s header parsing
+- [ ] 🎯 **Pure C TLS 1.3** (Phase 14, v1.4.0) — RFC 8446, AES-NI/ARM-CE acceleration, X25519, certificate parsing, SNI, 0-RTT
+- [ ] 🎯 **HTTP/2 Protocol Engine** (Phase 15, v1.5.0) — Binary framing, HPACK compression, stream multiplexing, flow control, server push
+- [ ] 🎯 **AI Inference Serving** (Phase 16, v1.6.0) — SSE streaming, batch coalescing, tensor protocol, model routing, inference queue
+- [ ] 🔧 **Lock-Free Concurrency** (Phase 17, v1.7.0) — MPMC queue, work-stealing scheduler, RCU routing table, per-CPU affinity
+- [ ] 🔧 **AI Agent Orchestration** (Phase 18, v1.8.0) — JSON-RPC 2.0, agent routing, tool calling, context management
+- [ ] 🔧 **Observability & Profiling** (Phase 19, v1.9.0) — Prometheus metrics, OpenTelemetry traces, structured JSON logging, built-in profiler
+- [ ] 🎯 **v2.0.0 Release** (Phase 20, v2.0.0) — TechEmpower benchmarks, AI inference example, agent orchestration example, viral documentation
 
 ## Completed Features
 
@@ -346,6 +362,16 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 - **Phase 8 (v0.8.0)**: ✅ Security & Observability — CSRF middleware ✅, logging ✅, error handler ✅, input validation ✅, health check ✅
 - **Phase 9 (v0.9.0)**: ✅ Performance & Observability — caching layer ✅, metrics middleware ✅, response compression ✅, async WebSocket ✅, benchmarking suite ✅
 - **Phase 10 (v1.0.0)**: ✅ Release Readiness — REST API example ✅, tutorials ✅, documentation ✅, CHANGELOG ✅, semantic versioning ✅
+- **Phase 11 (v1.1.0)**: Arena/Slab Memory Allocator — per-connection pools, object pooling, cache-line alignment
+- **Phase 12 (v1.2.0)**: io_uring & Zero-Copy I/O — io_uring backend, registered buffers, sendfile()
+- **Phase 13 (v1.3.0)**: SIMD-Accelerated HTTP Parser — SSE4.2/AVX2/NEON vectorized parsing
+- **Phase 14 (v1.4.0)**: Pure C TLS 1.3 — RFC 8446, AES-NI/ARM-CE, X25519, SNI, 0-RTT
+- **Phase 15 (v1.5.0)**: HTTP/2 Protocol Engine — binary framing, HPACK, stream multiplexing
+- **Phase 16 (v1.6.0)**: AI Inference Serving — SSE streaming, batch coalescing, tensor protocol
+- **Phase 17 (v1.7.0)**: Lock-Free Concurrency — MPMC queue, work-stealing, RCU routing
+- **Phase 18 (v1.8.0)**: AI Agent Orchestration — JSON-RPC 2.0, agent routing, tool calling
+- **Phase 19 (v1.9.0)**: Observability & Profiling — Prometheus metrics, OpenTelemetry, JSON logging
+- **Phase 20 (v2.0.0)**: v2.0.0 Release — TechEmpower benchmarks, AI inference example, viral docs
 
 ## How to Contribute
 
