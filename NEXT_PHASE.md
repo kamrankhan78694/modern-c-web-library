@@ -1,7 +1,8 @@
-# Next Phase Roadmap — Modern C Web Library v0.7.0+
+# Next Phase Roadmap — Modern C Web Library v2.0.0
 
 > **Methodology**: First-principles engineering workflow.
 > Every decision below traces back to a verifiable technical constraint, not convention.
+> **Scope**: v2.0 roadmap (Phases 11–20) — building on the completed v1.0 foundation.
 
 ---
 
@@ -37,28 +38,31 @@
 
 ---
 
-## 4. Grounded First-Principles Design
+## 4. Grounded First-Principles Design (v2.0)
 
-### What makes a network server production-safe?
+### What makes a C web library disruptively fast?
 
-Working from the socket up, not from features down:
+Working from the hardware up, not from features down:
 
-1. **Timeout enforcement** — A server without socket timeouts is vulnerable to Slowloris and connection exhaustion. The current `recv()` call in the connection loop blocks indefinitely.
-2. **Transport encryption** — Plaintext HTTP is rejected by browsers and load balancers. TLS 1.2+ is non-negotiable for production.
-3. **Graceful lifecycle** — Crash-stopping drops in-flight requests. A state machine (running → draining → stopped) with connection drain timeout is required.
-4. **Automated proof** — Without CI running tests on every push, regressions ship undetected. GitHub Actions with build + test + Valgrind is the minimum.
-5. **Observability** — A server without structured logging is a black box under incident. Logging middleware feeds debugging and monitoring.
-6. **Defensive parsing** — Edge cases in chunked encoding, duplicate headers, and request smuggling need targeted hardening.
+1. **Zero-allocation request path** — Every `malloc()` per request is a cache miss and a scalability cliff. Arena allocators with pointer-bump allocation eliminate heap contention entirely.
+2. **Kernel bypass I/O** — `read()`/`write()` syscalls dominate latency at scale. `io_uring` with registered buffers and multishot accept removes the kernel-user boundary from the hot path.
+3. **SIMD-accelerated parsing** — Byte-at-a-time HTTP parsing leaves 90%+ of CPU width unused. SSE4.2/AVX2/NEON can scan 16–32 bytes per cycle for delimiters and validate characters in parallel.
+4. **Pure C TLS 1.3** — External TLS libraries (OpenSSL, BoringSSL) add 1M+ LOC of dependency. A focused TLS 1.3 implementation with AES-NI/ARM-CE hardware acceleration achieves security without bloat.
+5. **Lock-free concurrency** — Mutex contention destroys throughput beyond 16 cores. CAS-based data structures, work-stealing schedulers, and per-CPU affinity enable linear scaling.
+6. **AI-native serving primitives** — LLM inference has unique I/O patterns: streaming tokens via SSE, batch request coalescing, backpressure-aware queuing. These require first-class protocol support, not bolted-on middleware.
+7. **Production observability** — A server without metrics, traces, and structured logging cannot be operated at scale. Built-in Prometheus/OpenTelemetry support is non-negotiable.
 
-### Architecture Decision Records
+### Architecture Decision Records (v2.0)
 
 | Decision | Rationale |
 |----------|-----------|
-| Socket timeouts via `setsockopt(SO_RCVTIMEO/SO_SNDTIMEO)` | Portable POSIX, no extra threads, prevents indefinite blocking |
-| Pure C TLS (not OpenSSL) | Aligns with zero-dependency principle; vendor `src/tls/` subdirectory |
-| Thread pool instead of thread-per-connection | Bounded resource usage; prevents fork-bomb under load |
-| Structured logging to `FILE *` stream | Zero-allocation hot path; configurable destination (stderr, file, custom) |
-| GitHub Actions CI matrix: Linux + macOS | Covers epoll + kqueue backends; Windows IOCP deferred to Phase 10 |
+| Arena + slab allocator per connection | Zero heap allocations in steady state; deterministic memory usage; no fragmentation |
+| `io_uring` with epoll/kqueue/poll fallback chain | Maximum throughput on Linux 5.6+; graceful degradation on older kernels and other platforms |
+| SIMD HTTP parser with scalar fallback | 10-20x speedup on modern CPUs; compile-time feature detection; no runtime dependency |
+| Pure C TLS 1.3 (RFC 8446) | Zero external dependencies; AES-NI/ARM-CE acceleration; minimal attack surface |
+| Lock-free MPMC queues + work-stealing | Linear scaling to 128+ cores; no mutex contention on hot paths |
+| Built-in SSE/streaming JSON for AI serving | Purpose-built for LLM inference patterns; lower latency than generic HTTP middleware |
+| Prometheus metrics + OpenTelemetry traces | Production-grade observability without external agents; matches Go/Rust ecosystem maturity |
 
 ---
 
@@ -79,180 +83,216 @@ Working from the socket up, not from features down:
 
 ---
 
-## 6. Design Iteration (Refined Architecture)
+## 6. Design Iteration — v2.0 Phase Architecture
 
-Based on adversarial review, the phases are ordered by **blast radius** — the damage caused if the gap is not closed:
+Based on first-principles analysis, phases are ordered by **compounding value** — each phase unlocks performance or capability that subsequent phases build upon:
 
 ```
-Phase 7 (v0.7.0): Server Hardening & CI
-   ├── Socket timeouts (blocks Slowloris/Slow-POST)
-   ├── Thread pool (bounds resource usage)
-   ├── Graceful shutdown (drain + timeout)
-   ├── Connection hardening (keep-alive limits, partial I/O loops)
-   ├── GitHub Actions CI (build + test + Valgrind on Linux/macOS)
-   └── Networking integration tests
+Phase 11 (v1.1.0): Memory Architecture Revolution
+   ├── Arena/slab allocator (per-connection memory pool)
+   ├── Object pool for hot structures (lock-free freelist)
+   ├── Cache-line alignment (64-byte boundaries)
+   └── Memory usage dashboard (/debug/memory endpoint)
 
-Phase 8 (v0.8.0): Security & Observability
-   ├── Pure C TLS 1.2 (AES-GCM, SHA-256, RSA/ECDSA)
-   ├── CSRF middleware (double-submit cookie)
-   ├── Logging middleware (structured, configurable levels)
-   ├── Error handler middleware (centralized 4xx/5xx responses)
-   └── Input validation helpers (sanitization, length checks)
+Phase 12 (v1.2.0): io_uring & Zero-Copy I/O
+   ├── io_uring event backend (registered buffers, multishot accept)
+   ├── sendfile() for static files
+   └── Fallback chain: io_uring → epoll → kqueue → poll
 
-Phase 9 (v0.9.0): Performance & Protocol
-   ├── HTTP/2 binary framing + stream multiplexing
-   ├── Response compression (gzip/deflate, pure C)
-   ├── In-memory caching layer (LRU, TTL)
-   ├── Async WebSocket mode (event loop integration)
-   └── Benchmarking suite
+Phase 13 (v1.3.0): SIMD-Accelerated HTTP Parser
+   ├── SSE4.2/AVX2 paths (x86_64)
+   ├── ARM NEON path (aarch64)
+   └── Scalar fallback (portable)
 
-Phase 10 (v1.0.0): Release Readiness
-   ├── Tutorial series (REST API, WebSocket chat, file upload)
-   ├── REST API example application
-   ├── Windows IOCP support
-   ├── BSD platform testing
-   ├── Health check endpoint
-   └── CHANGELOG + semantic versioning enforcement
+Phase 14 (v1.4.0): Pure C TLS 1.3
+   ├── Full TLS 1.3 (RFC 8446)
+   ├── AES-NI/ARM-CE hardware acceleration
+   ├── X25519 key exchange
+   └── Certificate parsing, SNI, 0-RTT resumption
+
+Phase 15 (v1.5.0): HTTP/2 Protocol Engine
+   ├── Binary framing layer
+   ├── HPACK header compression
+   ├── Stream multiplexing + flow control
+   └── Server push, ALPN negotiation
+
+Phase 16 (v1.6.0): AI Inference Serving Primitives
+   ├── Server-Sent Events (SSE) + streaming JSON parser
+   ├── Batch request coalescing + inference queue
+   ├── Model routing middleware + backpressure
+   └── GPU-friendly buffer alignment
+
+Phase 17 (v1.7.0): Lock-Free Concurrency & Work-Stealing
+   ├── Lock-free MPMC queue
+   ├── Work-stealing scheduler
+   ├── RCU for routing table updates
+   └── Per-CPU connection affinity + atomic metrics
+
+Phase 18 (v1.8.0): AI Agent Orchestration Protocol
+   ├── JSON-RPC 2.0 over WebSocket
+   ├── Agent-to-agent routing + tool calling protocol
+   ├── Context window management
+   └── Structured output enforcement + agent health/heartbeat
+
+Phase 19 (v1.9.0): Observability, Profiling & Production Hardening
+   ├── Prometheus metrics exporter
+   ├── OpenTelemetry trace context propagation
+   ├── Structured JSON logging + built-in profiler
+   └── Connection forensics + chaos testing hooks
+
+Phase 20 (v2.0.0): World's Fastest AI-Native C Web Library
+   ├── TechEmpower benchmark submission
+   ├── AI inference example server + agent orchestration example
+   ├── Automated benchmark CI + viral documentation
+   └── Migration guide + release engineering
 ```
 
 ---
 
-## 7. Milestone Roadmap (1–2 Week Slices)
+## 7. Milestone Roadmap — v2.0 (Phases 11–20)
 
-### Phase 7: Server Hardening & CI — v0.7.0 (4 weeks)
+### Phase 11 — v1.1.0: Memory Architecture Revolution
 
-| Week | Milestone | Deliverables | Dependencies |
-|------|-----------|-------------|--------------|
-| **W1** | Socket Timeouts & Connection Hardening | `setsockopt(SO_RCVTIMEO)` on accept; partial-I/O `recv()`/`send()` loops; keep-alive request limit (100 req/conn default) | None |
-| **W2** | Thread Pool & Graceful Shutdown | Bounded thread pool (configurable size, default 16); server state machine (running→draining→stopped); `http_server_shutdown()` API; SIGTERM/SIGINT handler | W1 (timeout feeds drain logic) |
-| **W3** | GitHub Actions CI + Integration Tests | `.github/workflows/ci.yml` (Linux gcc + macOS clang); Valgrind memcheck gate; `tests/integration/` with raw-socket HTTP client; malformed input + concurrent connection tests | W1+W2 (stable server to test against) |
-| **W4** | Parser Hardening & Stabilization | Duplicate Transfer-Encoding detection; `Expect: 100-continue` handling; chunked-size overflow clamping; comprehensive edge-case unit tests; full regression pass | W1-W3 (CI catches regressions) |
+| Component | Deliverables | Disruption Target |
+|-----------|-------------|-------------------|
+| **Arena Allocator** | Per-connection memory pool with configurable block sizes (4KB/16KB/64KB); O(1) pointer-bump allocation; per-connection reuse via `arena_reset()` | 0 heap allocations per request in steady state |
+| **Object Pool** | Pre-allocated pools for `http_request_t`, `http_response_t`, `json_value_t`; lock-free freelist with CAS operations; exhaustion fallback to arena | Eliminate malloc/free overhead for hot structures |
+| **Cache-Line Alignment** | All hot structs padded to 64-byte boundaries; `CACHE_LINE_ALIGN` macro; `static_assert` verification | Eliminate false sharing in concurrent access |
+| **Memory Dashboard** | `GET /debug/memory` endpoint; JSON response with arena utilization, pool hit rates, peak usage | Runtime visibility into memory behavior |
+| **Tests** | Arena lifecycle, pool exhaustion/recovery, alignment verification, leak detection under load | Full coverage of memory subsystem |
 
-### Phase 8: Security & Observability — v0.8.0 (5 weeks)
+### Phase 12 — v1.2.0: io_uring & Zero-Copy I/O
 
-| Week | Milestone | Deliverables | Dependencies |
-|------|-----------|-------------|--------------|
-| **W5** | Crypto Primitives | `src/tls/crypto_sha256.c` (SHA-256); `src/tls/crypto_aes_gcm.c` (AES-128/256-GCM); `src/tls/crypto_rsa.c` (RSA PKCS#1 v1.5 + OAEP) | None (standalone modules) |
-| **W6** | TLS Record Layer & Handshake (Part 1) | `src/tls/tls_record.c` (record framing); `src/tls/tls_handshake.c` (ClientHello/ServerHello); PEM certificate parser; key loading | W5 (crypto primitives) |
-| **W7** | TLS Handshake (Part 2) & Integration | Complete handshake state machine; `http_server_enable_tls(server, cert, key)` API; HTTPS example server; TLS unit tests with test vectors | W6 |
-| **W8** | Logging & Error Handler Middleware | `src/middleware_log.c` (configurable log levels: DEBUG/INFO/WARN/ERROR; format: timestamp, method, path, status, duration); `src/middleware_error.c` (centralized error pages, custom error callbacks) | None |
-| **W9** | CSRF Middleware & Input Validation | `src/middleware_csrf.c` (double-submit cookie, per-request token generation, constant-time comparison); `src/input_validation.c` (string length check, allowed-character filter, integer range validation) | Phase 7 CI (validates correctness) |
+| Component | Deliverables | Disruption Target |
+|-----------|-------------|-------------------|
+| **io_uring Backend** | `io_uring` event backend with submission/completion queue management; registered buffers for zero-copy I/O; multishot accept for connection handling | 1,000,000+ RPS plaintext |
+| **sendfile() Integration** | Zero-copy static file serving via `sendfile()` on Linux, `sendfile()` on macOS | Eliminate user-space copies for static content |
+| **Fallback Chain** | Runtime detection: `io_uring` → `epoll` → `kqueue` → `poll`; seamless degradation on older kernels | <10μs p99 latency on supported platforms |
 
-### Phase 9: Performance & Protocol — v0.9.0 (5 weeks)
+### Phase 13 — v1.3.0: SIMD-Accelerated HTTP Parser
 
-| Week | Milestone | Deliverables | Dependencies |
-|------|-----------|-------------|--------------|
-| **W10** | HTTP/2 Framing & Streams | `src/http2/` directory; binary frame parser; stream multiplexing; HPACK header compression (static + dynamic tables); settings frame handling | Phase 7 (hardened connection layer) |
-| **W11** | HTTP/2 Integration | Server push; stream prioritization; integration with existing router; `http_server_enable_http2()` API; HTTP/2 unit tests | W10 |
-| **W12** | Response Compression | Pure C gzip (DEFLATE + gzip header, based on RFC 1951/1952); `Accept-Encoding` negotiation; `Content-Encoding: gzip` header; minimum size threshold (default 1KB) | None |
-| **W13** | Caching Layer & Async WebSocket | `src/cache.c` (LRU eviction, TTL, configurable max size); async WebSocket frame processing in event loop; non-blocking WebSocket sends with write queue | Phase 7 (event loop stability) |
-| **W14** | Benchmarking Suite | `tests/benchmark/` directory; throughput test (requests/sec); latency percentiles (p50/p95/p99); memory usage tracking; comparison scripts; CI integration for regression detection | All prior phases |
+| Component | Deliverables | Disruption Target |
+|-----------|-------------|-------------------|
+| **SSE4.2 Path** | `_mm_cmpistri` for delimiter scanning; character class validation in parallel | 10-20x faster header parsing vs scalar |
+| **AVX2 Path** | 32-byte-wide scanning for bulk header processing; compile-time feature detection | 2GB/s parsing throughput on modern x86 |
+| **ARM NEON Path** | Equivalent SIMD acceleration for ARM64 platforms | Competitive parsing speed on ARM servers |
+| **Scalar Fallback** | Portable C implementation; automatic selection when SIMD unavailable | Correct behavior on all platforms |
 
-### Phase 10: Release Readiness — v1.0.0 (3 weeks)
+### Phase 14 — v1.4.0: Pure C TLS 1.3
 
-| Week | Milestone | Deliverables | Dependencies |
-|------|-----------|-------------|--------------|
-| **W15** | Examples & Tutorials | `examples/rest_api_server.c` (full CRUD); `examples/websocket_chat.c`; `examples/file_upload.c`; step-by-step tutorial docs in `docs/tutorials/` | All features complete |
-| **W16** | Platform Hardening | Windows IOCP event loop backend; BSD (FreeBSD/OpenBSD) CI testing; platform-specific CI matrix expansion; `docs/PLATFORM.md` compatibility matrix | Phase 7 CI infrastructure |
-| **W17** | Release Engineering | Semantic versioning enforcement; `CHANGELOG.md` finalization; health check endpoint (`/healthz`); release automation in GitHub Actions; v1.0.0 tag and release | All prior phases |
+| Component | Deliverables | Disruption Target |
+|-----------|-------------|-------------------|
+| **TLS 1.3 Core** | Full TLS 1.3 from RFC 8446; handshake state machine; record layer | Pure C TLS 1.3 with zero external dependencies |
+| **Hardware Acceleration** | AES-NI acceleration for AES-128/256-GCM; ARM-CE for ARM platforms | Hardware-speed encryption without OpenSSL |
+| **Key Exchange** | X25519 (Curve25519) Diffie-Hellman key exchange | Modern, fast key agreement |
+| **Certificate & Features** | PEM certificate parsing; SNI support; 0-RTT resumption | Production-ready TLS configuration |
+
+### Phase 15 — v1.5.0: HTTP/2 Protocol Engine
+
+| Component | Deliverables | Disruption Target |
+|-----------|-------------|-------------------|
+| **Binary Framing** | HTTP/2 frame parser/serializer; frame type dispatch | Full HTTP/2 in pure C |
+| **HPACK Compression** | Static + dynamic header table; Huffman encoding/decoding | Efficient header compression |
+| **Stream Multiplexing** | Concurrent streams over single connection; stream prioritization; flow control | Multiplexed request handling |
+| **Server Push & ALPN** | Server push support; ALPN negotiation for protocol upgrade | Complete HTTP/2 feature set |
+
+### Phase 16 — v1.6.0: AI Inference Serving Primitives
+
+| Component | Deliverables | Disruption Target |
+|-----------|-------------|-------------------|
+| **SSE & Streaming** | Server-Sent Events (SSE) with `text/event-stream`; streaming JSON parser for incremental token output | Purpose-built AI inference serving layer |
+| **Batch Coalescing** | Batch request coalescing for inference efficiency; inference queue with configurable backpressure | Optimal GPU utilization |
+| **Model Routing** | Model routing middleware; tensor binary protocol for efficient data transfer | Multi-model serving from single server |
+| **GPU Alignment** | GPU-friendly buffer alignment for zero-copy tensor transfer | Minimize CPU-GPU data transfer overhead |
+
+### Phase 17 — v1.7.0: Lock-Free Concurrency & Work-Stealing
+
+| Component | Deliverables | Disruption Target |
+|-----------|-------------|-------------------|
+| **Lock-Free Queue** | Lock-free MPMC (multi-producer multi-consumer) queue with CAS operations | Linear throughput scaling to 128+ cores |
+| **Work-Stealing Scheduler** | Per-core work queues; idle cores steal from busy cores; adaptive load balancing | Optimal CPU utilization across all cores |
+| **RCU Routing** | Read-Copy-Update for routing table; zero-overhead reads; deferred reclamation | Hot-path routing with zero locks |
+| **CPU Affinity & Metrics** | Per-CPU connection affinity; atomic metrics counters; NUMA-aware allocation | Hardware-topology-aware scheduling |
+
+### Phase 18 — v1.8.0: AI Agent Orchestration Protocol
+
+| Component | Deliverables | Disruption Target |
+|-----------|-------------|-------------------|
+| **JSON-RPC 2.0** | JSON-RPC 2.0 over WebSocket; request/response/notification support | First pure C AI agent orchestration server |
+| **Agent Routing** | Agent-to-agent routing; tool calling protocol with schema validation | Multi-agent communication backbone |
+| **Context Management** | Context window management; token counting; conversation history tracking | Efficient LLM context handling |
+| **Health & Output** | Structured output enforcement (JSON schema); agent health monitoring; heartbeat protocol | Production-ready agent infrastructure |
+
+### Phase 19 — v1.9.0: Observability, Profiling & Production Hardening
+
+| Component | Deliverables | Disruption Target |
+|-----------|-------------|-------------------|
+| **Prometheus Metrics** | Built-in Prometheus exporter (`/metrics` endpoint); request rate, latency histograms, error rates | Production-grade observability matching Go/Rust ecosystem maturity |
+| **OpenTelemetry** | Trace context propagation (W3C TraceContext); span creation for request lifecycle | Distributed tracing without external agents |
+| **Logging & Profiling** | Structured JSON logging with configurable levels; built-in profiler with flame graph output | Zero-dependency diagnostics |
+| **Chaos & Forensics** | Connection forensics (per-connection metadata); chaos testing hooks (fault injection, latency injection) | Production hardening through controlled failure |
+
+### Phase 20 — v2.0.0: World's Fastest AI-Native C Web Library
+
+| Component | Deliverables | Disruption Target |
+|-----------|-------------|-------------------|
+| **Benchmarks** | TechEmpower benchmark submission (plaintext, JSON, fortunes); automated benchmark CI with regression detection | The definitive pure C web library for AI workloads |
+| **Examples** | AI inference example server (SSE streaming, batch coalescing); agent orchestration example (multi-agent chat) | Viral adoption through compelling demos |
+| **Documentation** | Migration guide from v1.0 → v2.0; API reference; architecture deep-dive; performance tuning guide | Developer experience that drives adoption |
+| **Release** | Release engineering; semantic versioning; CHANGELOG; package distribution | Professional release quality |
 
 ---
 
 ## 8. Atomic Task Breakdown
 
-### Phase 7 — Server Hardening & CI
+### Phase 11 — Memory Architecture Revolution (v1.1.0)
 
-#### 7.1 Socket Timeouts
+#### 11.1 Arena Allocator
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 7.1.1 | Add `setsockopt(SO_RCVTIMEO)` on accepted client sockets | `src/http_server.c` | Read timeout triggers after configurable seconds (default 30s) | 2h |
-| 7.1.2 | Add `setsockopt(SO_SNDTIMEO)` on accepted client sockets | `src/http_server.c` | Write timeout triggers after configurable seconds (default 30s) | 1h |
-| 7.1.3 | Add `http_server_set_timeout(server, read_sec, write_sec)` API | `include/weblib.h`, `src/http_server.c` | API documented, validated (rejects negative values) | 2h |
-| 7.1.4 | Handle `EAGAIN`/`EWOULDBLOCK` in recv/send loops | `src/http_server.c` | Partial reads/writes retried; timeout returns error code | 3h |
-| 7.1.5 | Unit tests for timeout behavior | `tests/test_weblib.c` | Test verifies server rejects slow client simulation | 2h |
+| 11.1.1 | Implement `arena_create()`/`arena_destroy()` with configurable block sizes (4KB/16KB/64KB) | `src/arena.c` (new), `include/weblib.h` | Arena allocates initial block; destroy frees all blocks; configurable block size parameter | 3h |
+| 11.1.2 | Implement `arena_alloc()` with O(1) pointer-bump allocation | `src/arena.c` | Allocation returns aligned pointer; O(1) fast path; automatic block chaining when current block is exhausted | 2h |
+| 11.1.3 | Implement `arena_reset()` for per-connection reuse | `src/arena.c` | Reset returns arena to initial state without freeing blocks; all subsequent allocations reuse existing memory | 2h |
+| 11.1.4 | Integrate arena into `http_request_t`/`http_response_t` lifecycle | `src/http_server.c` | Each connection gets an arena; request/response allocations use arena; arena reset between keep-alive requests | 4h |
+| 11.1.5 | Unit tests for arena lifecycle, allocation, reset, exhaustion | `tests/test_weblib.c` | Tests cover: create/destroy, sequential allocations, reset and reuse, block exhaustion and chaining, alignment correctness | 3h |
 
-#### 7.2 Thread Pool
+#### 11.2 Object Pool
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 7.2.1 | Implement `thread_pool_t` with work queue | `src/thread_pool.c` (new), `src/thread_pool.h` (new) | Create/destroy; submit work items; bounded queue (default 256) | 4h |
-| 7.2.2 | Mutex + condition variable synchronization | `src/thread_pool.c` | No data races under concurrent submit; Valgrind clean | 3h |
-| 7.2.3 | Integrate thread pool into `http_server_t` | `src/http_server.c` | Threaded mode uses pool instead of thread-per-connection | 3h |
-| 7.2.4 | Add `http_server_set_thread_count(server, n)` API | `include/weblib.h`, `src/http_server.c` | Configurable thread count; default 16; min 1, max 256 | 1h |
-| 7.2.5 | Unit tests for thread pool | `tests/test_weblib.c` | Create/destroy; submit 100 items; all complete; no leaks | 2h |
+| 11.2.1 | Implement `pool_create()`/`pool_destroy()` with pre-allocated slabs | `src/pool.c` (new), `include/weblib.h` | Pool pre-allocates N objects of fixed size; destroy frees all slabs; configurable pool capacity | 3h |
+| 11.2.2 | Lock-free `pool_acquire()`/`pool_release()` with CAS operations | `src/pool.c` | Acquire/release use `__atomic_compare_exchange_n` on freelist head; no mutex on hot path; ABA prevention | 4h |
+| 11.2.3 | Pool exhaustion fallback to arena allocation | `src/pool.c` | When pool is exhausted, allocate from connection arena; log pool miss for dashboard metrics | 2h |
+| 11.2.4 | Integration with hot structures (`http_request_t`, `http_response_t`, `json_value_t`) | `src/http_server.c`, `src/json.c` | Hot structures acquired from pool instead of `malloc()`; released back to pool instead of `free()` | 4h |
+| 11.2.5 | Unit tests for pool create/acquire/release/exhaustion | `tests/test_weblib.c` | Tests cover: create with capacity, acquire until empty, release and reacquire, exhaustion fallback, concurrent acquire/release | 3h |
 
-#### 7.3 Graceful Shutdown
+#### 11.3 Cache-Line Alignment
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 7.3.1 | Add server state enum (RUNNING, DRAINING, STOPPED) | `include/weblib.h`, `src/http_server.c` | State transitions are atomic (`sig_atomic_t`) | 1h |
-| 7.3.2 | Implement `http_server_shutdown(server, timeout_sec)` | `src/http_server.c`, `include/weblib.h` | Closes listening socket; waits for in-flight requests up to timeout | 3h |
-| 7.3.3 | SIGTERM/SIGINT handler (POSIX) | `src/http_server.c` | Signal triggers state → DRAINING; second signal → immediate exit | 2h |
-| 7.3.4 | Thread pool drain on shutdown | `src/thread_pool.c` | All queued work items complete or are cancelled; threads join | 2h |
-| 7.3.5 | Unit test: shutdown with active connections | `tests/test_weblib.c` | Server shuts down cleanly; no leaked sockets; Valgrind clean | 3h |
+| 11.3.1 | Add `CACHE_LINE_ALIGN` macro (64-byte alignment) | `include/weblib.h` | Macro uses `__attribute__((aligned(64)))` on GCC/Clang, `__declspec(align(64))` on MSVC; `CACHE_LINE_SIZE` constant defined | 1h |
+| 11.3.2 | Apply alignment to hot structures | `include/weblib.h`, `src/http_server.c` | `http_request_t`, `http_response_t`, `json_value_t`, pool freelist nodes are cache-line aligned | 2h |
+| 11.3.3 | Verify alignment with `static_assert` and runtime checks | `tests/test_weblib.c` | Compile-time `static_assert` for struct sizes; runtime test verifies pointer alignment with `((uintptr_t)ptr % 64) == 0` | 2h |
 
-#### 7.4 GitHub Actions CI
+#### 11.4 Memory Dashboard
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 7.4.1 | Create `.github/workflows/ci.yml` | `.github/workflows/ci.yml` (new) | Triggers on push + PR to main; Linux (gcc) + macOS (clang) matrix | 2h |
-| 7.4.2 | Build step: cmake + make | `.github/workflows/ci.yml` | Zero warnings (`-Werror`); both static and shared lib | 1h |
-| 7.4.3 | Test step: run `test_weblib` | `.github/workflows/ci.yml` | All tests pass; non-zero exit on failure | 1h |
-| 7.4.4 | Valgrind memcheck step (Linux only) | `.github/workflows/ci.yml` | Zero errors, zero leaks; fail build on Valgrind error | 2h |
-| 7.4.5 | Cache cmake build directory | `.github/workflows/ci.yml` | Incremental builds use cache; CI time < 5 min | 1h |
+| 11.4.1 | Implement `memory_stats_t` tracking structure | `src/memory_stats.c` (new), `include/weblib.h` | Atomic counters for: arena bytes allocated/reset, pool acquires/releases/misses, peak memory usage | 3h |
+| 11.4.2 | Register `GET /debug/memory` endpoint | `src/memory_stats.c` | Endpoint registered via router; returns current memory statistics; only available when compiled with `DEBUG_MEMORY` flag | 2h |
+| 11.4.3 | JSON response with arena utilization, pool hit rates, peak usage | `src/memory_stats.c` | Response includes: arena block count, total bytes, utilization %; pool capacity, in-use count, hit rate %; peak RSS | 3h |
+| 11.4.4 | Unit tests for dashboard endpoint | `tests/test_weblib.c` | Tests cover: stats initialization, counter increments, JSON response format, endpoint registration | 2h |
 
-#### 7.5 Integration Tests
-| # | Task | File(s) | Acceptance Criteria | Est. |
-|---|------|---------|-------------------|------|
-| 7.5.1 | Pure C test client (raw socket HTTP sender) | `tests/integration/test_client.c` (new) | Connect, send request, read response, verify status code | 4h |
-| 7.5.2 | HTTP protocol conformance tests | `tests/integration/test_http_protocol.c` (new) | GET/POST/PUT/DELETE; keep-alive; chunked encoding; correct headers | 4h |
-| 7.5.3 | Malformed request tests | `tests/integration/test_malformed.c` (new) | Oversized headers → 431; invalid method → 501; missing Host → 400 | 3h |
-| 7.5.4 | Concurrent connection tests | `tests/integration/test_concurrent.c` (new) | 100 simultaneous connections; all get correct responses; no crashes | 4h |
-| 7.5.5 | CMake integration test target | `CMakeLists.txt`, `tests/integration/CMakeLists.txt` (new) | `make integration_tests` builds and runs all integration tests | 2h |
+### Phase 12–20 — Summary Task Estimates
 
-#### 7.6 Parser Hardening
-| # | Task | File(s) | Acceptance Criteria | Est. |
-|---|------|---------|-------------------|------|
-| 7.6.1 | Detect duplicate `Transfer-Encoding` headers | `src/http_server.c` | Returns 400 on duplicate; test case added | 2h |
-| 7.6.2 | Handle `Expect: 100-continue` | `src/http_server.c` | Send `100 Continue` response before reading body | 2h |
-| 7.6.3 | Clamp chunked size to `MAX_BODY_BYTES` | `src/http_server.c` | `strtoul()` result checked against limit; returns 413 on overflow | 1h |
-| 7.6.4 | Add request line length validation | `src/http_server.c` | URI > 8192 bytes → 414 (already exists, verify edge cases) | 1h |
-| 7.6.5 | Edge-case unit tests (20+ cases) | `tests/test_weblib.c` | Empty body, zero-length chunks, trailing whitespace, null bytes | 4h |
-
----
-
-### Phase 8 — Security & Observability (Summary)
-
-| # | Task | Est. |
-|---|------|------|
-| 8.1.1–8.1.5 | SHA-256 implementation + NIST test vectors | 3d |
-| 8.2.1–8.2.5 | AES-128/256-GCM implementation + NIST test vectors | 4d |
-| 8.3.1–8.3.4 | RSA PKCS#1 v1.5 sign/verify + test vectors | 3d |
-| 8.4.1–8.4.6 | TLS 1.2 record layer + handshake state machine | 5d |
-| 8.5.1–8.5.3 | PEM certificate parser + key loading | 2d |
-| 8.6.1–8.6.3 | `http_server_enable_tls()` API + integration | 2d |
-| 8.7.1–8.7.4 | Logging middleware (levels, format, destination) | 2d |
-| 8.8.1–8.8.3 | Error handler middleware (centralized 4xx/5xx) | 1d |
-| 8.9.1–8.9.4 | CSRF middleware (token gen, validation, cookie) | 2d |
-| 8.10.1–8.10.3 | Input validation helpers (length, charset, range) | 1d |
-
-### Phase 9 — Performance & Protocol (Summary)
-
-| # | Task | Est. |
-|---|------|------|
-| 9.1.1–9.1.6 | HTTP/2 binary framing + HPACK compression | 5d |
-| 9.2.1–9.2.4 | HTTP/2 stream multiplexing + server push | 4d |
-| 9.3.1–9.3.4 | Pure C DEFLATE/gzip compression | 4d |
-| 9.4.1–9.4.4 | LRU cache with TTL | 3d |
-| 9.5.1–9.5.4 | Async WebSocket event loop integration | 3d |
-| 9.6.1–9.6.3 | Benchmarking suite + CI regression tracking | 3d |
-
-### Phase 10 — Release Readiness (Summary)
-
-| # | Task | Est. |
-|---|------|------|
-| 10.1.1–10.1.3 | REST API example + WebSocket chat example | 3d |
-| 10.2.1–10.2.3 | Tutorial docs (getting started, REST API, real-time) | 3d |
-| 10.3.1–10.3.3 | Windows IOCP event loop backend | 4d |
-| 10.4.1–10.4.2 | BSD testing + CI matrix expansion | 2d |
-| 10.5.1–10.5.3 | Health check endpoint + release automation | 2d |
+| Phase | Version | Key Deliverables | Est. Duration |
+|-------|---------|-----------------|---------------|
+| Phase 12 | v1.2.0 | io_uring backend, registered buffers, sendfile(), fallback chain | 4 weeks |
+| Phase 13 | v1.3.0 | SSE4.2/AVX2/NEON HTTP parser, scalar fallback, benchmarks | 3 weeks |
+| Phase 14 | v1.4.0 | TLS 1.3 (RFC 8446), AES-NI/ARM-CE, X25519, certificates | 6 weeks |
+| Phase 15 | v1.5.0 | HTTP/2 framing, HPACK, stream multiplexing, server push | 5 weeks |
+| Phase 16 | v1.6.0 | SSE, streaming JSON, batch coalescing, model routing | 4 weeks |
+| Phase 17 | v1.7.0 | Lock-free MPMC, work-stealing, RCU routing, CPU affinity | 4 weeks |
+| Phase 18 | v1.8.0 | JSON-RPC 2.0, agent routing, tool calling, context management | 4 weeks |
+| Phase 19 | v1.9.0 | Prometheus, OpenTelemetry, structured logging, chaos testing | 3 weeks |
+| Phase 20 | v2.0.0 | TechEmpower submission, examples, documentation, release | 3 weeks |
 
 ---
 
@@ -261,63 +301,56 @@ Phase 10 (v1.0.0): Release Readiness
 Tasks that share no data dependencies can be developed simultaneously:
 
 ```
+PHASE 11 PARALLEL GROUPS:
+
 PARALLEL GROUP A (Week 1-2):
-├── 7.1 Socket Timeouts       ← touches http_server.c (connection accept path)
-├── 7.4 GitHub Actions CI      ← touches .github/workflows/ only
-└── 7.6 Parser Hardening       ← touches http_server.c (parse path, non-overlapping)
+├── 11.1 Arena Allocator         ← new files (src/arena.c); standalone module
+├── 11.3 Cache-Line Alignment    ← header-only changes (include/weblib.h)
+└── 11.4.1 Memory Stats Struct   ← new file (src/memory_stats.c); standalone
 
 PARALLEL GROUP B (Week 2-3):
-├── 7.2 Thread Pool            ← new files (thread_pool.c/h)
-└── 7.5 Integration Tests      ← new files (tests/integration/)
+├── 11.2 Object Pool             ← new file (src/pool.c); depends on 11.1 for fallback
+└── 11.4.2-11.4.4 Dashboard      ← depends on 11.4.1 (stats struct)
 
-SEQUENTIAL:
-└── 7.3 Graceful Shutdown      ← depends on 7.1 (timeouts) + 7.2 (thread pool drain)
+SEQUENTIAL (Week 3-4):
+├── 11.1.4 Arena Integration     ← depends on 11.1.1-11.1.3 (arena API complete)
+└── 11.2.4 Pool Integration      ← depends on 11.2.1-11.2.3 (pool API complete)
 
-PARALLEL GROUP C (Week 5-7):
-├── 8.1-8.3 Crypto Primitives  ← new files (src/tls/crypto_*)
-├── 8.7 Logging Middleware      ← new file (src/middleware_log.c)
-└── 8.8 Error Handler          ← new file (src/middleware_error.c)
+FINAL (Week 4):
+└── All unit tests + integration  ← depends on all implementations complete
 
-PARALLEL GROUP D (Week 10-13):
-├── 9.1-9.2 HTTP/2             ← new directory (src/http2/)
-├── 9.3 Compression            ← new file (src/compression.c)
-└── 9.4 Caching Layer          ← new file (src/cache.c)
+FUTURE PHASE DEPENDENCIES:
+Phase 12 (io_uring)              ← benefits from Phase 11 arena (registered buffers)
+Phase 13 (SIMD parser)           ← benefits from Phase 11 alignment (SIMD requires aligned buffers)
+Phase 17 (lock-free concurrency) ← builds on Phase 11 CAS patterns from object pool
 ```
 
 ---
 
 ## 10. Build Validation — Success Criteria per Module
 
-### Phase 7 Checkpoints
+### Phase 11 Checkpoints
 
 | Module | Unit Test Gate | Integration Test Gate | Performance Gate |
 |--------|---------------|----------------------|-----------------|
-| Socket Timeouts | Slow-client simulation completes with timeout error | Server rejects Slowloris-style connections | Accept-to-timeout < 31s (default 30s + 1s tolerance) |
-| Thread Pool | 100 work items submitted and completed; zero leaks | 100 concurrent connections served correctly | Pool creation < 1ms; work item latency < 100μs overhead |
-| Graceful Shutdown | In-flight request completes before server exits | Integration test: send request during shutdown → 200 OK | Shutdown completes in < 1s with 50 idle connections |
-| CI Pipeline | All 71+ tests pass on Linux + macOS | Integration test suite green | CI total time < 5 minutes |
-| Integration Tests | N/A (these ARE the tests) | All protocol conformance tests pass | 100 concurrent connections, zero failures |
-| Parser Hardening | 20+ edge-case tests pass | Malformed requests return correct 4xx codes | Parser throughput ≥ 50,000 req/s (single-threaded) |
+| Arena Allocator | Create/destroy; 1000 sequential allocations; reset and reuse; block exhaustion triggers new block; Valgrind clean | Arena integrated into request lifecycle; 10K requests with zero leaks | Arena alloc < 10ns (pointer bump); zero `malloc()` calls per request in steady state |
+| Object Pool | Create with capacity; acquire until empty; release and reacquire; exhaustion falls back to arena; concurrent acquire/release from multiple threads | Pool used for all hot structures; 10K requests with pool reuse | Pool acquire/release < 20ns (CAS); pool hit rate > 95% under normal load |
+| Cache-Line Alignment | `static_assert(sizeof(http_request_t) % 64 == 0)`; runtime pointer alignment check | No false sharing under concurrent load (perf stat verification) | No measurable regression from padding overhead |
+| Memory Dashboard | Stats counters increment correctly; JSON response parses correctly; endpoint returns 200 | Dashboard accessible during load test; values update in real-time | Dashboard response < 1ms; zero impact on request hot path |
 
-### Phase 8 Checkpoints
+### Phase 12–20 Checkpoints (High-Level)
 
-| Module | Validation |
-|--------|-----------|
-| SHA-256 | NIST FIPS 180-4 test vectors pass (short msg, long msg, Monte Carlo) |
-| AES-GCM | NIST SP 800-38D test vectors pass (128-bit + 256-bit keys) |
-| RSA | PKCS#1 v1.5 sign/verify test vectors pass |
-| TLS 1.2 | `curl --tlsv1.2 https://localhost:8443/` returns 200; browser connects |
-| Logging | Log output matches format spec; level filtering works; file rotation |
-| CSRF | Double-submit cookie validates; missing token → 403; replay → 403 |
-
-### Phase 9 Checkpoints
-
-| Module | Validation |
-|--------|-----------|
-| HTTP/2 | `curl --http2 http://localhost:8080/` returns 200; multiplexed streams |
-| Compression | `Accept-Encoding: gzip` → compressed response; size < 50% of original |
-| Cache | Cache hit returns in < 1μs; LRU eviction correct; TTL expiry correct |
-| Async WebSocket | 1000 concurrent WebSocket connections; echo latency < 1ms |
+| Phase | Key Validation |
+|-------|---------------|
+| Phase 12 | io_uring backend passes all existing tests; >1M RPS plaintext on Linux 5.6+; fallback chain works on older kernels |
+| Phase 13 | SIMD parser produces identical results to scalar; >2GB/s parsing throughput; all platforms pass |
+| Phase 14 | TLS 1.3 passes RFC 8446 test vectors; `curl --tlsv1.3` connects; browser shows green lock |
+| Phase 15 | `curl --http2` returns 200; multiplexed streams work; HPACK compression correct |
+| Phase 16 | SSE streaming delivers tokens in real-time; batch coalescing reduces latency; backpressure prevents OOM |
+| Phase 17 | Linear scaling to 128 cores; zero mutex contention on hot path; RCU routing zero-overhead reads |
+| Phase 18 | JSON-RPC 2.0 conformance tests pass; multi-agent chat example works; heartbeat detects agent failure |
+| Phase 19 | Prometheus scrape returns valid metrics; OpenTelemetry traces propagate; chaos hooks trigger correctly |
+| Phase 20 | TechEmpower benchmark completes; all examples build and run; documentation renders correctly |
 
 ---
 
@@ -435,12 +468,13 @@ Each phase release MUST pass:
 |---------|------|---------|
 | 1.0 | 2025-01-12 | Initial roadmap (Phases 4–6) |
 | 2.0 | 2026-02-19 | Complete rewrite for Phases 7–10: first-principles design, adversarial review, atomic task breakdown, security threat model |
+| 3.0 | 2026-02-22 | v2.0 roadmap (Phases 11–20): memory architecture, io_uring, SIMD parser, TLS 1.3, HTTP/2, AI inference, lock-free concurrency, agent orchestration, observability, release |
 
 ---
 
 **Maintained by**: MCWL Core Team
 **Last Updated**: 2026-02-22
-**Status**: Complete — v1.0.0 released
+**Status**: Active — Phase 11 implementation pending
 **License**: MIT (see LICENSE file)
 
 For questions or discussions about this roadmap, please open an issue on GitHub or contact the maintainers.
