@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned — v2.0.0 Roadmap (Phases 11–20)
+
+The following phases are planned for the v2.0.0 release cycle. Each phase will be documented here upon completion.
+
+- **Phase 11 (v1.1.0)**: Memory Architecture Revolution — Arena/slab allocator, object pools, cache-line alignment
+- **Phase 12 (v1.2.0)**: io_uring & Zero-Copy I/O — io_uring backend, registered buffers, sendfile(), 1M+ RPS target
+- **Phase 13 (v1.3.0)**: SIMD-Accelerated HTTP Parser — SSE4.2/AVX2/NEON vectorized parsing
+- **Phase 14 (v1.4.0)**: Pure C TLS 1.3 — RFC 8446, AES-NI/ARM-CE, X25519, certificate parsing
+- **Phase 15 (v1.5.0)**: HTTP/2 Protocol Engine — Binary framing, HPACK, stream multiplexing
+- **Phase 16 (v1.6.0)**: AI Inference Serving Primitives — SSE streaming, batch coalescing, tensor protocol
+- **Phase 17 (v1.7.0)**: Lock-Free Concurrency — MPMC queue, work-stealing scheduler, RCU routing
+- **Phase 18 (v1.8.0)**: AI Agent Orchestration — JSON-RPC 2.0, agent routing, tool calling protocol
+- **Phase 19 (v1.9.0)**: Observability & Profiling — Prometheus, OpenTelemetry, structured logging, profiler
+- **Phase 20 (v2.0.0)**: World's Fastest AI-Native C Web Library — TechEmpower benchmarks, release
+
 ## [1.0.0] - 2026-02-22
 
 ### Added
@@ -256,6 +271,8 @@ All planned phases (4-10) are complete with comprehensive documentation and tuto
 
 ## Version History
 
+- **2.0.x**: AI-Native Performance — the world's fastest pure C web library for AI workloads
+- **1.1.x–1.9.x**: Distributive Innovation Phases — memory architecture, io_uring, SIMD, TLS 1.3, HTTP/2, AI inference, lock-free concurrency, agent orchestration, observability
 - **1.0.x**: Production release — all phases complete, tutorials, full documentation
 - **0.9.x**: Performance & Observability — compression, caching, metrics, async WebSocket, benchmarking
 - **0.8.x**: Security & Observability — CSRF, logging, error handler, input validation, health check
