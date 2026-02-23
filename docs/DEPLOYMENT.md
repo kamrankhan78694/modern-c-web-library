@@ -297,3 +297,74 @@ curl -v http://localhost:8080/
 # Load test (requires a load testing tool)
 # wrk -t4 -c100 -d30s http://localhost:8080/healthz
 ```
+
+---
+
+## Planned v2.0 Deployment Enhancements
+
+> The following deployment patterns are planned for v2.0 (Phases 11–20) and are not yet available.
+
+### Native TLS (Phase 14 — v1.4.0)
+
+Once Phase 14 ships, the server will support native TLS 1.3 without a reverse proxy:
+
+```c
+http_server_t *server = http_server_create();
+http_server_enable_tls(server, "/path/to/cert.pem", "/path/to/key.pem");
+http_server_listen(server, 8443);  /* HTTPS on port 8443 */
+```
+
+This eliminates the need for nginx/Caddy TLS termination in simple deployments.
+
+### AI Inference Deployment (Phase 16 — v1.6.0)
+
+Run AI inference endpoints with built-in SSE streaming and batch coalescing:
+
+```bash
+# Run the AI inference demo server
+./docker-run.sh ai-demo
+
+# Or build and run natively
+./build/examples/ai_inference_server 8080
+```
+
+**Deployment pattern for llama.cpp integration:**
+```
+┌──────────────┐    ┌───────────────────┐    ┌──────────────┐
+│ AI Client    │───▶│ Modern C Web Lib  │───▶│ llama.cpp    │
+│ (HTTP/SSE)   │◀───│ (batch coalescing)│◀───│ (inference)  │
+└──────────────┘    └───────────────────┘    └──────────────┘
+```
+
+### Agent Orchestration Deployment (Phase 18 — v1.8.0)
+
+Deploy the agent orchestration server for multi-agent AI systems:
+
+```bash
+./build/examples/agent_orchestration_server 8080
+```
+
+Agents connect via WebSocket and communicate using JSON-RPC 2.0.
+
+### Observability Stack (Phase 19 — v1.9.0)
+
+Integrate with Prometheus and Grafana for production monitoring:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'modern-c-web-lib'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: '/metrics'
+```
+
+### Performance Tuning for v2.0
+
+| Setting | v1.0 Default | v2.0 Recommendation | Notes |
+|---------|-------------|---------------------|-------|
+| Thread count | 16 | CPU cores (auto-detect) | Work-stealing scheduler (Phase 17) |
+| Memory allocator | malloc/free | Arena per connection | Phase 11 arena allocator |
+| I/O backend | epoll/kqueue | io_uring (Linux 5.1+) | Phase 12, auto-fallback |
+| TLS | Reverse proxy | Native TLS 1.3 | Phase 14, optional |
+| HTTP version | HTTP/1.1 | HTTP/2 + HTTP/1.1 | Phase 15, ALPN negotiation |
