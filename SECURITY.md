@@ -81,6 +81,48 @@ We support good‑faith security research. As long as you:
 …we will not initiate legal action against you. Please do not run automated scans or exploits
 against other users’ deployments without permission.
 
+## Planned: Pure C TLS 1.3 Security Model (Phase 14 — v1.4.0)
+
+Phase 14 of the v2.0 roadmap introduces a pure C implementation of TLS 1.3 (RFC 8446). This section
+outlines the planned security architecture and considerations.
+
+### Cipher Suites (Planned)
+
+| Suite | Key Exchange | Encryption | Hash |
+|-------|-------------|------------|------|
+| TLS_AES_128_GCM_SHA256 | X25519 ECDH | AES-128-GCM | SHA-256 |
+| TLS_AES_256_GCM_SHA384 | X25519 ECDH | AES-256-GCM | SHA-384 |
+| TLS_CHACHA20_POLY1305_SHA256 | X25519 ECDH | ChaCha20-Poly1305 | SHA-256 |
+
+### Hardware Acceleration (Planned)
+
+- **x86/x64**: AES-NI instructions (`_mm_aesenc_si128`) for AES-GCM
+- **ARM/ARM64**: ARM Cryptography Extensions (`vaeseq_u8`) for AES-GCM
+- **Fallback**: Portable C implementations for platforms without hardware support
+
+### Security Design Principles
+
+- **Constant-time operations**: All cryptographic comparisons and key derivation use constant-time
+  algorithms to prevent timing side-channel attacks
+- **Key material protection**: TLS private keys protected with `mlock()` (POSIX) or
+  `VirtualLock()` (Windows); zeroed with `explicit_bzero()` / `SecureZeroMemory()` before free
+- **No legacy protocols**: Only TLS 1.3 is supported — no SSLv3, TLS 1.0, TLS 1.1, or TLS 1.2
+  fallback
+- **Certificate validation**: X.509v3 certificate chain validation with ASN.1/DER parsing
+- **SNI support**: Server Name Indication for virtual hosting with multiple certificates
+- **0-RTT resumption**: Session ticket-based resumption with replay protection
+
+### Validation Strategy
+
+- NIST test vectors for all cryptographic primitives (AES-GCM, SHA-256/384, X25519)
+- Interoperability testing against `openssl s_client`, `curl`, and major browsers
+- Fuzz testing of the TLS record layer and handshake state machine
+- Thread Sanitizer (TSAN) validation for concurrent TLS sessions
+
+> **Note**: This security model is planned for Phase 14 (v1.4.0) and is not yet implemented.
+> The current recommendation is to deploy behind a reverse proxy (nginx, Caddy) for TLS
+> termination. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 ## Contact
 
 Primary channel: GitHub Security Advisories (private) at the link above. If you cannot use that
