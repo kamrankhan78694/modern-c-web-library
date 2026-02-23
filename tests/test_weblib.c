@@ -37,6 +37,17 @@ static void _test_free_header_list(void *headers) {
     }
 }
 
+/*
+ * Test-local helper: find the value of a header by lowercase name.
+ * Returns NULL when the header is not present.
+ */
+static const char *_test_find_header(void *headers, const char *name_lower) {
+    for (_test_hdr_node_t *h = (_test_hdr_node_t *)headers; h; h = h->next) {
+        if (strcmp(h->name, name_lower) == 0) return h->value;
+    }
+    return NULL;
+}
+
 /* Dummy handler for testing */
 static void dummy_handler(http_request_t *req, http_response_t *res) {
     (void)req;
@@ -142,8 +153,13 @@ void test_json_bool_create(void) {
     ASSERT(bool_val != NULL);
     ASSERT(bool_val->type == JSON_BOOL);
     ASSERT(bool_val->data.bool_val == true);
-    
     json_value_free(bool_val);
+
+    json_value_t *bool_false = json_bool_create(false);
+    ASSERT(bool_false != NULL);
+    ASSERT(bool_false->type == JSON_BOOL);
+    ASSERT(bool_false->data.bool_val == false);
+    json_value_free(bool_false);
     
     PASS();
 }
@@ -186,6 +202,8 @@ void test_json_stringify(void) {
     ASSERT(strstr(json_str, "\"John\"") != NULL);
     ASSERT(strstr(json_str, "\"age\"") != NULL);
     ASSERT(strstr(json_str, "30") != NULL);
+    ASSERT(strstr(json_str, "\"active\"") != NULL);
+    ASSERT(strstr(json_str, "true") != NULL);
     
     free(json_str);
     json_value_free(obj);
@@ -343,22 +361,20 @@ static void test_timeout_callback(int fd, int events, void *user_data) {
     }
 }
 
-/* Test event loop timeout */
+/* Test event loop timeout registration */
 void test_event_loop_timeout(void) {
     TEST("event_loop_add_timeout");
     
     event_loop_t *loop = event_loop_create();
     ASSERT(loop != NULL);
     
-    timeout_called = false;
+    /* Timer count should start at 0 */
+    ASSERT(event_loop_get_timer_count(loop) == 0);
     
-    /* Add a short timeout (100ms) */
+    /* Add a timeout and verify it was registered */
     int timer_id = event_loop_add_timeout(loop, 100, test_timeout_callback, NULL);
     ASSERT(timer_id > 0);
-    
-    /* Run event loop for a short time */
-    /* Note: We'll stop it after timeout fires */
-    /* For testing, we'll use a simple timer mechanism */
+    ASSERT(event_loop_get_timer_count(loop) == 1);
     
     event_loop_destroy(loop);
     
@@ -385,14 +401,18 @@ void test_event_loop_cancel_timeout(void) {
     PASS();
 }
 
-/* Test WebSocket frame encoding */
+/* Test WebSocket connection open state and fd (was: frame_encode — renamed) */
 void test_websocket_frame_encode(void) {
-    TEST("websocket_frame_encode");
+    TEST("websocket_connection_open_state");
     
-    /* Create a WebSocket connection (fd doesn't matter for this test) */
     websocket_connection_t *conn = websocket_connection_create(999);
     ASSERT(conn != NULL);
     ASSERT(websocket_is_open(conn));
+    ASSERT(websocket_get_fd(conn) == 999);
+    
+    /* After close the connection should no longer be open */
+    websocket_close(conn, WS_CLOSE_NORMAL, "done");
+    ASSERT(websocket_is_open(conn) == false);
     
     websocket_connection_destroy(conn);
     
@@ -607,27 +627,26 @@ void test_json_object_with_array(void) {
 
 /* ===== Phase 5 Tests ===== */
 
-/* Test body parser - URL-encoded form data */
+/* Test body parser - graceful fallback without Content-Type header.
+ * Without Content-Type, the parser succeeds but produces no parsed fields. */
 void test_body_parser_urlencoded(void) {
-    TEST("body_parser (url-encoded)");
+    TEST("body_parser (no Content-Type → no fields)");
 
-    /* Create a request with URL-encoded body */
+    /* Create a request with URL-encoded body but NO Content-Type header */
     http_request_t req = {0};
     req.method = HTTP_POST;
     req.path = strdup("/form");
     req.body = strdup("username=john&password=secret123&email=john%40example.com");
     req.body_length = strlen(req.body);
 
-    /* We need headers for Content-Type. Since the internal header API is used,
-     * we'll test via http_request_parse_body which calls get_header.
-     * For unit testing without full server infrastructure, we'll test the
-     * standalone form field access after manual parse. */
-
-    /* The body parser auto-creates parser data, so we just test that parse
-     * doesn't crash on a request without headers (it should return gracefully) */
     int result = http_request_parse_body(&req);
     /* Without Content-Type header, parse should succeed but find nothing */
     ASSERT(result == 0);
+
+    /* Verify that no form fields were parsed */
+    ASSERT(http_request_get_form_field(&req, "username") == NULL);
+    ASSERT(http_request_get_form_field(&req, "password") == NULL);
+    ASSERT(http_request_get_form_field(&req, "email") == NULL);
 
     free(req.path);
     free(req.body);
@@ -764,7 +783,17 @@ void test_cookie_set(void) {
         .same_site = "Lax"
     };
     http_response_set_cookie(&res, "session", "abc123", &opts);
-    /* The Set-Cookie header should be set (verified by the fact it doesn't crash) */
+
+    /* Verify the Set-Cookie header was actually set with correct content */
+    const char *cookie_hdr = _test_find_header(res.headers, "set-cookie");
+    ASSERT(cookie_hdr != NULL);
+    ASSERT(strstr(cookie_hdr, "session=abc123") != NULL);
+    ASSERT(strstr(cookie_hdr, "Domain=example.com") != NULL);
+    ASSERT(strstr(cookie_hdr, "Path=/api") != NULL);
+    ASSERT(strstr(cookie_hdr, "Max-Age=3600") != NULL);
+    ASSERT(strstr(cookie_hdr, "Secure") != NULL);
+    ASSERT(strstr(cookie_hdr, "HttpOnly") != NULL);
+    ASSERT(strstr(cookie_hdr, "SameSite=Lax") != NULL);
 
     _test_free_header_list(res.headers);
 
@@ -784,7 +813,12 @@ void test_cookie_delete(void) {
 
     /* Delete a cookie */
     http_response_delete_cookie(&res, "session");
-    /* Should set Set-Cookie: session=; Path=/; Max-Age=0 */
+
+    /* Verify Set-Cookie header contains deletion markers */
+    const char *cookie_hdr = _test_find_header(res.headers, "set-cookie");
+    ASSERT(cookie_hdr != NULL);
+    ASSERT(strstr(cookie_hdr, "session=") != NULL);
+    ASSERT(strstr(cookie_hdr, "Max-Age=0") != NULL);
 
     _test_free_header_list(res.headers);
 
@@ -1207,7 +1241,24 @@ void test_session_cleanup(void) {
 
     ASSERT(session_get(store, sid) != NULL);
 
+    /* Create a session with very short max_age=1 */
+    char *sid_short = session_create(store, 1);
+    ASSERT(sid_short != NULL);
+    ASSERT(session_get(store, sid_short) != NULL);
+
+    /* Wait for the short session to expire (max_age=1s, so 2s is sufficient) */
+    sleep(2);
+
+    /* Cleanup should now remove the expired session */
+    cleaned = session_cleanup_expired(store);
+    ASSERT(cleaned == 1);
+
+    /* Expired session should be gone, permanent one should remain */
+    ASSERT(session_get(store, sid_short) == NULL);
+    ASSERT(session_get(store, sid) != NULL);
+
     free(sid);
+    free(sid_short);
     session_store_destroy(store);
 
     PASS();
@@ -1242,8 +1293,22 @@ void test_session_cookie_set(void) {
     /* Set a session cookie */
     session_set_cookie(&res, "abc123", 3600, "/api");
 
-    /* Delete session cookie */
+    /* Verify the Set-Cookie header contains the session ID and path */
+    const char *cookie_hdr = _test_find_header(res.headers, "set-cookie");
+    ASSERT(cookie_hdr != NULL);
+    ASSERT(strstr(cookie_hdr, "abc123") != NULL);
+    ASSERT(strstr(cookie_hdr, "HttpOnly") != NULL);
+
+    _test_free_header_list(res.headers);
+    res.headers = NULL;
+
+    /* Delete session cookie (negative max_age) */
     session_set_cookie(&res, "abc123", -1, "/");
+
+    /* Verify the deletion cookie has Max-Age=0 */
+    cookie_hdr = _test_find_header(res.headers, "set-cookie");
+    ASSERT(cookie_hdr != NULL);
+    ASSERT(strstr(cookie_hdr, "Max-Age=0") != NULL);
 
     _test_free_header_list(res.headers);
 
@@ -2047,6 +2112,19 @@ void test_log_middleware_invoke(void) {
     bool cont = fn(&req, &res, NULL);
     ASSERT(cont == true);
 
+    /* Verify something was actually written to the log sink */
+    fflush(sink);
+    long written = ftell(sink);
+    ASSERT(written > 0);
+
+    /* Read back and verify it contains the request info */
+    rewind(sink);
+    char log_buf[512];
+    size_t nread = fread(log_buf, 1, sizeof(log_buf) - 1, sink);
+    log_buf[nread] = '\0';
+    ASSERT(nread > 0);
+    ASSERT(strstr(log_buf, "/test") != NULL || strstr(log_buf, "GET") != NULL);
+
     /* NULL inputs should not crash */
     cont = fn(NULL, NULL, NULL);
     ASSERT(cont == true);
@@ -2500,6 +2578,8 @@ void test_integration_post_body(void) {
     ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
     ASSERT(n > 0);
     ASSERT(strstr(buf, "200") != NULL);
+    /* Verify the body was actually echoed back */
+    ASSERT(strstr(buf, "hello world") != NULL);
 
     http_server_stop(server);
     http_server_destroy(server);
@@ -2860,10 +2940,23 @@ void test_metrics_record_status(void) {
 
     /* Record some statuses */
     metrics_record_status(200);
-    metrics_record_status(201);
-    metrics_record_status(301);
+    metrics_record_status(200);
     metrics_record_status(404);
     metrics_record_status(500);
+
+    /* Verify recorded data is reflected via the metrics handler */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/metrics";
+    http_response_t res = {0};
+    metrics_handler(&req, &res);
+
+    ASSERT(res.body != NULL);
+    ASSERT(res.body_length > 0);
+    ASSERT(strstr(res.body, "\"total_requests\"") != NULL);
+
+    free(res.body);
+    _test_free_header_list(res.headers);
 
     /* NULL safety (no crash when not initialized) */
     metrics_middleware_destroy();
@@ -2981,25 +3074,44 @@ void test_compression_should_compress(void) {
 }
 
 void test_gzip_compress_valid(void) {
-    TEST("gzip (compress produces valid output)");
+    TEST("gzip (compress via send_compressed)");
 
-    /* Check that gzip_compress produces output starting with gzip magic bytes */
+    /* Build a body long enough to exceed the compression threshold (256 bytes) */
     const char *input = "Hello World! This is a test of compression. "
                         "It needs to be long enough to be worth compressing. "
                         "Adding more repetitive text to ensure good compression ratio. "
                         "Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello "
                         "World World World World World World World World World World.";
     size_t input_len = strlen(input);
+    /* Body must exceed the 256-byte minimum compression threshold */
+    ASSERT(input_len >= 256);
 
-    /* Use the internal gzip_compress via the extern declaration */
-    /* Since gzip_compress is not in weblib.h, we test indirectly
-     * through http_response_send_compressed behavior.
-     * But we CAN verify CRC32 is correct. */
+    /* Use the public http_response_send_compressed API to exercise gzip */
+    http_response_t res = {0};
+    http_response_send_compressed(&res, HTTP_OK, input, input_len,
+                                  "text/plain", "gzip");
 
-    /* The CRC32 of this string should be non-zero */
-    uint32_t crc = crc32_compute((const uint8_t *)input, input_len);
-    ASSERT(crc != 0);
-    (void)input_len;
+    /* Response must have a body */
+    ASSERT(res.body != NULL);
+    ASSERT(res.body_length > 0);
+
+    /* If compression kicked in the Content-Encoding header should be "gzip"
+     * and the body should start with the gzip magic bytes 0x1f 0x8b */
+    const char *ce = _test_find_header(res.headers, "content-encoding");
+    if (ce && strcmp(ce, "gzip") == 0) {
+        ASSERT(res.body_length >= 2);
+        ASSERT((uint8_t)res.body[0] == 0x1f);
+        ASSERT((uint8_t)res.body[1] == 0x8b);
+        /* Compressed size should be smaller than original for this repetitive input */
+        ASSERT(res.body_length < input_len);
+    } else {
+        /* Fallback to uncompressed — body should match original */
+        ASSERT(res.body_length == input_len);
+        ASSERT(memcmp(res.body, input, input_len) == 0);
+    }
+
+    free(res.body);
+    _test_free_header_list(res.headers);
 
     PASS();
 }
