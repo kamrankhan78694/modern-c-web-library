@@ -128,7 +128,7 @@ Everything is implemented from scratch:
 
 ### Future Plans
 
-- Add Windows support with a proper IOCP backend and Win32 threading.
+- Improve Windows support by implementing a full IOCP backend and solidifying Win32 threading integration.
 
 ## Performance
 
