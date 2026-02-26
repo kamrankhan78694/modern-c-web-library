@@ -126,6 +126,10 @@ Everything is implemented from scratch:
 | **FreeBSD** | pthread | kqueue | ✅ Full support |
 | **Windows** | Win32 threads | IOCP (planned) | ⚠️ Basic support |
 
+### Future Plans
+
+- Add Windows support with a proper IOCP backend and Win32 threading.
+
 ## Performance
 
 Designed for high performance:
