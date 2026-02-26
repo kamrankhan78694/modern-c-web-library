@@ -1,5 +1,7 @@
 # Deployment Guide
 
+**Modern C Web Library v1.0.0** — Production Deployment
+
 This document describes how to build, package, and deploy applications built with the Modern C Web Library.
 
 ## Prerequisites

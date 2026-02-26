@@ -1,5 +1,7 @@
 # WebSocket Support Guide
 
+**Modern C Web Library v1.0.0** — RFC 6455 Compliant Implementation
+
 The Modern C Web Library provides a complete, RFC 6455-compliant WebSocket implementation written entirely in pure C with no external dependencies.
 
 ## Features

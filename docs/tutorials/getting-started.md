@@ -1,5 +1,7 @@
 # Getting Started with Modern C Web Library
 
+**Version 1.0.0** — Production Ready
+
 Welcome to the Modern C Web Library (MCWL)! This tutorial will guide you through building your first web server using this powerful, zero-dependency C framework.
 
 ## Introduction

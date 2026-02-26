@@ -1,8 +1,14 @@
 # Modern C Web Library
 
-Clone from : https://github.com/kamrankhan78694/modern-c-web-library.git
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18793559.svg)](https://doi.org/10.5281/zenodo.18793559)
+[![Release](https://img.shields.io/github/v/release/kamrankhan78694/modern-c-web-library)](https://github.com/kamrankhan78694/modern-c-web-library/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+> **Version 1.0.0** — Production-ready pure C web framework with zero external dependencies
 
 A modern AI-assisted C library for building efficient, scalable, and feature-rich web backends with support for routing, async I/O, middleware, and JSON handling.
+
+**Repository:** https://github.com/kamrankhan78694/modern-c-web-library
 
 ## // Philosophy: Life, Code, Evolution
 
@@ -739,6 +745,30 @@ For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMEN
 ## Author
 
 Kamran Khan
+
+## Citation
+
+If you use this library in your research or project, please cite it:
+
+**BibTeX:**
+```bibtex
+@software{khan2026modern,
+  author       = {Kamran Khan},
+  title        = {Modern C Web Library: Production-Ready Pure C Web Framework},
+  year         = {2026},
+  publisher    = {Zenodo},
+  version      = {1.0.0},
+  doi          = {10.5281/zenodo.18793559},
+  url          = {https://doi.org/10.5281/zenodo.18793559}
+}
+```
+
+**APA:**
+```
+Khan, K. (2026). Modern C Web Library: Production-Ready Pure C Web Framework (Version 1.0.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.18793559
+```
+
+**DOI:** https://doi.org/10.5281/zenodo.18793559
 
 ## Acknowledgments
 

@@ -1,5 +1,7 @@
 # Building a REST API with Modern C Web Library
 
+**Version 1.0.0** — Production Ready
+
 ## Introduction
 
 In this tutorial, we'll build a complete REST API for managing a collection of tasks. Our API will support full CRUD (Create, Read, Update, Delete) operations with proper HTTP methods, JSON request/response handling, and production-ready middleware.
