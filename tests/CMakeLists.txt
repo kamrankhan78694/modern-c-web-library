@@ -2,6 +2,7 @@
 
 # Test executable
 add_executable(test_weblib test_weblib.c)
+target_include_directories(test_weblib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_link_libraries(test_weblib weblib ${PLATFORM_LIBS})
 
 # Add test to CTest
