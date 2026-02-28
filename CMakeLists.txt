@@ -25,9 +25,6 @@ elseif(APPLE)
     set(PLATFORM_LIBS pthread)
 endif()
 
-# Include directories
-include_directories(${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
-
 # Library source files
 set(WEBLIB_SOURCES
     src/http_server.c
@@ -59,10 +56,20 @@ set(WEBLIB_SOURCES
 
 # Create static library
 add_library(weblib STATIC ${WEBLIB_SOURCES})
+target_include_directories(weblib
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<INSTALL_INTERFACE:include>
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 target_link_libraries(weblib ${PLATFORM_LIBS})
 
 # Create shared library (optional)
 add_library(weblib_shared SHARED ${WEBLIB_SOURCES})
+target_include_directories(weblib_shared
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<INSTALL_INTERFACE:include>
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 target_link_libraries(weblib_shared ${PLATFORM_LIBS})
 
 # Build examples
