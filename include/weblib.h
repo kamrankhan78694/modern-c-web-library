@@ -1619,6 +1619,74 @@ int benchmark_run(uint16_t port, const char *path,
  */
 void benchmark_print(FILE *fp, const benchmark_stats_t *stats);
 
+/* ===== Environment Configuration API ===== */
+
+/**
+ * Well-known environment variable names (all prefixed WEBLIB_).
+ *
+ * WEBLIB_PORT            – server listen port (1-65535)
+ * WEBLIB_READ_TIMEOUT    – socket read timeout in seconds (>= 0)
+ * WEBLIB_WRITE_TIMEOUT   – socket write timeout in seconds (>= 0)
+ * WEBLIB_THREAD_COUNT    – worker thread pool size (1-256)
+ * WEBLIB_MAX_CONNECTIONS  – max concurrent connections (>= 1)
+ * WEBLIB_ASYNC_MODE      – enable async I/O mode (true/false/1/0/yes/no/on/off)
+ */
+
+/**
+ * Get a string environment variable with a fallback default.
+ * @param key           Environment variable name
+ * @param default_value Value returned when key is unset or empty
+ * @return The env value or default_value (never NULL when default_value != NULL)
+ */
+const char *env_config_get(const char *key, const char *default_value);
+
+/**
+ * Get an integer environment variable with a fallback default.
+ * Returns default_value when the key is unset, empty, or not a valid integer.
+ * @param key           Environment variable name
+ * @param default_value Value returned on missing/invalid input
+ * @return Parsed integer or default_value
+ */
+int env_config_get_int(const char *key, int default_value);
+
+/**
+ * Get a boolean environment variable with a fallback default.
+ * Truthy values: "1", "true", "yes", "on" (case-insensitive).
+ * Falsy  values: "0", "false", "no", "off" (case-insensitive).
+ * @param key           Environment variable name
+ * @param default_value Value returned on missing/unrecognised input
+ * @return Parsed boolean or default_value
+ */
+bool env_config_get_bool(const char *key, bool default_value);
+
+/**
+ * Get a port number (uint16_t) environment variable with a fallback default.
+ * Returns default_value when the key is unset, empty, or outside 0-65535.
+ * @param key           Environment variable name
+ * @param default_value Value returned on missing/invalid input
+ * @return Parsed port or default_value
+ */
+uint16_t env_config_get_port(const char *key, uint16_t default_value);
+
+/**
+ * Require an environment variable – returns NULL if unset or empty.
+ * Callers can use a NULL return to abort startup with a clear error.
+ * @param key Environment variable name
+ * @return The value or NULL
+ */
+const char *env_config_require(const char *key);
+
+/**
+ * Apply well-known WEBLIB_* environment variables to a server instance.
+ * Reads WEBLIB_READ_TIMEOUT, WEBLIB_WRITE_TIMEOUT, WEBLIB_THREAD_COUNT,
+ * WEBLIB_MAX_CONNECTIONS, and WEBLIB_ASYNC_MODE from the environment
+ * and calls the corresponding http_server_set_* functions.
+ * Variables that are unset or empty are silently skipped.
+ * @param server Server instance
+ * @return 0 on success, -1 if server is NULL
+ */
+int http_server_apply_env(http_server_t *server);
+
 #ifdef __cplusplus
 }
 #endif
