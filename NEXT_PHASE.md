@@ -32,8 +32,9 @@
 | Phase 8 | v0.8.0 | ✅ Complete | CSRF middleware, logging, error handler, input validation, health check |
 | Phase 9 | v0.9.0 | ✅ Complete | Response compression, caching layer, metrics middleware, async WebSocket, benchmarking suite |
 | Phase 10 | v1.0.0 | ✅ Complete | REST API example, tutorials, release engineering |
+| Phase 10.1 | v1.0.1 | ✅ Complete | Security utilities, security headers middleware, secure secret handling |
 
-**Current state**: 129/129 unit tests passing · zero compiler warnings · 25 source modules · 5 example servers
+**Current state**: 146/146 unit tests passing · zero compiler warnings · 28 source modules · 5 example servers
 
 ---
 
@@ -254,6 +255,78 @@ Phase 10 (v1.0.0): Release Readiness
 | 10.4.1–10.4.2 | BSD testing + CI matrix expansion | 2d |
 | 10.5.1–10.5.3 | Health check endpoint + release automation | 2d |
 
+### Phase 11 — Advanced Security Hardening — v1.1.0 (6 weeks)
+
+> **Vision**: No one should ever worry about compromising their keys.
+> Phase 11 closes every remaining security gap identified in the threat model,
+> bringing the library to state-of-the-art security without a single external dependency.
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W18** | Crypto Primitives (Foundation) | `src/crypto/sha256.c` (NIST FIPS 180-4 test vectors); `src/crypto/hmac_sha256.c` (RFC 2104); `src/crypto/aes_gcm.c` (NIST SP 800-38D, 128+256-bit keys) | None — standalone modules |
+| **W19** | Key Derivation & Password Hashing | `src/crypto/pbkdf2.c` (RFC 2898, HMAC-SHA256, configurable iterations); `src/crypto/hkdf.c` (RFC 5869 extract+expand); `password_hash_create()` / `password_hash_verify()` API; automatic salt via `secure_random_bytes()` | W18 (SHA-256, HMAC) |
+| **W20** | TLS Record Layer & Handshake (Part 1) | `src/tls/tls_record.c` (TLS 1.2 record framing); `src/tls/tls_handshake.c` (ClientHello/ServerHello state machine); PEM certificate parser; private key loader with `mlock()` + `secure_zero()` | W18 (AES-GCM, SHA-256) |
+| **W21** | TLS Handshake (Part 2) & Server Integration | Complete handshake; `http_server_enable_tls(server, cert, key)` API; HTTPS example; `curl --tlsv1.2 https://localhost:8443/` validation; TLS key material wiped on `http_server_destroy()` | W20 |
+| **W22** | Request ID & IP Access Control Middleware | `src/middleware_request_id.c` (UUID v4 / hex, `X-Request-Id` header, logging integration); `src/middleware_ip_access.c` (allowlist/denylist with CIDR support) | None |
+| **W23** | Security Audit Tooling & Hardening | Fuzz testing harness for HTTP parser (`tests/fuzz/`); ASan/MSan CI integration; per-route body size limits; `Content-Length` enforcement before buffering; full regression pass | All prior phases |
+
+#### Phase 11 — Atomic Task Breakdown
+
+##### 11.1 Crypto Primitives
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 11.1.1 | SHA-256 implementation | `src/crypto/sha256.c` | NIST FIPS 180-4 short/long/Monte Carlo test vectors pass | 2d |
+| 11.1.2 | HMAC-SHA256 implementation | `src/crypto/hmac_sha256.c` | RFC 4231 test vectors pass; constant-time via `secure_compare()` | 1d |
+| 11.1.3 | AES-128/256-GCM implementation | `src/crypto/aes_gcm.c` | NIST SP 800-38D test vectors pass (encrypt + decrypt + auth tag) | 3d |
+| 11.1.4 | Unit tests + CI gate | `tests/test_crypto.c` | All NIST vectors pass; Valgrind clean; key material zeroed after use | 1d |
+
+##### 11.2 Password Hashing & Key Derivation
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 11.2.1 | PBKDF2-HMAC-SHA256 | `src/crypto/pbkdf2.c` | RFC 6070 test vectors pass; configurable iteration count (default 600,000) | 2d |
+| 11.2.2 | HKDF (extract + expand) | `src/crypto/hkdf.c` | RFC 5869 Appendix A test vectors pass | 1d |
+| 11.2.3 | `password_hash_create/verify` API | `src/password.c`, `include/weblib.h` | Salt auto-generated; timing-safe verify; hash format includes iteration count | 2d |
+| 11.2.4 | Unit tests | `tests/test_weblib.c` | Round-trip hash/verify; wrong password fails; different salts produce different hashes | 1d |
+
+##### 11.3 TLS 1.2 Transport Encryption
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 11.3.1 | TLS record layer (framing) | `src/tls/tls_record.c` | Parse and serialize TLS records; handle fragmentation | 2d |
+| 11.3.2 | TLS handshake state machine | `src/tls/tls_handshake.c` | ClientHello → ServerHello → Certificate → KeyExchange → Finished | 3d |
+| 11.3.3 | PEM parser + key loader | `src/tls/pem_parser.c` | Load cert chain + private key from PEM files; `mlock()` key pages | 2d |
+| 11.3.4 | Server API integration | `src/http_server.c`, `include/weblib.h` | `http_server_enable_tls()` API; private key zeroed on destroy | 2d |
+| 11.3.5 | HTTPS example + tests | `examples/https_server.c`, `tests/test_tls.c` | `curl --tlsv1.2` returns 200; browser green lock | 2d |
+
+##### 11.4 Request ID & IP Access Control
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 11.4.1 | Request ID middleware | `src/middleware_request_id.c` | Generates unique ID; sets `X-Request-Id` header; propagates if present | 1d |
+| 11.4.2 | IP allowlist/denylist middleware | `src/middleware_ip_access.c` | Configurable lists; CIDR support; per-route or global | 2d |
+| 11.4.3 | Unit tests | `tests/test_weblib.c` | Request ID unique across requests; blocked IPs get 403 | 1d |
+
+##### 11.5 Security Audit Tooling
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 11.5.1 | HTTP parser fuzz harness | `tests/fuzz/fuzz_http_parser.c` | AFL/libFuzzer compatible; runs 1M iterations without crash | 2d |
+| 11.5.2 | ASan/MSan CI integration | `.github/workflows/ci.yml` | Sanitizer builds run on every push; zero errors | 1d |
+| 11.5.3 | Per-route body size limits | `src/http_server.c`, `include/weblib.h` | `router_set_max_body(route, bytes)` API; reject before buffering | 1d |
+
+#### Phase 11 — Success Criteria
+
+| Module | Validation |
+|--------|-----------|
+| SHA-256 | NIST FIPS 180-4 test vectors pass (short msg, long msg, Monte Carlo) |
+| HMAC-SHA256 | RFC 4231 test vectors pass |
+| AES-GCM | NIST SP 800-38D test vectors pass (128+256-bit keys) |
+| PBKDF2 | RFC 6070 test vectors pass; 600K iterations in < 1s |
+| HKDF | RFC 5869 Appendix A test vectors pass |
+| Password hashing | Round-trip create/verify; wrong password → false; salts differ |
+| TLS 1.2 | `curl --tlsv1.2 https://localhost:8443/` → 200; browser connects |
+| TLS key safety | Private key in `mlock()`'d pages; `secure_zero()` on destroy; never logged |
+| Request ID | Unique per request; `X-Request-Id` in response; round-trip propagation |
+| IP access control | Allowlist passes; denylist blocks (403); CIDR ranges work |
+| Fuzz testing | 1M iterations, zero crashes; zero ASan/MSan errors |
+
 ---
 
 ## 9. Parallel Build Strategy
@@ -435,12 +508,13 @@ Each phase release MUST pass:
 |---------|------|---------|
 | 1.0 | 2025-01-12 | Initial roadmap (Phases 4–6) |
 | 2.0 | 2026-02-19 | Complete rewrite for Phases 7–10: first-principles design, adversarial review, atomic task breakdown, security threat model |
+| 3.0 | 2026-03-02 | Phase 10.1 delivered (security utilities, headers middleware, secure secrets); Phase 11 planned (TLS, password hashing, HKDF, fuzz testing) |
 
 ---
 
 **Maintained by**: MCWL Core Team
-**Last Updated**: 2026-02-22
-**Status**: Complete — v1.0.0 released
+**Last Updated**: 2026-03-02
+**Status**: Phase 11 planned — advanced security hardening
 **License**: MIT (see LICENSE file)
 
 For questions or discussions about this roadmap, please open an issue on GitHub or contact the maintainers.
