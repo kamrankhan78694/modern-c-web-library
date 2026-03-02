@@ -161,10 +161,9 @@ char *env_config_redact(const char *value) {
 
     /* Short values: fully masked */
     if (len <= 4) {
-        char *out = malloc(4);
+        char *out = malloc(5);
         if (!out) return NULL;
-        memcpy(out, "****", 4);
-        out[3] = '\0';
+        memcpy(out, "****", 5);  /* includes NUL terminator */
         return out;
     }
 

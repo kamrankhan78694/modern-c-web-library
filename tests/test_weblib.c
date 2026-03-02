@@ -3828,24 +3828,16 @@ void test_env_secure_value_wipe(void) {
     env_secure_value_t *sv = env_config_get_secure("WEBLIB_TEST_WIPE");
     ASSERT(sv != NULL);
 
-    /* Grab pointer and length before free */
     const char *ptr = env_secure_value_get(sv);
-    size_t len = env_secure_value_len(sv);
     ASSERT(ptr != NULL);
-    ASSERT(len == 11);
+    ASSERT(env_secure_value_len(sv) == 11);
+    ASSERT(strcmp(ptr, "SUPERSECRET") == 0);
 
-    /* Copy the pointer value (raw address) to inspect after free.
-     * NOTE: reading freed memory is technically UB, but this is a best-effort
-     * validation that _secure_wipe ran.  Many allocators leave the block
-     * accessible for a while.  The real guarantee is the volatile-pointer
-     * wipe in env_secure_value_free(). */
-    char snapshot[12];
-    memcpy(snapshot, ptr, len);
-    ASSERT(memcmp(snapshot, "SUPERSECRET", 11) == 0);
-
+    /* env_secure_value_free() calls _secure_wipe() which uses a volatile
+     * pointer loop (compiler-barrier) to zero the buffer before freeing.
+     * We cannot safely verify post-free memory, but the wipe mechanism
+     * is validated by code inspection and compiler-barrier guarantees. */
     env_secure_value_free(sv);
-    /* After free, we cannot safely dereference ptr, but the wipe function
-     * was called — verified by code review / compiler-barrier technique. */
 
     unsetenv("WEBLIB_TEST_WIPE");
     PASS();
@@ -3863,12 +3855,12 @@ void test_env_config_redact(void) {
     /* Short value (≤4 chars) fully masked */
     char *r1 = env_config_redact("abc");
     ASSERT(r1 != NULL);
-    ASSERT(strcmp(r1, "***") == 0);
+    ASSERT(strcmp(r1, "****") == 0);
     free(r1);
 
     char *r1b = env_config_redact("abcd");
     ASSERT(r1b != NULL);
-    ASSERT(strcmp(r1b, "***") == 0);
+    ASSERT(strcmp(r1b, "****") == 0);
     free(r1b);
 
     /* Longer value: first + asterisks + last */
