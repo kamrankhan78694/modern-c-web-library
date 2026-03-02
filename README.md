@@ -1,5 +1,7 @@
 # Modern C Web Library
 
+![Modern C Web Library Banner](docs/banner.png)
+
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18793559.svg)](https://doi.org/10.5281/zenodo.18793559)
 [![Release](https://img.shields.io/github/v/release/kamrankhan78694/modern-c-web-library)](https://github.com/kamrankhan78694/modern-c-web-library/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
