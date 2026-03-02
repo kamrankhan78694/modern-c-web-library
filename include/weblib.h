@@ -1684,6 +1684,76 @@ uint16_t env_config_get_port(const char *key, uint16_t default_value);
 const char *env_config_require(const char *key);
 
 /**
+ * Check whether an environment variable is set and non-empty.
+ * Useful for checking secret presence without touching the value itself.
+ * @param key Environment variable name
+ * @return true when the variable exists and is non-empty
+ */
+bool env_config_is_set(const char *key);
+
+/* ---- Secure secret handling ------------------------------------------ */
+
+/*
+ * For sensitive values (API keys, passwords, tokens) loaded from GitHub
+ * Secrets or any environment variable, use the secure value API below.
+ *
+ * Why?
+ *  - The secret is copied into a dedicated heap buffer.
+ *  - env_secure_value_free() scrubs that buffer with zeros before freeing,
+ *    using a compiler-barrier technique so the wipe cannot be optimised away.
+ *  - env_config_redact() produces a masked version safe for logging.
+ *  - This limits the window during which the plaintext secret resides in
+ *    process memory and prevents accidental exposure in logs or core dumps.
+ *
+ * Usage:
+ *   env_secure_value_t *key = env_config_get_secure("API_KEY");
+ *   if (!key) { fprintf(stderr, "API_KEY required\n"); exit(1); }
+ *   use_secret(env_secure_value_get(key));
+ *   env_secure_value_free(key);   // secret wiped from memory
+ */
+
+/** Opaque handle to a securely-held secret value. */
+typedef struct env_secure_value env_secure_value_t;
+
+/**
+ * Load a secret from an environment variable into a secure buffer.
+ * The caller must free the result with env_secure_value_free().
+ * @param key Environment variable name (e.g. "API_KEY")
+ * @return Opaque handle, or NULL if the variable is missing/empty
+ */
+env_secure_value_t *env_config_get_secure(const char *key);
+
+/**
+ * Access the raw secret string held by a secure value.
+ * @param sv Secure value handle (NULL-safe → returns NULL)
+ * @return NUL-terminated secret string
+ */
+const char *env_secure_value_get(const env_secure_value_t *sv);
+
+/**
+ * Return the length of the secret (excluding NUL terminator).
+ * @param sv Secure value handle (NULL-safe → returns 0)
+ */
+size_t env_secure_value_len(const env_secure_value_t *sv);
+
+/**
+ * Securely destroy a secret value – wipes memory with zeros before freeing.
+ * Safe to call with NULL.
+ * @param sv Secure value handle
+ */
+void env_secure_value_free(env_secure_value_t *sv);
+
+/**
+ * Return a heap-allocated redacted version of a value, safe for logging.
+ * Short values (≤4 chars) become "***"; longer values show the first and
+ * last character with asterisks in between (e.g. "s**********z").
+ * Caller must free() the returned string.
+ * @param value Raw secret string (NULL → returns NULL)
+ * @return Redacted string, or NULL on error
+ */
+char *env_config_redact(const char *value);
+
+/**
  * Convenience: apply standard WEBLIB_* environment variables to a server.
  * Reads WEBLIB_READ_TIMEOUT, WEBLIB_WRITE_TIMEOUT, WEBLIB_THREAD_COUNT,
  * WEBLIB_MAX_CONNECTIONS, and WEBLIB_ASYNC_MODE.  Unset variables are

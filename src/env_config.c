@@ -88,6 +88,97 @@ const char *env_config_require(const char *key) {
     return val;
 }
 
+bool env_config_is_set(const char *key) {
+    if (!key) return false;
+    const char *val = getenv(key);
+    return val != NULL && val[0] != '\0';
+}
+
+/* ---- secure value API ------------------------------------------------ */
+
+/**
+ * Overwrite memory with zeros in a way the compiler cannot optimise away.
+ * Uses C11 memset_s when available, otherwise a volatile-pointer trick.
+ */
+static void _secure_wipe(void *ptr, size_t len) {
+    if (!ptr || len == 0) return;
+#if defined(__STDC_LIB_EXT1__) || defined(_WIN32)
+    memset_s(ptr, len, 0, len);
+#else
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (len--) *p++ = 0;
+#endif
+}
+
+struct env_secure_value {
+    char  *data;   /* heap-allocated copy of the secret */
+    size_t len;    /* strlen of data (excludes NUL)     */
+};
+
+env_secure_value_t *env_config_get_secure(const char *key) {
+    if (!key) return NULL;
+    const char *raw = getenv(key);
+    if (!raw || raw[0] == '\0') return NULL;
+
+    size_t len = strlen(raw);
+    env_secure_value_t *sv = malloc(sizeof(*sv));
+    if (!sv) return NULL;
+
+    sv->data = malloc(len + 1);
+    if (!sv->data) {
+        free(sv);
+        return NULL;
+    }
+    memcpy(sv->data, raw, len + 1);
+    sv->len = len;
+    return sv;
+}
+
+const char *env_secure_value_get(const env_secure_value_t *sv) {
+    if (!sv) return NULL;
+    return sv->data;
+}
+
+size_t env_secure_value_len(const env_secure_value_t *sv) {
+    if (!sv) return 0;
+    return sv->len;
+}
+
+void env_secure_value_free(env_secure_value_t *sv) {
+    if (!sv) return;
+    if (sv->data) {
+        _secure_wipe(sv->data, sv->len);
+        free(sv->data);
+    }
+    _secure_wipe(sv, sizeof(*sv));
+    free(sv);
+}
+
+char *env_config_redact(const char *value) {
+    if (!value) return NULL;
+    size_t len = strlen(value);
+    if (len == 0) return NULL;
+
+    /* Short values: fully masked */
+    if (len <= 4) {
+        char *out = malloc(4);
+        if (!out) return NULL;
+        memcpy(out, "****", 4);
+        out[3] = '\0';
+        return out;
+    }
+
+    /* Longer values: show first char + mask + last char */
+    /* e.g. "sk-abc123xyz" → "s**********z" */
+    char *out = malloc(len + 1);
+    if (!out) return NULL;
+    out[0] = value[0];
+    memset(out + 1, '*', len - 2);
+    out[len - 1] = value[len - 1];
+    out[len] = '\0';
+    return out;
+}
+
 /* ---- server integration ---------------------------------------------- */
 
 int http_server_apply_env(http_server_t *server) {
