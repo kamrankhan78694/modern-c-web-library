@@ -52,6 +52,7 @@ set(WEBLIB_SOURCES
     src/middleware_metrics.c
     src/compression.c
     src/benchmark.c
+    src/env_config.c
 )
 
 # Create static library

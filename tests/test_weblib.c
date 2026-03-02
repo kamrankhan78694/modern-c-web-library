@@ -3558,6 +3558,205 @@ void test_kamran_multiple_servers(void) {
     PASS();
 }
 
+/* ===== Environment Configuration tests ===== */
+
+void test_env_config_get_string(void) {
+    TEST("env_config_get (string accessor)");
+
+    /* Unset variable returns default */
+    unsetenv("_TEST_STR");
+    ASSERT(strcmp(env_config_get("_TEST_STR", "fallback"), "fallback") == 0);
+
+    /* Set variable returns its value */
+    setenv("_TEST_STR", "hello", 1);
+    ASSERT(strcmp(env_config_get("_TEST_STR", "fallback"), "hello") == 0);
+
+    /* Empty string treated as unset → returns default */
+    setenv("_TEST_STR", "", 1);
+    ASSERT(strcmp(env_config_get("_TEST_STR", "fallback"), "fallback") == 0);
+
+    /* NULL key returns default */
+    ASSERT(strcmp(env_config_get(NULL, "safe"), "safe") == 0);
+
+    unsetenv("_TEST_STR");
+    PASS();
+}
+
+void test_env_config_get_int(void) {
+    TEST("env_config_get_int (integer accessor)");
+
+    /* Valid integer */
+    setenv("_TEST_INT", "42", 1);
+    ASSERT(env_config_get_int("_TEST_INT", -1) == 42);
+
+    /* Negative integer */
+    setenv("_TEST_INT", "-7", 1);
+    ASSERT(env_config_get_int("_TEST_INT", 0) == -7);
+
+    /* Zero */
+    setenv("_TEST_INT", "0", 1);
+    ASSERT(env_config_get_int("_TEST_INT", 99) == 0);
+
+    /* Trailing garbage returns default */
+    setenv("_TEST_INT", "12abc", 1);
+    ASSERT(env_config_get_int("_TEST_INT", -1) == -1);
+
+    /* Pure text returns default */
+    setenv("_TEST_INT", "hello", 1);
+    ASSERT(env_config_get_int("_TEST_INT", 55) == 55);
+
+    /* Empty string returns default */
+    setenv("_TEST_INT", "", 1);
+    ASSERT(env_config_get_int("_TEST_INT", 100) == 100);
+
+    /* Unset returns default */
+    unsetenv("_TEST_INT");
+    ASSERT(env_config_get_int("_TEST_INT", 200) == 200);
+
+    /* NULL key */
+    ASSERT(env_config_get_int(NULL, 300) == 300);
+
+    unsetenv("_TEST_INT");
+    PASS();
+}
+
+void test_env_config_get_bool(void) {
+    TEST("env_config_get_bool (boolean accessor)");
+
+    /* Truthy values (case-insensitive) */
+    setenv("_TEST_BOOL", "true", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", false) == true);
+    setenv("_TEST_BOOL", "TRUE", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", false) == true);
+    setenv("_TEST_BOOL", "1", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", false) == true);
+    setenv("_TEST_BOOL", "yes", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", false) == true);
+    setenv("_TEST_BOOL", "YES", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", false) == true);
+    setenv("_TEST_BOOL", "on", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", false) == true);
+
+    /* Falsy values */
+    setenv("_TEST_BOOL", "false", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", true) == false);
+    setenv("_TEST_BOOL", "FALSE", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", true) == false);
+    setenv("_TEST_BOOL", "0", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", true) == false);
+    setenv("_TEST_BOOL", "no", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", true) == false);
+    setenv("_TEST_BOOL", "off", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", true) == false);
+
+    /* Unrecognised string returns default */
+    setenv("_TEST_BOOL", "maybe", 1);
+    ASSERT(env_config_get_bool("_TEST_BOOL", true) == true);
+    ASSERT(env_config_get_bool("_TEST_BOOL", false) == false);
+
+    /* Unset returns default */
+    unsetenv("_TEST_BOOL");
+    ASSERT(env_config_get_bool("_TEST_BOOL", true) == true);
+
+    /* NULL key */
+    ASSERT(env_config_get_bool(NULL, false) == false);
+
+    unsetenv("_TEST_BOOL");
+    PASS();
+}
+
+void test_env_config_get_port(void) {
+    TEST("env_config_get_port (port accessor)");
+
+    /* Valid port */
+    setenv("_TEST_PORT", "8080", 1);
+    ASSERT(env_config_get_port("_TEST_PORT", 3000) == 8080);
+
+    /* Port 0 is valid */
+    setenv("_TEST_PORT", "0", 1);
+    ASSERT(env_config_get_port("_TEST_PORT", 3000) == 0);
+
+    /* Max port */
+    setenv("_TEST_PORT", "65535", 1);
+    ASSERT(env_config_get_port("_TEST_PORT", 3000) == 65535);
+
+    /* Out of range returns default */
+    setenv("_TEST_PORT", "70000", 1);
+    ASSERT(env_config_get_port("_TEST_PORT", 3000) == 3000);
+
+    /* Negative returns default */
+    setenv("_TEST_PORT", "-1", 1);
+    ASSERT(env_config_get_port("_TEST_PORT", 3000) == 3000);
+
+    /* Non-numeric returns default */
+    setenv("_TEST_PORT", "abc", 1);
+    ASSERT(env_config_get_port("_TEST_PORT", 3000) == 3000);
+
+    /* Unset returns default */
+    unsetenv("_TEST_PORT");
+    ASSERT(env_config_get_port("_TEST_PORT", 4000) == 4000);
+
+    unsetenv("_TEST_PORT");
+    PASS();
+}
+
+void test_env_config_require(void) {
+    TEST("env_config_require (required variable)");
+
+    /* Present returns value */
+    setenv("_TEST_REQ", "secret123", 1);
+    const char *v = env_config_require("_TEST_REQ");
+    ASSERT(v != NULL);
+    ASSERT(strcmp(v, "secret123") == 0);
+
+    /* Empty string treated as missing */
+    setenv("_TEST_REQ", "", 1);
+    ASSERT(env_config_require("_TEST_REQ") == NULL);
+
+    /* Unset returns NULL */
+    unsetenv("_TEST_REQ");
+    ASSERT(env_config_require("_TEST_REQ") == NULL);
+
+    /* NULL key returns NULL */
+    ASSERT(env_config_require(NULL) == NULL);
+
+    unsetenv("_TEST_REQ");
+    PASS();
+}
+
+void test_env_config_server_apply(void) {
+    TEST("http_server_apply_env (server integration)");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+
+    /* NULL server returns -1 */
+    ASSERT(http_server_apply_env(NULL) == -1);
+
+    /* Set env vars and apply */
+    setenv("WEBLIB_READ_TIMEOUT", "10", 1);
+    setenv("WEBLIB_WRITE_TIMEOUT", "20", 1);
+    setenv("WEBLIB_THREAD_COUNT", "8", 1);
+
+    int rc = http_server_apply_env(server);
+    ASSERT(rc == 0);
+
+    ASSERT(http_server_get_read_timeout(server) == 10);
+    ASSERT(http_server_get_write_timeout(server) == 20);
+
+    /* Clean up env */
+    unsetenv("WEBLIB_READ_TIMEOUT");
+    unsetenv("WEBLIB_WRITE_TIMEOUT");
+    unsetenv("WEBLIB_THREAD_COUNT");
+
+    /* Apply with no env vars set should succeed (no-op) */
+    rc = http_server_apply_env(server);
+    ASSERT(rc == 0);
+
+    http_server_destroy(server);
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -3763,6 +3962,14 @@ int main(void) {
     test_kamran_error_response_header();
     test_kamran_override_user_server_header();
     test_kamran_multiple_servers();
+
+    /* Environment configuration tests */
+    test_env_config_get_string();
+    test_env_config_get_int();
+    test_env_config_get_bool();
+    test_env_config_get_port();
+    test_env_config_require();
+    test_env_config_server_apply();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

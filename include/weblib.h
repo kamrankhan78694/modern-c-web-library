@@ -1621,20 +1621,26 @@ void benchmark_print(FILE *fp, const benchmark_stats_t *stats);
 
 /* ===== Environment Configuration API ===== */
 
-/**
- * Well-known environment variable names (all prefixed WEBLIB_).
+/*
+ * Type-safe helpers for reading environment variables.
  *
- * WEBLIB_PORT            – server listen port (1-65535)
- * WEBLIB_READ_TIMEOUT    – socket read timeout in seconds (>= 0)
- * WEBLIB_WRITE_TIMEOUT   – socket write timeout in seconds (>= 0)
- * WEBLIB_THREAD_COUNT    – worker thread pool size (1-256)
- * WEBLIB_MAX_CONNECTIONS  – max concurrent connections (>= 1)
- * WEBLIB_ASYNC_MODE      – enable async I/O mode (true/false/1/0/yes/no/on/off)
+ * Designed for library consumers who configure their applications via
+ * environment variables – the standard mechanism used by GitHub Secrets,
+ * GitHub Variables, Docker, Kubernetes, and all major CI/CD systems.
+ *
+ * You choose the variable names.  The library just provides typed accessors
+ * so there is zero learning curve:
+ *
+ *   const char *db  = env_config_get("DB_URL", "postgres://localhost/mydb");
+ *   int         port = env_config_get_int("PORT", 8080);
+ *   bool        debug = env_config_get_bool("DEBUG", false);
+ *   const char *key  = env_config_require("API_KEY");   // NULL if missing
  */
 
 /**
  * Get a string environment variable with a fallback default.
- * @param key           Environment variable name
+ * Works with any env var name – use your own GitHub Secret / Variable names.
+ * @param key           Environment variable name (e.g. "DATABASE_URL")
  * @param default_value Value returned when key is unset or empty
  * @return The env value or default_value (never NULL when default_value != NULL)
  */
@@ -1643,7 +1649,7 @@ const char *env_config_get(const char *key, const char *default_value);
 /**
  * Get an integer environment variable with a fallback default.
  * Returns default_value when the key is unset, empty, or not a valid integer.
- * @param key           Environment variable name
+ * @param key           Environment variable name (e.g. "PORT", "TIMEOUT")
  * @param default_value Value returned on missing/invalid input
  * @return Parsed integer or default_value
  */
@@ -1653,7 +1659,7 @@ int env_config_get_int(const char *key, int default_value);
  * Get a boolean environment variable with a fallback default.
  * Truthy values: "1", "true", "yes", "on" (case-insensitive).
  * Falsy  values: "0", "false", "no", "off" (case-insensitive).
- * @param key           Environment variable name
+ * @param key           Environment variable name (e.g. "DEBUG", "ENABLE_TLS")
  * @param default_value Value returned on missing/unrecognised input
  * @return Parsed boolean or default_value
  */
@@ -1662,7 +1668,7 @@ bool env_config_get_bool(const char *key, bool default_value);
 /**
  * Get a port number (uint16_t) environment variable with a fallback default.
  * Returns default_value when the key is unset, empty, or outside 0-65535.
- * @param key           Environment variable name
+ * @param key           Environment variable name (e.g. "PORT", "LISTEN_PORT")
  * @param default_value Value returned on missing/invalid input
  * @return Parsed port or default_value
  */
@@ -1670,18 +1676,18 @@ uint16_t env_config_get_port(const char *key, uint16_t default_value);
 
 /**
  * Require an environment variable – returns NULL if unset or empty.
- * Callers can use a NULL return to abort startup with a clear error.
- * @param key Environment variable name
- * @return The value or NULL
+ * Ideal for secrets that must be present (e.g. GitHub Secrets injected
+ * as env vars).  Callers can check for NULL and abort with a clear error.
+ * @param key Environment variable name (e.g. "API_KEY", "DB_PASSWORD")
+ * @return The value, or NULL when the variable is missing/empty
  */
 const char *env_config_require(const char *key);
 
 /**
- * Apply well-known WEBLIB_* environment variables to a server instance.
+ * Convenience: apply standard WEBLIB_* environment variables to a server.
  * Reads WEBLIB_READ_TIMEOUT, WEBLIB_WRITE_TIMEOUT, WEBLIB_THREAD_COUNT,
- * WEBLIB_MAX_CONNECTIONS, and WEBLIB_ASYNC_MODE from the environment
- * and calls the corresponding http_server_set_* functions.
- * Variables that are unset or empty are silently skipped.
+ * WEBLIB_MAX_CONNECTIONS, and WEBLIB_ASYNC_MODE.  Unset variables are
+ * silently skipped, so existing programmatic configuration is preserved.
  * @param server Server instance
  * @return 0 on success, -1 if server is NULL
  */
