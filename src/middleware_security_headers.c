@@ -18,6 +18,7 @@
 #define DEFAULT_FRAME_OPTIONS   "DENY"
 #define DEFAULT_REFERRER_POLICY "strict-origin-when-cross-origin"
 #define DEFAULT_PERMISSIONS     "geolocation=(), camera=(), microphone=()"
+#define HSTS_HEADER_MAX_LEN     128
 
 /* ---- global config --------------------------------------------------- */
 
@@ -75,7 +76,7 @@ static bool _security_headers_handler(http_request_t *req,
     /* Strict-Transport-Security — force HTTPS (opt-in) */
     if (cfg && cfg->enable_hsts) {
         int max_age = cfg->hsts_max_age > 0 ? cfg->hsts_max_age : 31536000;
-        char hsts_val[128];
+        char hsts_val[HSTS_HEADER_MAX_LEN];
         if (cfg->hsts_include_subdomains) {
             snprintf(hsts_val, sizeof(hsts_val),
                      "max-age=%d; includeSubDomains", max_age);

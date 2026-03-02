@@ -13,6 +13,10 @@
 #include <string.h>
 #include <stdint.h>
 
+#if defined(_WIN32)
+#include <bcrypt.h>
+#endif
+
 /* ---- secure memory wipe ---------------------------------------------- */
 
 void secure_zero(void *ptr, size_t len) {
@@ -48,7 +52,6 @@ int secure_random_bytes(void *buf, size_t len) {
 
 #if defined(_WIN32)
     /* Windows: BCryptGenRandom (Vista+) */
-    #include <bcrypt.h>
     NTSTATUS status = BCryptGenRandom(NULL, (PUCHAR)buf, (ULONG)len,
                                       BCRYPT_USE_SYSTEM_PREFERRED_RNG);
     return NT_SUCCESS(status) ? 0 : -1;
