@@ -1660,7 +1660,7 @@ int env_config_get_int(const char *key, int default_value);
  * Truthy values: "1", "true", "yes", "on" (case-insensitive).
  * Falsy  values: "0", "false", "no", "off" (case-insensitive).
  * @param key           Environment variable name (e.g. "DEBUG", "ENABLE_TLS")
- * @param default_value Value returned on missing/unrecognised input
+ * @param default_value Value returned on missing/unrecognized input
  * @return Parsed boolean or default_value
  */
 bool env_config_get_bool(const char *key, bool default_value);
