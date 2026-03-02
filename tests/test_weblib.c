@@ -3905,6 +3905,110 @@ void test_env_config_redact_integration(void) {
     PASS();
 }
 
+/* ===== Security utilities tests ===== */
+
+void test_secure_zero(void) {
+    TEST("secure_zero (memory wipe)");
+
+    char buf[16] = "SECRETPASSWORD!";
+    ASSERT(buf[0] == 'S');
+
+    secure_zero(buf, sizeof(buf));
+    for (int i = 0; i < 16; i++) {
+        ASSERT(buf[i] == 0);
+    }
+
+    /* NULL-safe */
+    secure_zero(NULL, 10);
+    /* zero-length is a no-op */
+    char c = 'x';
+    secure_zero(&c, 0);
+    ASSERT(c == 'x');
+
+    PASS();
+}
+
+void test_secure_compare(void) {
+    TEST("secure_compare (constant-time comparison)");
+
+    const char *a = "hello123";
+    const char *b = "hello123";
+    const char *c = "hello124";
+
+    /* Equal buffers */
+    ASSERT(secure_compare(a, b, 8) == true);
+
+    /* Differing buffers */
+    ASSERT(secure_compare(a, c, 8) == false);
+
+    /* Zero-length always equal */
+    ASSERT(secure_compare(a, c, 0) == true);
+
+    /* NULL-safety */
+    ASSERT(secure_compare(NULL, b, 8) == false);
+    ASSERT(secure_compare(a, NULL, 8) == false);
+    ASSERT(secure_compare(NULL, NULL, 8) == false);
+
+    /* Partial match (only first N bytes) */
+    ASSERT(secure_compare(a, c, 7) == true);  /* "hello12" == "hello12" */
+    ASSERT(secure_compare(a, c, 8) == false); /* "hello123" != "hello124" */
+
+    PASS();
+}
+
+void test_secure_random_bytes(void) {
+    TEST("secure_random_bytes (CSPRNG)");
+
+    unsigned char buf1[32] = {0};
+    unsigned char buf2[32] = {0};
+
+    /* Generate random bytes */
+    ASSERT(secure_random_bytes(buf1, sizeof(buf1)) == 0);
+    ASSERT(secure_random_bytes(buf2, sizeof(buf2)) == 0);
+
+    /* Two independent fills should differ (probability of collision: 2^-256) */
+    ASSERT(memcmp(buf1, buf2, 32) != 0);
+
+    /* Buffer should not be all zeros (probability: 2^-256) */
+    int all_zero = 1;
+    for (int i = 0; i < 32; i++) {
+        if (buf1[i] != 0) { all_zero = 0; break; }
+    }
+    ASSERT(all_zero == 0);
+
+    /* NULL/zero-length returns error */
+    ASSERT(secure_random_bytes(NULL, 16) == -1);
+    ASSERT(secure_random_bytes(buf1, 0) == -1);
+
+    PASS();
+}
+
+void test_security_headers_create_destroy(void) {
+    TEST("security_headers_middleware (create/destroy)");
+
+    /* Default config (NULL) */
+    middleware_fn_t mw = security_headers_middleware_create(NULL);
+    ASSERT(mw != NULL);
+    security_headers_middleware_destroy();
+
+    /* Custom config */
+    security_headers_config_t cfg = {0};
+    cfg.content_security_policy = "default-src 'self'; script-src 'none'";
+    cfg.frame_options = "SAMEORIGIN";
+    cfg.enable_hsts = true;
+    cfg.hsts_max_age = 86400;
+    cfg.hsts_include_subdomains = true;
+
+    mw = security_headers_middleware_create(&cfg);
+    ASSERT(mw != NULL);
+
+    /* Double destroy is safe */
+    security_headers_middleware_destroy();
+    security_headers_middleware_destroy();
+
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -4127,6 +4231,12 @@ int main(void) {
     test_env_secure_value_wipe();
     test_env_config_redact();
     test_env_config_redact_integration();
+
+    /* Security utilities tests */
+    test_secure_zero();
+    test_secure_compare();
+    test_secure_random_bytes();
+    test_security_headers_create_destroy();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

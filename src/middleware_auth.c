@@ -446,10 +446,10 @@ static void hmac_sha256(const uint8_t *key, size_t key_len,
 }
 
 /**
- * secure_compare - Constant-time memory comparison
+ * _auth_secure_compare - Constant-time memory comparison
  * Prevents timing attacks by always comparing all bytes
  */
-static bool secure_compare(const uint8_t *a, const uint8_t *b, size_t len)
+static bool _auth_secure_compare(const uint8_t *a, const uint8_t *b, size_t len)
 {
     uint8_t diff = 0;
     size_t i;
@@ -794,7 +794,7 @@ static bool parse_jwt_token(const char *token,
     hmac_sha256(secret, secret_len, (uint8_t *)signing_input, signing_input_len, computed_signature);
 
     /* Constant-time comparison to prevent timing attacks */
-    if (!secure_compare(signature_decoded, computed_signature, SHA256_DIGEST_SIZE)) {
+    if (!_auth_secure_compare(signature_decoded, computed_signature, SHA256_DIGEST_SIZE)) {
         return false;
     }
 

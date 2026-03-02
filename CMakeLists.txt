@@ -53,6 +53,8 @@ set(WEBLIB_SOURCES
     src/compression.c
     src/benchmark.c
     src/env_config.c
+    src/security_utils.c
+    src/middleware_security_headers.c
 )
 
 # Create static library

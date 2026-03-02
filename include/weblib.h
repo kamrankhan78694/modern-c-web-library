@@ -1763,6 +1763,92 @@ char *env_config_redact(const char *value);
  */
 int http_server_apply_env(http_server_t *server);
 
+/* ===== Security Utilities ===== */
+
+/*
+ * Core security primitives for building secure applications.
+ * All functions are safe to call from any thread.
+ */
+
+/**
+ * Securely wipe memory with zeros using a compiler-barrier technique.
+ * The compiler cannot optimise this away (volatile pointer or memset_s).
+ * Use to scrub secrets (passwords, keys, tokens) before freeing buffers.
+ * @param ptr   Pointer to memory to wipe (NULL-safe → no-op)
+ * @param len   Number of bytes to wipe
+ */
+void secure_zero(void *ptr, size_t len);
+
+/**
+ * Constant-time memory comparison – prevents timing side-channel attacks.
+ * Always compares all bytes regardless of where the first difference is,
+ * so an attacker cannot deduce partial matches from response time.
+ * @param a   First buffer  (NULL → returns false)
+ * @param b   Second buffer (NULL → returns false)
+ * @param len Number of bytes to compare
+ * @return true when all bytes are equal
+ */
+bool secure_compare(const void *a, const void *b, size_t len);
+
+/**
+ * Fill a buffer with cryptographically secure random bytes.
+ * Uses /dev/urandom on POSIX or BCryptGenRandom on Windows.
+ * Suitable for generating session IDs, CSRF tokens, nonces, etc.
+ * @param buf  Destination buffer (must not be NULL)
+ * @param len  Number of random bytes to generate (must be > 0)
+ * @return 0 on success, -1 on failure
+ */
+int secure_random_bytes(void *buf, size_t len);
+
+/* ===== Security Headers Middleware ===== */
+
+/*
+ * Automatically sets industry-standard security headers on every response:
+ *
+ *   Content-Security-Policy    — Restricts resource loading (XSS prevention)
+ *   X-Content-Type-Options     — Prevents MIME type sniffing
+ *   X-Frame-Options            — Clickjacking protection
+ *   Referrer-Policy            — Controls referrer header leakage
+ *   Permissions-Policy         — Disables dangerous browser features
+ *   Strict-Transport-Security  — Forces HTTPS (opt-in via enable_hsts)
+ *   X-XSS-Protection: 0       — Disables legacy XSS filter (CSP is preferred)
+ *
+ * Usage:
+ *   security_headers_config_t cfg = {0};
+ *   cfg.enable_hsts = true;
+ *   cfg.content_security_policy = "default-src 'self'; script-src 'self'";
+ *   middleware_fn_t sec = security_headers_middleware_create(&cfg);
+ *   router_use_middleware(router, sec);
+ *   // ... at shutdown:
+ *   security_headers_middleware_destroy();
+ */
+
+/** Configuration for the security headers middleware. */
+typedef struct security_headers_config {
+    const char *content_security_policy; /**< CSP directive (NULL → "default-src 'self'") */
+    const char *frame_options;           /**< X-Frame-Options value (NULL → "DENY") */
+    const char *referrer_policy;         /**< Referrer-Policy value (NULL → "strict-origin-when-cross-origin") */
+    const char *permissions_policy;      /**< Permissions-Policy value (NULL → "geolocation=(), camera=(), microphone=()") */
+    bool   enable_hsts;                  /**< Set Strict-Transport-Security header */
+    int    hsts_max_age;                 /**< HSTS max-age in seconds (0 → 31536000 = 1 year) */
+    bool   hsts_include_subdomains;      /**< Add includeSubDomains to HSTS */
+} security_headers_config_t;
+
+/**
+ * Create the security headers middleware.
+ * Pass NULL config to use all defaults (CSP: default-src 'self', etc.).
+ * @param config Configuration (NULL for safe defaults)
+ * @return Middleware function pointer, or NULL on allocation failure
+ */
+middleware_fn_t security_headers_middleware_create(
+        const security_headers_config_t *config);
+
+/**
+ * Destroy the security headers middleware and free its configuration.
+ * Safe to call when the middleware was never created (no-op).
+ */
+void security_headers_middleware_destroy(void);
+
 #ifdef __cplusplus
 }
 #endif
