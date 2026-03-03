@@ -94,10 +94,6 @@ static bool _security_headers_handler(http_request_t *req,
 
 /* ---- public API ------------------------------------------------------ */
 
-static char *_strdup_optional(const char *s) {
-    return s ? strdup(s) : NULL;
-}
-
 middleware_fn_t security_headers_middleware_create(
         const security_headers_config_t *config) {
     /* Free any existing configuration */
@@ -107,11 +103,35 @@ middleware_fn_t security_headers_middleware_create(
         g_sec_cfg = (security_headers_config_t *)calloc(1, sizeof(*g_sec_cfg));
         if (!g_sec_cfg) return NULL;
 
-        /* Deep copy strings */
-        g_sec_cfg->content_security_policy = _strdup_optional(config->content_security_policy);
-        g_sec_cfg->frame_options           = _strdup_optional(config->frame_options);
-        g_sec_cfg->referrer_policy         = _strdup_optional(config->referrer_policy);
-        g_sec_cfg->permissions_policy      = _strdup_optional(config->permissions_policy);
+        /* Deep copy strings (matching CORS middleware pattern) */
+        if (config->content_security_policy) {
+            g_sec_cfg->content_security_policy = strdup(config->content_security_policy);
+            if (!g_sec_cfg->content_security_policy) {
+                security_headers_middleware_destroy();
+                return NULL;
+            }
+        }
+        if (config->frame_options) {
+            g_sec_cfg->frame_options = strdup(config->frame_options);
+            if (!g_sec_cfg->frame_options) {
+                security_headers_middleware_destroy();
+                return NULL;
+            }
+        }
+        if (config->referrer_policy) {
+            g_sec_cfg->referrer_policy = strdup(config->referrer_policy);
+            if (!g_sec_cfg->referrer_policy) {
+                security_headers_middleware_destroy();
+                return NULL;
+            }
+        }
+        if (config->permissions_policy) {
+            g_sec_cfg->permissions_policy = strdup(config->permissions_policy);
+            if (!g_sec_cfg->permissions_policy) {
+                security_headers_middleware_destroy();
+                return NULL;
+            }
+        }
         g_sec_cfg->enable_hsts             = config->enable_hsts;
         g_sec_cfg->hsts_max_age            = config->hsts_max_age;
         g_sec_cfg->hsts_include_subdomains = config->hsts_include_subdomains;
