@@ -96,15 +96,45 @@ static bool _security_headers_handler(http_request_t *req,
 
 middleware_fn_t security_headers_middleware_create(
         const security_headers_config_t *config) {
-    if (g_sec_cfg) {
-        free(g_sec_cfg);
-        g_sec_cfg = NULL;
-    }
+    /* Free any existing configuration */
+    security_headers_middleware_destroy();
 
     if (config) {
-        g_sec_cfg = (security_headers_config_t *)malloc(sizeof(*g_sec_cfg));
+        g_sec_cfg = (security_headers_config_t *)calloc(1, sizeof(*g_sec_cfg));
         if (!g_sec_cfg) return NULL;
-        memcpy(g_sec_cfg, config, sizeof(*g_sec_cfg));
+
+        /* Deep copy strings (matching CORS middleware pattern) */
+        if (config->content_security_policy) {
+            g_sec_cfg->content_security_policy = strdup(config->content_security_policy);
+            if (!g_sec_cfg->content_security_policy) {
+                security_headers_middleware_destroy();
+                return NULL;
+            }
+        }
+        if (config->frame_options) {
+            g_sec_cfg->frame_options = strdup(config->frame_options);
+            if (!g_sec_cfg->frame_options) {
+                security_headers_middleware_destroy();
+                return NULL;
+            }
+        }
+        if (config->referrer_policy) {
+            g_sec_cfg->referrer_policy = strdup(config->referrer_policy);
+            if (!g_sec_cfg->referrer_policy) {
+                security_headers_middleware_destroy();
+                return NULL;
+            }
+        }
+        if (config->permissions_policy) {
+            g_sec_cfg->permissions_policy = strdup(config->permissions_policy);
+            if (!g_sec_cfg->permissions_policy) {
+                security_headers_middleware_destroy();
+                return NULL;
+            }
+        }
+        g_sec_cfg->enable_hsts             = config->enable_hsts;
+        g_sec_cfg->hsts_max_age            = config->hsts_max_age;
+        g_sec_cfg->hsts_include_subdomains = config->hsts_include_subdomains;
     }
 
     return _security_headers_handler;
@@ -112,6 +142,10 @@ middleware_fn_t security_headers_middleware_create(
 
 void security_headers_middleware_destroy(void) {
     if (g_sec_cfg) {
+        free((void *)g_sec_cfg->content_security_policy);
+        free((void *)g_sec_cfg->frame_options);
+        free((void *)g_sec_cfg->referrer_policy);
+        free((void *)g_sec_cfg->permissions_policy);
         free(g_sec_cfg);
         g_sec_cfg = NULL;
     }

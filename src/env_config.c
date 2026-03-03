@@ -96,20 +96,6 @@ bool env_config_is_set(const char *key) {
 
 /* ---- secure value API ------------------------------------------------ */
 
-/**
- * Overwrite memory with zeros in a way the compiler cannot optimise away.
- * Uses C11 memset_s when available, otherwise a volatile-pointer trick.
- */
-static void _secure_wipe(void *ptr, size_t len) {
-    if (!ptr || len == 0) return;
-#if defined(__STDC_LIB_EXT1__) || defined(_WIN32)
-    memset_s(ptr, len, 0, len);
-#else
-    volatile unsigned char *p = (volatile unsigned char *)ptr;
-    while (len--) *p++ = 0;
-#endif
-}
-
 struct env_secure_value {
     char  *data;   /* heap-allocated copy of the secret */
     size_t len;    /* strlen of data (excludes NUL)     */
@@ -147,10 +133,10 @@ size_t env_secure_value_len(const env_secure_value_t *sv) {
 void env_secure_value_free(env_secure_value_t *sv) {
     if (!sv) return;
     if (sv->data) {
-        _secure_wipe(sv->data, sv->len);
+        secure_zero(sv->data, sv->len);
         free(sv->data);
     }
-    _secure_wipe(sv, sizeof(*sv));
+    secure_zero(sv, sizeof(*sv));
     free(sv);
 }
 
