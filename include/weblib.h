@@ -1619,6 +1619,236 @@ int benchmark_run(uint16_t port, const char *path,
  */
 void benchmark_print(FILE *fp, const benchmark_stats_t *stats);
 
+/* ===== Environment Configuration API ===== */
+
+/*
+ * Type-safe helpers for reading environment variables.
+ *
+ * Designed for library consumers who configure their applications via
+ * environment variables – the standard mechanism used by GitHub Secrets,
+ * GitHub Variables, Docker, Kubernetes, and all major CI/CD systems.
+ *
+ * You choose the variable names.  The library just provides typed accessors
+ * so there is zero learning curve:
+ *
+ *   const char *db  = env_config_get("DB_URL", "postgres://localhost/mydb");
+ *   int         port = env_config_get_int("PORT", 8080);
+ *   bool        debug = env_config_get_bool("DEBUG", false);
+ *   const char *key  = env_config_require("API_KEY");   // NULL if missing
+ */
+
+/**
+ * Get a string environment variable with a fallback default.
+ * Works with any env var name – use your own GitHub Secret / Variable names.
+ * @param key           Environment variable name (e.g. "DATABASE_URL")
+ * @param default_value Value returned when key is unset or empty
+ * @return The env value or default_value (never NULL when default_value != NULL)
+ */
+const char *env_config_get(const char *key, const char *default_value);
+
+/**
+ * Get an integer environment variable with a fallback default.
+ * Returns default_value when the key is unset, empty, or not a valid integer.
+ * @param key           Environment variable name (e.g. "PORT", "TIMEOUT")
+ * @param default_value Value returned on missing/invalid input
+ * @return Parsed integer or default_value
+ */
+int env_config_get_int(const char *key, int default_value);
+
+/**
+ * Get a boolean environment variable with a fallback default.
+ * Truthy values: "1", "true", "yes", "on" (case-insensitive).
+ * Falsy  values: "0", "false", "no", "off" (case-insensitive).
+ * @param key           Environment variable name (e.g. "DEBUG", "ENABLE_TLS")
+ * @param default_value Value returned on missing/unrecognized input
+ * @return Parsed boolean or default_value
+ */
+bool env_config_get_bool(const char *key, bool default_value);
+
+/**
+ * Get a port number (uint16_t) environment variable with a fallback default.
+ * Returns default_value when the key is unset, empty, or outside 0-65535.
+ * @param key           Environment variable name (e.g. "PORT", "LISTEN_PORT")
+ * @param default_value Value returned on missing/invalid input
+ * @return Parsed port or default_value
+ */
+uint16_t env_config_get_port(const char *key, uint16_t default_value);
+
+/**
+ * Require an environment variable – returns NULL if unset or empty.
+ * Ideal for secrets that must be present (e.g. GitHub Secrets injected
+ * as env vars).  Callers can check for NULL and abort with a clear error.
+ * @param key Environment variable name (e.g. "API_KEY", "DB_PASSWORD")
+ * @return The value, or NULL when the variable is missing/empty
+ */
+const char *env_config_require(const char *key);
+
+/**
+ * Check whether an environment variable is set and non-empty.
+ * Useful for checking secret presence without touching the value itself.
+ * @param key Environment variable name
+ * @return true when the variable exists and is non-empty
+ */
+bool env_config_is_set(const char *key);
+
+/* ---- Secure secret handling ------------------------------------------ */
+
+/*
+ * For sensitive values (API keys, passwords, tokens) loaded from GitHub
+ * Secrets or any environment variable, use the secure value API below.
+ *
+ * Why?
+ *  - The secret is copied into a dedicated heap buffer.
+ *  - env_secure_value_free() scrubs that buffer with zeros before freeing,
+ *    using a compiler-barrier technique so the wipe cannot be optimised away.
+ *  - env_config_redact() produces a masked version safe for logging.
+ *  - This limits the window during which the plaintext secret resides in
+ *    process memory and prevents accidental exposure in logs or core dumps.
+ *
+ * Usage:
+ *   env_secure_value_t *key = env_config_get_secure("API_KEY");
+ *   if (!key) { fprintf(stderr, "API_KEY required\n"); exit(1); }
+ *   use_secret(env_secure_value_get(key));
+ *   env_secure_value_free(key);   // secret wiped from memory
+ */
+
+/** Opaque handle to a securely-held secret value. */
+typedef struct env_secure_value env_secure_value_t;
+
+/**
+ * Load a secret from an environment variable into a secure buffer.
+ * The caller must free the result with env_secure_value_free().
+ * @param key Environment variable name (e.g. "API_KEY")
+ * @return Opaque handle, or NULL if the variable is missing/empty
+ */
+env_secure_value_t *env_config_get_secure(const char *key);
+
+/**
+ * Access the raw secret string held by a secure value.
+ * @param sv Secure value handle (NULL-safe → returns NULL)
+ * @return NUL-terminated secret string
+ */
+const char *env_secure_value_get(const env_secure_value_t *sv);
+
+/**
+ * Return the length of the secret (excluding NUL terminator).
+ * @param sv Secure value handle (NULL-safe → returns 0)
+ */
+size_t env_secure_value_len(const env_secure_value_t *sv);
+
+/**
+ * Securely destroy a secret value – wipes memory with zeros before freeing.
+ * Safe to call with NULL.
+ * @param sv Secure value handle
+ */
+void env_secure_value_free(env_secure_value_t *sv);
+
+/**
+ * Return a heap-allocated redacted version of a value, safe for logging.
+ * Short values (≤4 chars) become "***"; longer values show the first and
+ * last character with asterisks in between (e.g. "s**********z").
+ * Caller must free() the returned string.
+ * @param value Raw secret string (NULL → returns NULL)
+ * @return Redacted string, or NULL on error
+ */
+char *env_config_redact(const char *value);
+
+/**
+ * Convenience: apply standard WEBLIB_* environment variables to a server.
+ * Reads WEBLIB_READ_TIMEOUT, WEBLIB_WRITE_TIMEOUT, WEBLIB_THREAD_COUNT,
+ * WEBLIB_MAX_CONNECTIONS, and WEBLIB_ASYNC_MODE.  Unset variables are
+ * silently skipped, so existing programmatic configuration is preserved.
+ * @param server Server instance
+ * @return 0 on success, -1 if server is NULL
+ */
+int http_server_apply_env(http_server_t *server);
+
+/* ===== Security Utilities ===== */
+
+/*
+ * Core security primitives for building secure applications.
+ * All functions are safe to call from any thread.
+ */
+
+/**
+ * Securely wipe memory with zeros using a compiler-barrier technique.
+ * The compiler cannot optimise this away (volatile pointer or memset_s).
+ * Use to scrub secrets (passwords, keys, tokens) before freeing buffers.
+ * @param ptr   Pointer to memory to wipe (NULL-safe → no-op)
+ * @param len   Number of bytes to wipe
+ */
+void secure_zero(void *ptr, size_t len);
+
+/**
+ * Constant-time memory comparison – prevents timing side-channel attacks.
+ * Always compares all bytes regardless of where the first difference is,
+ * so an attacker cannot deduce partial matches from response time.
+ * @param a   First buffer  (NULL → returns false)
+ * @param b   Second buffer (NULL → returns false)
+ * @param len Number of bytes to compare
+ * @return true when all bytes are equal
+ */
+bool secure_compare(const void *a, const void *b, size_t len);
+
+/**
+ * Fill a buffer with cryptographically secure random bytes.
+ * Uses /dev/urandom on POSIX or BCryptGenRandom on Windows.
+ * Suitable for generating session IDs, CSRF tokens, nonces, etc.
+ * @param buf  Destination buffer (must not be NULL)
+ * @param len  Number of random bytes to generate (must be > 0)
+ * @return 0 on success, -1 on failure
+ */
+int secure_random_bytes(void *buf, size_t len);
+
+/* ===== Security Headers Middleware ===== */
+
+/*
+ * Automatically sets industry-standard security headers on every response:
+ *
+ *   Content-Security-Policy    — Restricts resource loading (XSS prevention)
+ *   X-Content-Type-Options     — Prevents MIME type sniffing
+ *   X-Frame-Options            — Clickjacking protection
+ *   Referrer-Policy            — Controls referrer header leakage
+ *   Permissions-Policy         — Disables dangerous browser features
+ *   Strict-Transport-Security  — Forces HTTPS (opt-in via enable_hsts)
+ *   X-XSS-Protection: 0       — Disables legacy XSS filter (CSP is preferred)
+ *
+ * Usage:
+ *   security_headers_config_t cfg = {0};
+ *   cfg.enable_hsts = true;
+ *   cfg.content_security_policy = "default-src 'self'; script-src 'self'";
+ *   middleware_fn_t sec = security_headers_middleware_create(&cfg);
+ *   router_use_middleware(router, sec);
+ *   // ... at shutdown:
+ *   security_headers_middleware_destroy();
+ */
+
+/** Configuration for the security headers middleware. */
+typedef struct security_headers_config {
+    const char *content_security_policy; /**< CSP directive (NULL → "default-src 'self'") */
+    const char *frame_options;           /**< X-Frame-Options value (NULL → "DENY") */
+    const char *referrer_policy;         /**< Referrer-Policy value (NULL → "strict-origin-when-cross-origin") */
+    const char *permissions_policy;      /**< Permissions-Policy value (NULL → "geolocation=(), camera=(), microphone=()") */
+    bool   enable_hsts;                  /**< Set Strict-Transport-Security header */
+    int    hsts_max_age;                 /**< HSTS max-age in seconds (0 → 31536000 = 1 year) */
+    bool   hsts_include_subdomains;      /**< Add includeSubDomains to HSTS */
+} security_headers_config_t;
+
+/**
+ * Create the security headers middleware.
+ * Pass NULL config to use all defaults (CSP: default-src 'self', etc.).
+ * @param config Configuration (NULL for safe defaults)
+ * @return Middleware function pointer, or NULL on allocation failure
+ */
+middleware_fn_t security_headers_middleware_create(
+        const security_headers_config_t *config);
+
+/**
+ * Destroy the security headers middleware and free its configuration.
+ * Safe to call when the middleware was never created (no-op).
+ */
+void security_headers_middleware_destroy(void);
+
 #ifdef __cplusplus
 }
 #endif
