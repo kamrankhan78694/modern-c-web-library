@@ -50,6 +50,7 @@ static char *_generate_token(int token_bytes) {
     if (nb > sizeof(raw)) nb = sizeof(raw);
 
     if (secure_random_bytes(raw, nb) != 0) {
+        fprintf(stderr, "CSRF: secure_random_bytes() failed — cannot generate token\n");
         return NULL;
     }
 
@@ -115,8 +116,11 @@ static bool _csrf_middleware_handler(http_request_t *req, http_response_t *res, 
 
     size_t cookie_len = strlen(cookie_token);
     size_t header_len = strlen(header_token);
-    if (cookie_len != header_len ||
-        !secure_compare(cookie_token, header_token, cookie_len)) {
+    size_t cmp_len = cookie_len < header_len ? cookie_len : header_len;
+    /* Always perform constant-time comparison before branching */
+    bool match = secure_compare(cookie_token, header_token, cmp_len)
+                 && (cookie_len == header_len);
+    if (!match) {
         http_response_send_text(res, HTTP_FORBIDDEN, "CSRF token mismatch");
         return false;
     }
