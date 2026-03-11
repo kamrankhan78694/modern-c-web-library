@@ -2,7 +2,7 @@
 
 ## 1) Idea Intake
 
-**Core problem (one sentence):** The library needs production-grade transport security and security-verification tooling implemented in pure C so users can deploy safely without external dependencies.
+**Core problem (one sentence):** The library needs a pure-C security stack that makes internet-facing deployments safe by default.
 
 ## 2) Crystallized Brief
 
@@ -25,8 +25,8 @@
 
 | Module | Why it must exist | Core design |
 |---|---|---|
-| Crypto primitives (`sha256`, `hmac`, `aes-gcm`) | TLS and password/key features require trustworthy primitives | Deterministic APIs, explicit buffer sizes, vector-based tests |
-| KDF/password (`pbkdf2`, `hkdf`, password hash API) | Avoid raw password storage and support key expansion | Salted hashes, iteration control, constant-time verification |
+| Crypto primitives (`sha256`, `hmac_sha256`, `aes_gcm`) | TLS and password/key features require trustworthy primitives | Deterministic APIs, explicit buffer sizes, vector-based tests |
+| KDF/password (`pbkdf2_hmac_sha256`, `hkdf`, password hash API) | Avoid raw password storage and support key expansion | Salted hashes, iteration control, constant-time verification |
 | TLS transport (`tls_record`, `tls_handshake`, PEM loader) | Prevent credential/session disclosure on network | TLS 1.2-only state machine, strict parse/serialize boundaries |
 | Server integration (`http_server_enable_tls`) | Make TLS usable through existing server API | Opt-in TLS mode with cert/key load at startup |
 | Security middleware (`request_id`, `ip_access`) | Improve traceability and reduce exposure surface | Request correlation header + CIDR allow/deny checks |
@@ -55,14 +55,14 @@ Refinements from adversarial review:
 ## 6) Atomic Planning (smallest verifiable tasks)
 
 ### A. Crypto foundation
-- [ ] A1. Add SHA-256 implementation file + header declarations.
-- [ ] A2. Add HMAC-SHA256 implementation using SHA-256 module.
-- [ ] A3. Add AES-GCM encrypt/decrypt APIs with explicit nonce/tag lengths.
+- [ ] A1. Add `sha256` implementation file + header declarations.
+- [ ] A2. Add `hmac_sha256` implementation using `sha256`.
+- [ ] A3. Add `aes_gcm` encrypt/decrypt APIs with explicit nonce/tag lengths.
 - [ ] A4. Add unit tests with NIST/RFC vectors for A1-A3.
 
 ### B. Password + key derivation
-- [ ] B1. Add PBKDF2-HMAC-SHA256 implementation.
-- [ ] B2. Add HKDF extract/expand implementation.
+- [ ] B1. Add `pbkdf2_hmac_sha256` implementation.
+- [ ] B2. Add `hkdf` extract/expand implementation.
 - [ ] B3. Add `password_hash_create` and `password_hash_verify` public APIs.
 - [ ] B4. Add constant-time compare usage in verify path.
 - [ ] B5. Add vector and round-trip tests for B1-B4.
@@ -166,8 +166,8 @@ Refinements from adversarial review:
 
 ## Deliverable Summary (execution-ready)
 
-- **Architecture + reasoning:** Sections 3 and 5
-- **Milestone roadmap (1–2 week slices):** Section 8
-- **Task breakdown (atomic, assignable):** Section 6
-- **Validation + QA checklist:** Sections 9 and 10
-- **Security + risk mitigation notes:** Section 11
+- **Architecture + reasoning:** Grounded First-Principles Design + Design Iteration
+- **Milestone roadmap (1–2 week slices):** Milestone Roadmap
+- **Task breakdown (atomic, assignable):** Atomic Planning
+- **Validation + QA checklist:** Build Validation + QA Pipeline
+- **Security + risk mitigation notes:** Security Review
