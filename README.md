@@ -169,7 +169,7 @@ The example server will start on port 8080 (or your specified port) with the fol
 
 ## Public Header Naming Options
 
-The canonical public API header remains `weblib.h`, but the project now also ships `kamran.h` as a compatibility alias for author branding:
+The canonical public API header remains `weblib.h`, but the project now also ships `kamran.h` as an author-branded alias:
 
 ```c
 #include "kamran.h"
@@ -226,7 +226,7 @@ The canonical public API header remains `weblib.h`, but the project now also shi
 - Looks less like a normal C public header to downstream consumers
 - Offers branding value, but with more friction than `kamran.h`
 
-**Recommendation:** keep `weblib.h` as the stable canonical header and use `kamran.h` as the branded alias. That gives author visibility without breaking existing integrations.
+**Recommendation:** Keep `weblib.h` as the stable canonical header and use `kamran.h` as the branded alias. That gives author visibility without breaking existing integrations.
 
 ## Docker Development Environment
 
