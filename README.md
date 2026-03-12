@@ -564,7 +564,7 @@ See `examples/websocket_echo_server.c` for a complete WebSocket server implement
 modern-c-web-library/
 ├── include/
 │   ├── weblib.h           # Public API header
-│   ├── kamran.h           # Author-branded compatibility alias
+│   ├── kamran.h           # Author-branded header alias
 │   └── db_pool.h          # Database connection pool header
 ├── src/
 │   ├── http_server.c      # HTTP server implementation (sync & async)
