@@ -167,6 +167,17 @@ The example server will start on port 8080 (or your specified port) with the fol
 - `GET /users/:id` - User info with route parameters
 - `POST /api/data` - Echo posted data
 
+## Public Header Name
+
+The public API header is now `kamran.k` only. Repository examples typically use quotes, while installed-header usage may prefer angle brackets:
+
+```c
+#include "kamran.k"
+/* or: #include <kamran.k> */
+```
+
+Use `kamran.k` for all public API includes.
+
 ## Docker Development Environment
 
 For contributors who want a consistent, reproducible environment without installing dependencies locally, we provide a Docker setup.
@@ -247,7 +258,7 @@ docker-compose run --rm weblib-dev /bin/bash
 ### Basic HTTP Server
 
 ```c
-#include "weblib.h"
+#include "kamran.k"
 
 void handle_root(http_request_t *req, http_response_t *res) {
     http_response_send_text(res, HTTP_OK, "Hello, World!");
@@ -315,7 +326,7 @@ router_use_middleware(router, logging_middleware);
 The library supports full async I/O with event loops for high-performance, non-blocking request handling:
 
 ```c
-#include "weblib.h"
+#include "kamran.k"
 
 int main(void) {
     // Create server
@@ -386,7 +397,7 @@ event_loop_destroy(loop);
 The library includes full WebSocket support compliant with RFC 6455:
 
 ```c
-#include "weblib.h"
+#include "kamran.k"
 
 /* WebSocket message callback */
 void on_message(websocket_connection_t *conn, ws_message_type_t type, 
@@ -501,7 +512,7 @@ See `examples/websocket_echo_server.c` for a complete WebSocket server implement
 ```
 modern-c-web-library/
 ├── include/
-│   ├── weblib.h           # Public API header
+│   ├── kamran.k           # Public API header
 │   └── db_pool.h          # Database connection pool header
 ├── src/
 │   ├── http_server.c      # HTTP server implementation (sync & async)

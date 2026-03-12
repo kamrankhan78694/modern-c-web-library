@@ -6,7 +6,7 @@
  * All functions accept NULL safely (treating NULL as invalid input).
  */
 
-#include "weblib.h"
+#include "kamran.k"
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>

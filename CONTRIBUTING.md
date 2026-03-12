@@ -237,7 +237,7 @@ static void _secure_wipe(void *ptr, size_t len) {
 }
 
 // ✓ GOOD — uses the public API
-#include "weblib.h"
+#include "kamran.k"
 secure_zero(buffer, sizeof(buffer));
 ```
 
@@ -423,7 +423,7 @@ docs/update-api-documentation
 
 ```c
 // tests/test_feature.c
-#include "weblib.h"
+#include "kamran.k"
 #include <assert.h>
 #include <stdio.h>
 

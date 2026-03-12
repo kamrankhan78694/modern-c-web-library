@@ -24,7 +24,7 @@ body:
     id: api
     attributes:
       label: Public API changes (if any)
-      description: Proposed signatures in `include/weblib.h`
+      description: Proposed signatures in `include/kamran.k`
       placeholder: |
         // Example
         int http_server_set_limit(http_server_t *s, size_t n);

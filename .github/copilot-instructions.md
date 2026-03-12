@@ -286,7 +286,7 @@ Don't create separate event loops unless implementing custom async patterns.
 
 ## Key Files Reference
 
-- **API Surface**: `include/weblib.h` - all public declarations
+- **API Surface**: `include/kamran.k` - all public declarations
 - **Examples**: `examples/simple_server.c` (threaded), `examples/async_server.c` (event loop)
 - **Build Config**: `CMakeLists.txt` - platform detection, compiler flags
 - **Roadmap**: `TODO.md` - planned features prioritized by 🎯/🔧/💡
