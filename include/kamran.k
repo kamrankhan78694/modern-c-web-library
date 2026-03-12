@@ -1,5 +1,5 @@
-#ifndef KAMRAN_K
-#define KAMRAN_K
+#ifndef KAMRAN_K_H
+#define KAMRAN_K_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -1853,4 +1853,4 @@ void security_headers_middleware_destroy(void);
 }
 #endif
 
-#endif /* KAMRAN_K */
+#endif /* KAMRAN_K_H */
