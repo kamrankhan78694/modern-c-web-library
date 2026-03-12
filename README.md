@@ -169,10 +169,11 @@ The example server will start on port 8080 (or your specified port) with the fol
 
 ## Public Header Naming Options
 
-The canonical public API header remains `weblib.h`, but the project now also ships `kamran.h` as an author-branded alias:
+The canonical public API header remains `weblib.h`, but the project now also ships `kamran.h` as an author-branded alias. Repository examples typically use quotes, while installed-header usage may prefer angle brackets:
 
 ```c
 #include "kamran.h"
+/* or: #include <kamran.h> */
 ```
 
 ### Option A: Keep `weblib.h` as the canonical header
