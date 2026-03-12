@@ -1,4 +1,4 @@
-#include "kamran.h"
+#include "kamran.k"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,6 +9,6 @@ int main(void) {
     assert(signature != NULL);
     assert(strstr(signature, WEBLIB_AUTHOR_KAMRAN) != NULL);
 
-    printf("kamran.h alias OK\n");
+    printf("kamran.k alias OK\n");
     return 0;
 }
