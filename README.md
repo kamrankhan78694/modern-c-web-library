@@ -167,55 +167,16 @@ The example server will start on port 8080 (or your specified port) with the fol
 - `GET /users/:id` - User info with route parameters
 - `POST /api/data` - Echo posted data
 
-## Public Header Naming Options
+## Public Header Name
 
-The canonical public API header remains `weblib.h`, but the project now also ships `kamran.k` as an author-branded alias. Repository examples typically use quotes, while installed-header usage may prefer angle brackets:
+The public API header is now `kamran.k` only. Repository examples typically use quotes, while installed-header usage may prefer angle brackets:
 
 ```c
 #include "kamran.k"
 /* or: #include <kamran.k> */
 ```
 
-### Option A: Keep `weblib.h` as the canonical header
-
-**Feasibility:** Best default; zero migration required.
-
-**Pros**
-- No breaking change for existing users, examples, packages, or documentation
-- Matches the library name `weblib`
-- Keeps toolchains, tutorials, and installed header paths stable
-
-**Cons**
-- The header filename itself is product-branded instead of author-branded
-
-### Option B: Add `kamran.k` as an alias while keeping `weblib.h`
-
-**Feasibility:** Supported now; low risk if you want a distinctive personal include name.
-
-**Pros**
-- Adds your name to the public include surface
-- Preserves backward compatibility for all current users
-- Lets new examples or blog posts use `#include "kamran.k"` without forcing a migration
-- Gives you the custom “road sign” filename you asked for
-
-**Cons**
-- Maintainers must support two public include names
-- The nonstandard extension may surprise users, editors, or tooling
-
-### Option C: Fully rename `weblib.h` to `kamran.k`
-
-**Feasibility:** Possible, but it is a breaking API packaging change.
-
-**Pros**
-- Strongest author branding in the main public header
-- Removes ambiguity about which name to use
-
-**Cons**
-- Requires updating source, tests, examples, docs, packaging, and downstream projects
-- Would likely need a compatibility shim anyway for a clean migration
-- Creates avoidable churn for users who already include `weblib.h`
-
-**Recommendation:** Keep `weblib.h` as the stable canonical header and use `kamran.k` as the branded alias. That gives you the custom name without breaking existing integrations.
+Use `kamran.k` for all public API includes.
 
 ## Docker Development Environment
 
@@ -297,7 +258,7 @@ docker-compose run --rm weblib-dev /bin/bash
 ### Basic HTTP Server
 
 ```c
-#include "weblib.h"
+#include "kamran.k"
 
 void handle_root(http_request_t *req, http_response_t *res) {
     http_response_send_text(res, HTTP_OK, "Hello, World!");
@@ -365,7 +326,7 @@ router_use_middleware(router, logging_middleware);
 The library supports full async I/O with event loops for high-performance, non-blocking request handling:
 
 ```c
-#include "weblib.h"
+#include "kamran.k"
 
 int main(void) {
     // Create server
@@ -436,7 +397,7 @@ event_loop_destroy(loop);
 The library includes full WebSocket support compliant with RFC 6455:
 
 ```c
-#include "weblib.h"
+#include "kamran.k"
 
 /* WebSocket message callback */
 void on_message(websocket_connection_t *conn, ws_message_type_t type, 
@@ -551,8 +512,7 @@ See `examples/websocket_echo_server.c` for a complete WebSocket server implement
 ```
 modern-c-web-library/
 ├── include/
-│   ├── weblib.h           # Public API header
-│   ├── kamran.k           # Author-branded header alias
+│   ├── kamran.k           # Public API header
 │   └── db_pool.h          # Database connection pool header
 ├── src/
 │   ├── http_server.c      # HTTP server implementation (sync & async)

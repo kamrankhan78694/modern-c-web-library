@@ -168,7 +168,7 @@ Phase 10 (v1.0.0): Release Readiness
 |---|------|---------|-------------------|------|
 | 7.1.1 | Add `setsockopt(SO_RCVTIMEO)` on accepted client sockets | `src/http_server.c` | Read timeout triggers after configurable seconds (default 30s) | 2h |
 | 7.1.2 | Add `setsockopt(SO_SNDTIMEO)` on accepted client sockets | `src/http_server.c` | Write timeout triggers after configurable seconds (default 30s) | 1h |
-| 7.1.3 | Add `http_server_set_timeout(server, read_sec, write_sec)` API | `include/weblib.h`, `src/http_server.c` | API documented, validated (rejects negative values) | 2h |
+| 7.1.3 | Add `http_server_set_timeout(server, read_sec, write_sec)` API | `include/kamran.k`, `src/http_server.c` | API documented, validated (rejects negative values) | 2h |
 | 7.1.4 | Handle `EAGAIN`/`EWOULDBLOCK` in recv/send loops | `src/http_server.c` | Partial reads/writes retried; timeout returns error code | 3h |
 | 7.1.5 | Unit tests for timeout behavior | `tests/test_weblib.c` | Test verifies server rejects slow client simulation | 2h |
 
@@ -178,14 +178,14 @@ Phase 10 (v1.0.0): Release Readiness
 | 7.2.1 | Implement `thread_pool_t` with work queue | `src/thread_pool.c` (new), `src/thread_pool.h` (new) | Create/destroy; submit work items; bounded queue (default 256) | 4h |
 | 7.2.2 | Mutex + condition variable synchronization | `src/thread_pool.c` | No data races under concurrent submit; Valgrind clean | 3h |
 | 7.2.3 | Integrate thread pool into `http_server_t` | `src/http_server.c` | Threaded mode uses pool instead of thread-per-connection | 3h |
-| 7.2.4 | Add `http_server_set_thread_count(server, n)` API | `include/weblib.h`, `src/http_server.c` | Configurable thread count; default 16; min 1, max 256 | 1h |
+| 7.2.4 | Add `http_server_set_thread_count(server, n)` API | `include/kamran.k`, `src/http_server.c` | Configurable thread count; default 16; min 1, max 256 | 1h |
 | 7.2.5 | Unit tests for thread pool | `tests/test_weblib.c` | Create/destroy; submit 100 items; all complete; no leaks | 2h |
 
 #### 7.3 Graceful Shutdown
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 7.3.1 | Add server state enum (RUNNING, DRAINING, STOPPED) | `include/weblib.h`, `src/http_server.c` | State transitions are atomic (`sig_atomic_t`) | 1h |
-| 7.3.2 | Implement `http_server_shutdown(server, timeout_sec)` | `src/http_server.c`, `include/weblib.h` | Closes listening socket; waits for in-flight requests up to timeout | 3h |
+| 7.3.1 | Add server state enum (RUNNING, DRAINING, STOPPED) | `include/kamran.k`, `src/http_server.c` | State transitions are atomic (`sig_atomic_t`) | 1h |
+| 7.3.2 | Implement `http_server_shutdown(server, timeout_sec)` | `src/http_server.c`, `include/kamran.k` | Closes listening socket; waits for in-flight requests up to timeout | 3h |
 | 7.3.3 | SIGTERM/SIGINT handler (POSIX) | `src/http_server.c` | Signal triggers state → DRAINING; second signal → immediate exit | 2h |
 | 7.3.4 | Thread pool drain on shutdown | `src/thread_pool.c` | All queued work items complete or are cancelled; threads join | 2h |
 | 7.3.5 | Unit test: shutdown with active connections | `tests/test_weblib.c` | Server shuts down cleanly; no leaked sockets; Valgrind clean | 3h |
@@ -285,7 +285,7 @@ Phase 10 (v1.0.0): Release Readiness
 |---|------|---------|-------------------|------|
 | 11.2.1 | PBKDF2-HMAC-SHA256 | `src/crypto/pbkdf2.c` | RFC 6070 test vectors pass; configurable iteration count (default 600,000) | 2d |
 | 11.2.2 | HKDF (extract + expand) | `src/crypto/hkdf.c` | RFC 5869 Appendix A test vectors pass | 1d |
-| 11.2.3 | `password_hash_create/verify` API | `src/password.c`, `include/weblib.h` | Salt auto-generated; timing-safe verify; hash format includes iteration count | 2d |
+| 11.2.3 | `password_hash_create/verify` API | `src/password.c`, `include/kamran.k` | Salt auto-generated; timing-safe verify; hash format includes iteration count | 2d |
 | 11.2.4 | Unit tests | `tests/test_weblib.c` | Round-trip hash/verify; wrong password fails; different salts produce different hashes | 1d |
 
 ##### 11.3 TLS 1.2 Transport Encryption
@@ -294,7 +294,7 @@ Phase 10 (v1.0.0): Release Readiness
 | 11.3.1 | TLS record layer (framing) | `src/tls/tls_record.c` | Parse and serialize TLS records; handle fragmentation | 2d |
 | 11.3.2 | TLS handshake state machine | `src/tls/tls_handshake.c` | ClientHello → ServerHello → Certificate → KeyExchange → Finished | 3d |
 | 11.3.3 | PEM parser + key loader | `src/tls/pem_parser.c` | Load cert chain + private key from PEM files; `mlock()` key pages | 2d |
-| 11.3.4 | Server API integration | `src/http_server.c`, `include/weblib.h` | `http_server_enable_tls()` API; private key zeroed on destroy | 2d |
+| 11.3.4 | Server API integration | `src/http_server.c`, `include/kamran.k` | `http_server_enable_tls()` API; private key zeroed on destroy | 2d |
 | 11.3.5 | HTTPS example + tests | `examples/https_server.c`, `tests/test_tls.c` | `curl --tlsv1.2` returns 200; browser green lock | 2d |
 
 ##### 11.4 Request ID & IP Access Control
@@ -309,7 +309,7 @@ Phase 10 (v1.0.0): Release Readiness
 |---|------|---------|-------------------|------|
 | 11.5.1 | HTTP parser fuzz harness | `tests/fuzz/fuzz_http_parser.c` | AFL/libFuzzer compatible; runs 1M iterations without crash | 2d |
 | 11.5.2 | ASan/MSan CI integration | `.github/workflows/ci.yml` | Sanitizer builds run on every push; zero errors | 1d |
-| 11.5.3 | Per-route body size limits | `src/http_server.c`, `include/weblib.h` | `router_set_max_body(route, bytes)` API; reject before buffering | 1d |
+| 11.5.3 | Per-route body size limits | `src/http_server.c`, `include/kamran.k` | `router_set_max_body(route, bytes)` API; reject before buffering | 1d |
 
 #### Phase 11 — Success Criteria
 

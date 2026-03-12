@@ -94,7 +94,7 @@ install(TARGETS weblib weblib_shared
     ARCHIVE DESTINATION lib
 )
 
-install(FILES include/weblib.h include/kamran.k include/db_pool.h DESTINATION include)
+install(FILES include/kamran.k include/db_pool.h DESTINATION include)
 
 # Package configuration
 set(CPACK_PACKAGE_NAME "modern-c-web-library")
