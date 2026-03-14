@@ -100,6 +100,7 @@ typedef struct http_parser {
     size_t body_received;
     size_t body_capacity;
     bool chunked;
+    bool seen_content_length;    /* detect CL + TE smuggling in any order */
     bool seen_transfer_encoding; /* detect duplicate Transfer-Encoding headers */
     bool expect_continue;        /* Expect: 100-continue was present */
     size_t current_chunk_size;
@@ -811,6 +812,13 @@ static int header_list_add(http_header_node_t **head_ref, const char *name, cons
         return -1;
     }
 
+    /* Reject header values containing CR or LF to prevent header injection */
+    for (const char *p = value; *p; p++) {
+        if (*p == '\r' || *p == '\n') {
+            return -1;
+        }
+    }
+
     char *lower = lowercase_dup(name);
     if (!lower) {
         return -1;
@@ -1410,6 +1418,14 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     }
 
     if (strcasecmp(name_buf, "content-length") == 0) {
+        /* RFC 7230 §3.3.3: reject if Transfer-Encoding already seen */
+        if (parser->seen_transfer_encoding) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST,
+                             "Both Content-Length and Transfer-Encoding present");
+            return -1;
+        }
         char *endptr = NULL;
         unsigned long long val = strtoull(value_buf, &endptr, 10);
         if (endptr == value_buf || *endptr != '\0') {
@@ -1425,6 +1441,7 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
             return -1;
         }
         parser->content_length = (size_t)val;
+        parser->seen_content_length = true;
     } else if (strcasecmp(name_buf, "transfer-encoding") == 0) {
         if (parser->seen_transfer_encoding) {
             free(name_buf);
@@ -1432,10 +1449,17 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
             parser_set_error(parser, HTTP_BAD_REQUEST, "Duplicate Transfer-Encoding header");
             return -1;
         }
+        /* RFC 7230 §3.3.3: reject if Content-Length already seen */
+        if (parser->seen_content_length) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST,
+                             "Both Content-Length and Transfer-Encoding present");
+            return -1;
+        }
         parser->seen_transfer_encoding = true;
         if (strstr(value_buf, "chunked") != NULL) {
             parser->chunked = true;
-            parser->content_length = 0;
         }
     } else if (strcasecmp(name_buf, "expect") == 0) {
         if (strcasecmp(value_buf, "100-continue") == 0) {
@@ -1667,6 +1691,7 @@ static void http_parser_reset(http_parser_t *parser, http_request_t *req, bool p
     parser->body_received = 0;
     parser->body_capacity = 0;
     parser->chunked = false;
+    parser->seen_content_length = false;
     parser->seen_transfer_encoding = false;
     parser->expect_continue = false;
     parser->current_chunk_size = 0;
