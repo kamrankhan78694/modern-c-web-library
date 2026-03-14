@@ -242,7 +242,7 @@ void handle_index(http_request_t *req, http_response_t *res) {
         "</body>\n"
         "</html>";
 
-    char html[sizeof(html_head) + sizeof(html_body)];
+    char html[sizeof(html_head) + sizeof(html_body) - 1];
     memcpy(html, html_head, sizeof(html_head) - 1);
     memcpy(html + sizeof(html_head) - 1, html_body, sizeof(html_body));
 
