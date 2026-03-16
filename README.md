@@ -128,18 +128,13 @@ flowchart TD
     MW2 -->|reject| Response
     MW3 -->|reject| Response
     MW4 -->|reject| Response
-    Handler --> BodyParser[Body Parser\nJSON / Form / Multipart]
-    Handler --> Session[Session Manager]
-    Handler --> Template[Template Engine]
-    Handler --> Cache[LRU Cache]
-    Handler --> DBPool[DB Connection Pool]
     Handler --> Response[HTTP Response]
-    BodyParser --> Handler
-    Session --> Handler
-    Template --> Handler
-    Cache --> Handler
-    DBPool --> Handler
-    Response -->|Compression| Compress[gzip / DEFLATE]
+    Handler --- BodyParser[Body Parser\nJSON / Form / Multipart]
+    Handler --- Session[Session Manager]
+    Handler --- Template[Template Engine]
+    Handler --- Cache[LRU Cache]
+    Handler --- DBPool[DB Connection Pool]
+    Response -->|Compression| Compress[gzip / deflate]
     Compress --> Client
     Response --> Client
 
