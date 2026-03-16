@@ -108,6 +108,45 @@ This policy emphasizes **C craftsmanship** over convenience through other ecosys
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design with zero external dependencies
 
+## Architecture
+
+```mermaid
+flowchart TD
+    Client([Client]) -->|HTTP Request| Server[HTTP Server]
+    Server -->|Threaded Mode| Thread[Thread per Connection]
+    Server -->|Async Mode| EventLoop[Event Loop\nepoll / kqueue / poll]
+    Thread --> Parser
+    EventLoop --> Parser
+    Parser[HTTP Parser] --> Router[Router]
+    Router --> MW1[CORS Middleware]
+    MW1 -->|pass| MW2[Auth Middleware\nBasic / JWT / API Key]
+    MW2 -->|pass| MW3[Rate Limiter\nToken Bucket]
+    MW3 -->|pass| MW4[CSRF Protection]
+    MW4 -->|pass| MW5[Logging Middleware]
+    MW5 -->|pass| Handler[Route Handler]
+    MW1 -->|reject| Response
+    MW2 -->|reject| Response
+    MW3 -->|reject| Response
+    MW4 -->|reject| Response
+    Handler --> BodyParser[Body Parser\nJSON / Form / Multipart]
+    Handler --> Session[Session Manager]
+    Handler --> Template[Template Engine]
+    Handler --> Cache[LRU Cache]
+    Handler --> DBPool[DB Connection Pool]
+    Handler --> Response[HTTP Response]
+    BodyParser --> Handler
+    Session --> Handler
+    Template --> Handler
+    Cache --> Handler
+    DBPool --> Handler
+    Response -->|Compression| Compress[gzip / DEFLATE]
+    Compress --> Client
+    Response --> Client
+
+    Server -.->|WebSocket Upgrade| WS[WebSocket Handler\nRFC 6455]
+    WS --> Client
+```
+
 ## Quick Start
 
 ### Option 1: Using Docker (Recommended for Contributors)
