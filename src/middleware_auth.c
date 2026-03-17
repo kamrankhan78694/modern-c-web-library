@@ -445,22 +445,6 @@ static void hmac_sha256(const uint8_t *key, size_t key_len,
     sha256_final(&ctx, output);
 }
 
-/**
- * _auth_secure_compare - Constant-time memory comparison
- * Prevents timing attacks by always comparing all bytes
- */
-static bool _auth_secure_compare(const uint8_t *a, const uint8_t *b, size_t len)
-{
-    uint8_t diff = 0;
-    size_t i;
-    
-    for (i = 0; i < len; i++) {
-        diff |= a[i] ^ b[i];
-    }
-    
-    return diff == 0;
-}
-
 /* ===== Basic Authentication Middleware ===== */
 
 static basic_auth_config_t *g_basic_auth_config = NULL;
@@ -524,7 +508,7 @@ static bool parse_basic_auth(const char *auth_header,
     password[password_len] = '\0';
 
     /* Clear decoded credentials from stack to prevent memory disclosure */
-    memset(decoded, 0, sizeof(decoded));
+    secure_zero(decoded, sizeof(decoded));
 
     return true;
 }
@@ -794,7 +778,7 @@ static bool parse_jwt_token(const char *token,
     hmac_sha256(secret, secret_len, (uint8_t *)signing_input, signing_input_len, computed_signature);
 
     /* Constant-time comparison to prevent timing attacks */
-    if (!_auth_secure_compare(signature_decoded, computed_signature, SHA256_DIGEST_SIZE)) {
+    if (!secure_compare(signature_decoded, computed_signature, SHA256_DIGEST_SIZE)) {
         return false;
     }
 
@@ -932,7 +916,7 @@ void jwt_auth_middleware_destroy(void)
     if (g_jwt_auth_config) {
         if (g_jwt_auth_config->secret) {
             /* Zero out secret before freeing for security */
-            memset((void *)g_jwt_auth_config->secret, 0, g_jwt_auth_config->secret_len);
+            secure_zero((void *)g_jwt_auth_config->secret, g_jwt_auth_config->secret_len);
             free((void *)g_jwt_auth_config->secret);
         }
         if (g_jwt_auth_config->header_name) {
