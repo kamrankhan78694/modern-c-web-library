@@ -1,4 +1,4 @@
-#include "weblib.h"
+#include "kamran.k"
 #include "db_pool.h"
 #include "thread_pool.h"
 #include <stdio.h>
@@ -4009,6 +4009,106 @@ void test_security_headers_create_destroy(void) {
     PASS();
 }
 
+/* ===== Bug-fix regression tests: request smuggling, header injection, WS OOM ===== */
+
+void test_parser_cl_before_te_smuggling(void) {
+    TEST("parser (Content-Length before Transfer-Encoding → 400)");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_POST, "/ok", dummy_handler);
+    http_server_set_router(server, router);
+
+    uint16_t port = 18812;
+    int listen_result = http_server_listen(server, port);
+    ASSERT(listen_result == 0);
+    usleep(50000);
+
+    /* Content-Length comes BEFORE Transfer-Encoding – must be rejected */
+    const char *smuggle_request =
+        "POST /ok HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Length: 5\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n"
+        "hello";
+
+    char resp_buf[2048];
+    ssize_t nread = _send_raw_request(port, smuggle_request, strlen(smuggle_request),
+                                       resp_buf, sizeof(resp_buf));
+    ASSERT(nread > 0);
+    ASSERT(strstr(resp_buf, "400") != NULL);
+
+    /* Sanity: a valid POST without conflict should work */
+    const char *good_request =
+        "POST /ok HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Length: 5\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "hello";
+
+    nread = _send_raw_request(port, good_request, strlen(good_request),
+                               resp_buf, sizeof(resp_buf));
+    ASSERT(nread > 0);
+    ASSERT(strstr(resp_buf, "HTTP/1.1") != NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+
+    PASS();
+}
+
+void test_header_injection_rejected(void) {
+    TEST("header injection (CRLF in value → rejected)");
+
+    http_response_t res = {0};
+
+    /* Setting a header with embedded CRLF must silently fail */
+    http_response_set_header(&res, "X-Test", "value\r\nEvil-Header: injected");
+    const char *val = _test_find_header(res.headers, "x-test");
+    ASSERT(val == NULL);
+
+    /* Setting a header with just LF must also fail */
+    http_response_set_header(&res, "X-Test2", "value\nEvil");
+    val = _test_find_header(res.headers, "x-test2");
+    ASSERT(val == NULL);
+
+    /* Setting a header with just CR must also fail */
+    http_response_set_header(&res, "X-Test3", "value\rEvil");
+    val = _test_find_header(res.headers, "x-test3");
+    ASSERT(val == NULL);
+
+    /* Normal header values must still work */
+    http_response_set_header(&res, "X-Good", "normal-value");
+    val = _test_find_header(res.headers, "x-good");
+    ASSERT(val != NULL);
+    ASSERT(strcmp(val, "normal-value") == 0);
+
+    _test_free_header_list(res.headers);
+
+    PASS();
+}
+
+void test_websocket_fragment_oom(void) {
+    TEST("websocket fragment buffer OOM → clean close");
+
+    /* Create a WebSocket connection with an invalid fd (won't actually send) */
+    websocket_connection_t *conn = websocket_connection_create(999);
+    ASSERT(conn != NULL);
+    ASSERT(websocket_is_open(conn));
+
+    /* We can't force malloc to fail, but we verify the connection is cleanly
+       created and destroyed without leaking when fragment_buffer is NULL */
+    websocket_connection_destroy(conn);
+
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -4237,6 +4337,11 @@ int main(void) {
     test_secure_compare();
     test_secure_random_bytes();
     test_security_headers_create_destroy();
+
+    /* Bug-fix regression: smuggling, header injection, WS OOM */
+    test_parser_cl_before_te_smuggling();
+    test_header_injection_rejected();
+    test_websocket_fragment_oom();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

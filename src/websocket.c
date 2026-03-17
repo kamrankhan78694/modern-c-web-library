@@ -1,4 +1,4 @@
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -679,9 +679,11 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
                     if (init_cap < 256) init_cap = 256;
                     conn->fragment_capacity = init_cap;
                     conn->fragment_buffer = (uint8_t *)malloc(conn->fragment_capacity);
-                    if (conn->fragment_buffer) {
-                        memcpy(conn->fragment_buffer, frame.payload, frame.payload_length);
+                    if (!conn->fragment_buffer) {
+                        websocket_close(conn, 1011, "Server error: out of memory");
+                        return -1;
                     }
+                    memcpy(conn->fragment_buffer, frame.payload, frame.payload_length);
                 }
                 break;
                 

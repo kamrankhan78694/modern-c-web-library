@@ -19,8 +19,8 @@
 | 6 | **Info** | HTTP Server | **Fixed** | No HTTP keep-alive connection limit — could exhaust file descriptors |
 | 7 | **Medium** | env_config / security_utils | **Fixed** | Duplicate `_secure_wipe()` — private copy of public `secure_zero()` |
 | 8 | **Medium** | Security Headers Middleware | **Fixed** | Shallow `memcpy` of config struct containing string pointers (dangling pointer risk) |
-| 9 | **Medium** | CSRF / Session / Auth | **Open** | Private functions duplicate public security APIs (`secure_random_bytes`, `secure_compare`) |
-| 10 | **Low** | Auth / CSRF Middleware | **Open** | `memset()` used instead of `secure_zero()` to wipe sensitive data — compiler may optimize away |
+| 9 | **Medium** | CSRF / Session / Auth | **Fixed** | Private functions duplicate public security APIs (`secure_random_bytes`, `secure_compare`) |
+| 10 | **Low** | Auth / CSRF Middleware | **Fixed** | `memset()` used instead of `secure_zero()` to wipe sensitive data — compiler may optimize away |
 
 ---
 
@@ -202,11 +202,12 @@ The secure value API was developed before or alongside `secure_zero()`, and the 
 
 ---
 
-### BUG-9: Private Functions Duplicate Public Security APIs (Medium) — ⚠️ OPEN
+### BUG-9: Private Functions Duplicate Public Security APIs (Medium) — ✅ FIXED
 
 **Component:** `src/middleware_csrf.c`, `src/session.c`, `src/middleware_auth.c`
 **Severity:** Medium — code duplication of security-critical functions
 **Discovered:** Codebase-wide audit following PR #61 bug fixes
+**Fixed:** Removed all private reimplementations and replaced with calls to the public APIs: `_fill_random()` → `secure_random_bytes()`, `generate_session_id()` → `secure_random_bytes()`, `_ct_strcmp()` → `secure_compare()`, `_auth_secure_compare()` → `secure_compare()`.
 
 **Description:**
 Three security-critical operations have public APIs in `security_utils.c`, but multiple modules reimplement them privately:
@@ -233,11 +234,12 @@ Refactor all private implementations to call the public API:
 
 ---
 
-### BUG-10: `memset()` Used to Wipe Sensitive Data (Low) — ⚠️ OPEN
+### BUG-10: `memset()` Used to Wipe Sensitive Data (Low) — ✅ FIXED
 
 **Component:** `src/middleware_auth.c`, `src/middleware_csrf.c`
 **Severity:** Low — compiler may optimize away the wipe
 **Discovered:** Codebase-wide audit following PR #61 bug fixes
+**Fixed:** Replaced all `memset()` calls on sensitive data with `secure_zero()` which uses `volatile` pointers to prevent dead-store elimination.
 
 **Description:**
 Several locations use `memset(ptr, 0, len)` to wipe sensitive data before freeing. The C standard permits compilers to optimize away `memset()` calls on memory that is not subsequently read ("dead store elimination"). The public `secure_zero()` function exists specifically to prevent this optimization using `volatile` pointers.

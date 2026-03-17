@@ -1,7 +1,7 @@
 /* Enable POSIX features for strdup */
 #define _POSIX_C_SOURCE 200809L
 
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

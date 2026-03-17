@@ -8,6 +8,13 @@ target_link_libraries(test_weblib weblib ${PLATFORM_LIBS})
 # Add test to CTest
 add_test(NAME WebLibTests COMMAND test_weblib)
 
+# Header alias test executable
+add_executable(test_kamran_header test_kamran_header.c)
+target_link_libraries(test_kamran_header weblib ${PLATFORM_LIBS})
+
+# Add header alias test to CTest
+add_test(NAME KamranHeaderTests COMMAND test_kamran_header)
+
 # Async WebSocket test executable
 add_executable(test_async_websocket test_async_websocket.c)
 target_link_libraries(test_async_websocket weblib ${PLATFORM_LIBS})

@@ -108,6 +108,40 @@ This policy emphasizes **C craftsmanship** over convenience through other ecosys
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design with zero external dependencies
 
+## Architecture
+
+```mermaid
+flowchart TD
+    Client([Client]) -->|HTTP Request| Server[HTTP Server]
+    Server -->|Threaded Mode| Thread[Bounded Thread Pool]
+    Server -->|Async Mode| EventLoop[Event Loop\nepoll / kqueue / poll]
+    Thread --> Parser
+    EventLoop --> Parser
+    Parser[HTTP Parser] --> Router[Router]
+    Router --> MW1[CORS Middleware]
+    MW1 -->|pass| MW2[Auth Middleware\nBasic / JWT / API Key]
+    MW2 -->|pass| MW3[Rate Limiter\nToken Bucket]
+    MW3 -->|pass| MW4[CSRF Protection]
+    MW4 -->|pass| MW5[Logging Middleware]
+    MW5 -->|pass| Handler[Route Handler]
+    MW1 -->|reject| Response
+    MW2 -->|reject| Response
+    MW3 -->|reject| Response
+    MW4 -->|reject| Response
+    Handler --> Response[HTTP Response]
+    Handler --- BodyParser[Body Parser\nJSON / Form / Multipart]
+    Handler --- Session[Session Manager]
+    Handler --- Template[Template Engine]
+    Handler --- Cache[LRU Cache]
+    Handler --- DBPool[DB Connection Pool]
+    Response -->|Compression| Compress[gzip]
+    Compress --> Client
+    Response --> Client
+
+    Server -.->|WebSocket Upgrade| WS[WebSocket Handler\nRFC 6455]
+    WS --> Client
+```
+
 ## Quick Start
 
 ### Option 1: Using Docker (Recommended for Contributors)
@@ -166,6 +200,17 @@ The example server will start on port 8080 (or your specified port) with the fol
 - `GET /api/json` - JSON response example
 - `GET /users/:id` - User info with route parameters
 - `POST /api/data` - Echo posted data
+
+## Public Header Name
+
+The public API header is now `kamran.k` only. Repository examples typically use quotes, while installed-header usage may prefer angle brackets:
+
+```c
+#include "kamran.k"
+/* or: #include <kamran.k> */
+```
+
+Use `kamran.k` for all public API includes.
 
 ## Docker Development Environment
 
@@ -247,7 +292,7 @@ docker-compose run --rm weblib-dev /bin/bash
 ### Basic HTTP Server
 
 ```c
-#include "weblib.h"
+#include "kamran.k"
 
 void handle_root(http_request_t *req, http_response_t *res) {
     http_response_send_text(res, HTTP_OK, "Hello, World!");
@@ -315,7 +360,7 @@ router_use_middleware(router, logging_middleware);
 The library supports full async I/O with event loops for high-performance, non-blocking request handling:
 
 ```c
-#include "weblib.h"
+#include "kamran.k"
 
 int main(void) {
     // Create server
@@ -386,7 +431,7 @@ event_loop_destroy(loop);
 The library includes full WebSocket support compliant with RFC 6455:
 
 ```c
-#include "weblib.h"
+#include "kamran.k"
 
 /* WebSocket message callback */
 void on_message(websocket_connection_t *conn, ws_message_type_t type, 
@@ -501,7 +546,7 @@ See `examples/websocket_echo_server.c` for a complete WebSocket server implement
 ```
 modern-c-web-library/
 ├── include/
-│   ├── weblib.h           # Public API header
+│   ├── kamran.k           # Public API header
 │   └── db_pool.h          # Database connection pool header
 ├── src/
 │   ├── http_server.c      # HTTP server implementation (sync & async)

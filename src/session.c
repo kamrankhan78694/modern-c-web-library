@@ -1,4 +1,4 @@
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,24 +43,12 @@ static void generate_session_id(char *buffer, size_t length) {
     
     size_t charset_len = sizeof(charset) - 1;
     unsigned char random_bytes[64]; /* Max SESSION_ID_LENGTH */
-    bool got_urandom = false;
 
     if (length > sizeof(random_bytes)) {
         length = sizeof(random_bytes);
     }
 
-#ifndef _WIN32
-    /* Try /dev/urandom for cryptographically secure randomness */
-    FILE *urand = fopen("/dev/urandom", "rb");
-    if (urand) {
-        if (fread(random_bytes, 1, length, urand) == length) {
-            got_urandom = true;
-        }
-        fclose(urand);
-    }
-#endif
-
-    if (got_urandom) {
+    if (secure_random_bytes(random_bytes, length) == 0) {
         for (size_t i = 0; i < length; i++) {
             buffer[i] = charset[random_bytes[i] % charset_len];
         }

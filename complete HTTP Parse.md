@@ -22,7 +22,7 @@
 6. Documentation and tests (unit + integration) covering all code paths.
 
 ## Phase 1 – Groundwork
-1. **Audit Structures**: Revisit `http_request`/`http_response` definitions in `include/weblib.h`. Decide on internal header representation (e.g., linked list of `key/value` pairs with case-insensitive comparison). Document expectations in comments for future maintainers.
+1. **Audit Structures**: Revisit `http_request`/`http_response` definitions in `include/kamran.k`. Decide on internal header representation (e.g., linked list of `key/value` pairs with case-insensitive comparison). Document expectations in comments for future maintainers.
 2. **Utility Module**: Either extend `http_server.c` with static helpers or add a new internal file (`src/http_headers.c`) to store/retrieve headers, normalize keys, and free resources. Keep this internal (no public API changes beyond the existing helper functions).
 3. **Memory Helpers**: Define functions for request lifecycle (init/reset/free partial state) to reuse between sync/async code paths.
 
@@ -78,7 +78,7 @@
 1. Update `README.md` usage examples to reflect available headers/params and limitations.
 2. Revise `TODO.md` once features land (mark “Complete HTTP Parser” task as done).
 3. Add inline comments near non-obvious logic (state transitions, chunked parsing) per project guidance (keep concise).
-4. Ensure public API comments in `weblib.h` mention header lookup behaviour and error responses for malformed requests.
+4. Ensure public API comments in `kamran.k` mention header lookup behaviour and error responses for malformed requests.
 
 ## Dependencies & Sequencing Notes
 - Phase 1 must precede parser work so shared data structures exist.
