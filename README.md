@@ -113,7 +113,7 @@ This policy emphasizes **C craftsmanship** over convenience through other ecosys
 ```mermaid
 flowchart TD
     Client([Client]) -->|HTTP Request| Server[HTTP Server]
-    Server -->|Threaded Mode| Thread[Thread per Connection]
+    Server -->|Threaded Mode| Thread[Bounded Thread Pool]
     Server -->|Async Mode| EventLoop[Event Loop\nepoll / kqueue / poll]
     Thread --> Parser
     EventLoop --> Parser
@@ -134,7 +134,7 @@ flowchart TD
     Handler --- Template[Template Engine]
     Handler --- Cache[LRU Cache]
     Handler --- DBPool[DB Connection Pool]
-    Response -->|Compression| Compress[gzip / deflate]
+    Response -->|Compression| Compress[gzip]
     Compress --> Client
     Response --> Client
 
