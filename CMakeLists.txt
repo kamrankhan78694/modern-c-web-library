@@ -57,6 +57,7 @@ set(WEBLIB_SOURCES_WASM_SAFE
     src/security_utils.c
     src/middleware_security_headers.c
     src/wasm_runtime.c
+    src/worker_runtime.c
 )
 
 # OS-dependent modules (sockets, real benchmarking) -- excluded from WASM builds

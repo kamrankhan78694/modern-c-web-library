@@ -28,3 +28,7 @@ endif()
 # WASM example (runs on both native and WASM builds)
 add_executable(wasm_example wasm_example.c)
 target_link_libraries(wasm_example weblib ${PLATFORM_LIBS})
+
+# Cloudflare Worker example (runs on both native and WASM builds)
+add_executable(worker_example worker_example.c)
+target_link_libraries(worker_example weblib ${PLATFORM_LIBS})

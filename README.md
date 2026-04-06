@@ -710,6 +710,129 @@ wasm_template_context_destroy(ctx);
 
 See `examples/wasm_example.c` for a complete demonstration.
 
+### Cloudflare Workers
+
+The library provides first-class support for running inside
+[Cloudflare Workers](https://developers.cloudflare.com/workers/) via WASM.
+The Worker runtime layer (`worker_*` API) bridges the Workers fetch-event
+model to the library's router and response helpers.
+
+#### Worker API Overview
+
+| Function | Purpose |
+|----------|---------|
+| `worker_request_create(method, url)` | Create a request from fetch event data |
+| `worker_request_set_header/body()` | Populate request headers and body |
+| `worker_handle_fetch(req, router)` | Route request through a `router_t` |
+| `worker_response_get_status/body/header()` | Read response fields |
+| `worker_response_set_text/json()` | Convenience response builders |
+| `worker_kv_create/put/get/delete()` | In-memory key-value store |
+| `worker_runtime_version()` | Runtime version string |
+
+#### Quick Start
+
+**1. Write your Worker in C:**
+
+```c
+#include "kamran.k"
+
+static router_t *g_router = NULL;
+
+static void handle_hello(http_request_t *req, http_response_t *res) {
+    (void)req;
+    json_value_t *json = json_object_create();
+    json_object_set(json, "message", json_string_create("Hello from Worker!"));
+    http_response_send_json(res, HTTP_OK, json);
+    json_value_free(json);
+}
+
+/* Called once on Worker startup */
+WASM_EXPORT void worker_init(void) {
+    g_router = router_create();
+    router_add_route(g_router, HTTP_GET, "/api/hello", handle_hello);
+}
+
+/* Called for every fetch event */
+WASM_EXPORT worker_response_t *worker_fetch(const char *method, const char *url) {
+    worker_request_t *req = worker_request_create(method, url);
+    worker_response_t *res = worker_handle_fetch(req, g_router);
+    worker_request_destroy(req);
+    return res;
+}
+
+WASM_EXPORT void worker_cleanup(void) {
+    router_destroy(g_router);
+}
+```
+
+**2. Compile to WASM with Emscripten:**
+
+```bash
+mkdir build-wasm && cd build-wasm
+emcmake cmake ..
+emmake make
+
+emcc -o worker.js your_worker.c -I../include -L. -lweblib \
+     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,allocateUTF8,UTF8ToString \
+     -sEXPORTED_FUNCTIONS=_worker_init,_worker_fetch,_worker_cleanup,_worker_response_get_status,_worker_response_get_body,_worker_response_get_header_count,_worker_response_get_header_name,_worker_response_get_header_value,_worker_response_destroy,_malloc,_free \
+     -sWASM=1 -sMODULARIZE=1 -sEXPORT_NAME=createModule
+```
+
+**3. Wire up the JavaScript glue** (see `examples/worker.js`):
+
+```js
+import createModule from "./worker.wasm.js";
+let wasm = null;
+
+async function ensureInit() {
+    if (wasm) return;
+    wasm = await createModule();
+    wasm._worker_init();
+}
+
+export default {
+    async fetch(request) {
+        await ensureInit();
+        const url = new URL(request.url);
+        const methodPtr = wasm.allocateUTF8(request.method);
+        const pathPtr   = wasm.allocateUTF8(url.pathname + url.search);
+
+        const resPtr = wasm._worker_fetch(methodPtr, pathPtr);
+        wasm._free(methodPtr);
+        wasm._free(pathPtr);
+
+        const status = wasm._worker_response_get_status(resPtr);
+        const body   = wasm.UTF8ToString(wasm._worker_response_get_body(resPtr));
+        const headers = new Headers();
+        for (let i = 0; i < wasm._worker_response_get_header_count(resPtr); i++) {
+            headers.set(
+                wasm.UTF8ToString(wasm._worker_response_get_header_name(resPtr, i)),
+                wasm.UTF8ToString(wasm._worker_response_get_header_value(resPtr, i))
+            );
+        }
+        wasm._worker_response_destroy(resPtr);
+        return new Response(body, { status, headers });
+    },
+};
+```
+
+#### Worker KV Store
+
+An in-memory key-value store is provided for caching within a Worker invocation:
+
+```c
+worker_kv_t *kv = worker_kv_create();
+worker_kv_put(kv, "session", "abc123");
+
+const char *val = worker_kv_get(kv, "session");  // "abc123"
+worker_kv_delete(kv, "session");
+
+worker_kv_destroy(kv);
+```
+
+See `examples/worker_example.c` for a complete native-testable Worker example
+and `examples/worker.js` for the Cloudflare Workers JavaScript glue.
+
 ## Testing
 
 ### Using Docker (Recommended)

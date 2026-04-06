@@ -1924,6 +1924,201 @@ WASM_EXPORT void  wasm_template_context_destroy(template_context_t *ctx);
 /* WASM Memory helper (free strings returned by wasm_json_stringify, etc.) */
 WASM_EXPORT void wasm_free(void *ptr);
 
+/* ===== Cloudflare Worker Runtime API ===== */
+
+/*
+ * The Worker runtime provides a fetch-event model for Cloudflare Workers.
+ * A JavaScript glue layer deserialises the incoming Request, calls the
+ * WASM-exported functions below, and returns the Response.
+ *
+ * Typical flow:
+ *   1. JS creates a worker_request_t  via worker_request_create()
+ *   2. JS sets headers/body           via worker_request_set_header/body()
+ *   3. JS calls worker_handle_fetch() to route through a router_t
+ *   4. JS reads status/headers/body   from the returned worker_response_t
+ *   5. JS destroys both objects
+ *
+ * An in-memory key-value store (worker_kv_t) is provided for caching
+ * and lightweight data persistence within a single Worker invocation.
+ */
+
+/* Forward declarations */
+typedef struct worker_request  worker_request_t;
+typedef struct worker_response worker_response_t;
+typedef struct worker_kv       worker_kv_t;
+
+/* --- Worker Request --- */
+
+/**
+ * Create a Worker request.
+ * @param method  HTTP method string ("GET", "POST", …)
+ * @param url     Request URL path, optionally with query string
+ * @return New request or NULL on failure
+ */
+WASM_EXPORT worker_request_t *worker_request_create(const char *method,
+                                                    const char *url);
+
+/**
+ * Add a header to the Worker request.
+ * @param req   Worker request
+ * @param name  Header name
+ * @param value Header value
+ */
+WASM_EXPORT void worker_request_set_header(worker_request_t *req,
+                                           const char *name,
+                                           const char *value);
+
+/**
+ * Set the request body.
+ * @param req  Worker request
+ * @param body Body bytes (copied)
+ * @param len  Body length
+ */
+WASM_EXPORT void worker_request_set_body(worker_request_t *req,
+                                         const char *body, size_t len);
+
+/** Get the request method string. */
+WASM_EXPORT const char *worker_request_get_method(worker_request_t *req);
+
+/** Get the request URL string. */
+WASM_EXPORT const char *worker_request_get_url(worker_request_t *req);
+
+/**
+ * Look up a request header by name (case-insensitive).
+ * @return Header value or NULL if not found
+ */
+WASM_EXPORT const char *worker_request_get_header(worker_request_t *req,
+                                                  const char *name);
+
+/** Get the request body (NULL if none). */
+WASM_EXPORT const char *worker_request_get_body(worker_request_t *req);
+
+/** Get the request body length. */
+WASM_EXPORT size_t worker_request_get_body_len(worker_request_t *req);
+
+/** Destroy a Worker request and free its resources. */
+WASM_EXPORT void worker_request_destroy(worker_request_t *req);
+
+/* --- Worker Response --- */
+
+/**
+ * Create an empty Worker response (default status 200).
+ */
+WASM_EXPORT worker_response_t *worker_response_create(void);
+
+/** Set response HTTP status code. */
+WASM_EXPORT void worker_response_set_status(worker_response_t *res,
+                                            int status);
+
+/**
+ * Set a response header (replaces existing header with same name).
+ */
+WASM_EXPORT void worker_response_set_header(worker_response_t *res,
+                                            const char *name,
+                                            const char *value);
+
+/**
+ * Set the response body from raw bytes.
+ */
+WASM_EXPORT void worker_response_set_body(worker_response_t *res,
+                                          const char *body, size_t len);
+
+/**
+ * Convenience: set status + text/plain body.
+ */
+WASM_EXPORT void worker_response_set_text(worker_response_t *res,
+                                          int status, const char *text);
+
+/**
+ * Convenience: set status + application/json body from a json_value_t.
+ */
+WASM_EXPORT void worker_response_set_json(worker_response_t *res,
+                                          int status, json_value_t *json);
+
+/** Get response status code. */
+WASM_EXPORT int worker_response_get_status(worker_response_t *res);
+
+/**
+ * Look up a response header by name (case-insensitive).
+ * @return Header value or NULL if not found
+ */
+WASM_EXPORT const char *worker_response_get_header(worker_response_t *res,
+                                                   const char *name);
+
+/** Get the number of response headers. */
+WASM_EXPORT int worker_response_get_header_count(worker_response_t *res);
+
+/** Get the name of the header at the given index. */
+WASM_EXPORT const char *worker_response_get_header_name(worker_response_t *res,
+                                                        int index);
+
+/** Get the value of the header at the given index. */
+WASM_EXPORT const char *worker_response_get_header_value(worker_response_t *res,
+                                                         int index);
+
+/** Get response body pointer (NULL if empty). */
+WASM_EXPORT const char *worker_response_get_body(worker_response_t *res);
+
+/** Get response body length. */
+WASM_EXPORT size_t worker_response_get_body_len(worker_response_t *res);
+
+/** Destroy a Worker response and free its resources. */
+WASM_EXPORT void worker_response_destroy(worker_response_t *res);
+
+/* --- Fetch Handler --- */
+
+/**
+ * Route a Worker request through a router_t and return the response.
+ *
+ * Creates temporary library-level request/response objects, dispatches
+ * through the router (including middleware), and converts the result
+ * back to a worker_response_t.
+ *
+ * @param req    Incoming Worker request
+ * @param router Router with registered routes/middleware
+ * @return Worker response (caller must destroy), or NULL on error
+ */
+WASM_EXPORT worker_response_t *worker_handle_fetch(worker_request_t *req,
+                                                   router_t *router);
+
+/* --- Worker KV Store (in-memory) --- */
+
+/**
+ * Create an in-memory key-value store.
+ * Suitable for caching within a Worker invocation.
+ */
+WASM_EXPORT worker_kv_t *worker_kv_create(void);
+
+/**
+ * Store a key-value pair (overwrites existing key).
+ * @return 0 on success, -1 on failure
+ */
+WASM_EXPORT int worker_kv_put(worker_kv_t *kv,
+                              const char *key, const char *value);
+
+/**
+ * Retrieve a value by key.
+ * @return Value string or NULL if not found
+ */
+WASM_EXPORT const char *worker_kv_get(worker_kv_t *kv, const char *key);
+
+/**
+ * Delete a key-value pair.
+ * @return 0 on success, -1 if key not found
+ */
+WASM_EXPORT int worker_kv_delete(worker_kv_t *kv, const char *key);
+
+/** Destroy the KV store and free all entries. */
+WASM_EXPORT void worker_kv_destroy(worker_kv_t *kv);
+
+/* --- Worker Runtime Info --- */
+
+/** Get the Worker runtime version string (e.g. "weblib-worker/1.0"). */
+WASM_EXPORT const char *worker_runtime_version(void);
+
+/** Check whether Worker runtime support is compiled in. */
+WASM_EXPORT bool worker_runtime_is_supported(void);
+
 #ifdef __cplusplus
 }
 #endif
