@@ -25,6 +25,26 @@
 #include <string.h>
 #include <ctype.h>
 
+/* Portable case-insensitive substring search (replaces POSIX strcasestr) */
+static const char *_ci_strstr(const char *haystack, const char *needle) {
+    if (!haystack || !needle) return NULL;
+    if (!*needle) return haystack;
+    size_t nlen = strlen(needle);
+    for (; *haystack; haystack++) {
+        bool match = true;
+        for (size_t i = 0; i < nlen; i++) {
+            if (!haystack[i] ||
+                tolower((unsigned char)haystack[i]) !=
+                tolower((unsigned char)needle[i])) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return haystack;
+    }
+    return NULL;
+}
+
 /* ===== Internal types ===== */
 
 #define D1_MAX_PARAMS       100
@@ -257,7 +277,7 @@ static worker_d1_result_t *_d1_exec_select(worker_d1_t *db, const char *sql,
     p = _skip_ws(p);
 
     /* Find "FROM" */
-    const char *from = strcasestr(p, "FROM");
+    const char *from = _ci_strstr(p, "FROM");
     if (!from) return NULL;
     from += 4;
 
@@ -268,7 +288,7 @@ static worker_d1_result_t *_d1_exec_select(worker_d1_t *db, const char *sql,
     if (!t) return NULL;
 
     /* Check for WHERE clause */
-    const char *where = strcasestr(sql, "WHERE");
+    const char *where = _ci_strstr(sql, "WHERE");
     int where_col = -1;
     if (where && param_count > 0) {
         where += 5;
@@ -321,7 +341,7 @@ static worker_d1_result_t *_d1_exec_delete(worker_d1_t *db, const char *sql,
     d1_table_t *t = _d1_find_table(db, tname);
     if (!t) return NULL;
 
-    const char *where = strcasestr(sql, "WHERE");
+    const char *where = _ci_strstr(sql, "WHERE");
     int where_col = -1;
     if (where && param_count > 0) {
         where += 5;
