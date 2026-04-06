@@ -29,7 +29,7 @@ elseif(APPLE)
     set(PLATFORM_LIBS pthread)
 endif()
 
-# Library source files — WASM-safe subset (pure logic, no OS I/O)
+# Library source files -- WASM-safe subset (pure logic, no OS I/O)
 set(WEBLIB_SOURCES_WASM_SAFE
     src/http_server.c
     src/router.c
@@ -59,7 +59,7 @@ set(WEBLIB_SOURCES_WASM_SAFE
     src/wasm_runtime.c
 )
 
-# OS-dependent modules (sockets, real benchmarking) — excluded from WASM builds
+# OS-dependent modules (sockets, real benchmarking) -- excluded from WASM builds
 set(WEBLIB_SOURCES_NATIVE_ONLY
     src/websocket.c
     src/async_websocket.c

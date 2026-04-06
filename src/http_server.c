@@ -14,9 +14,9 @@ const char *weblib_kamran_signature(void) {
 #ifdef __EMSCRIPTEN__
 /*
  * Under Emscripten the HTTP server, sockets, signals, and threading
- * are unavailable.  Only weblib_kamran_signature() is provided above.
- * All server / request / response functions are intentionally omitted;
- * use the wasm_* API surface instead (see src/wasm_runtime.c).
+ * are unavailable.  Only weblib_kamran_signature() (defined above)
+ * is compiled for WASM; use the wasm_* API surface instead
+ * (see src/wasm_runtime.c).
  */
 #else
 /* ===== Native implementation (sockets, threads, signals) ===== */
