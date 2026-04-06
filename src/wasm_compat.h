@@ -25,21 +25,24 @@
 
 #ifdef __EMSCRIPTEN__
 
+#include <time.h>   /* struct timespec (used by pthread_cond_timedwait stubs) */
+
 /* WASM: single-threaded environment; all synchronization is no-op */
 
 typedef int pthread_mutex_t;
 typedef int pthread_cond_t;
 
-#define pthread_mutex_init(m, a)    (0)
-#define pthread_mutex_lock(m)       (0)
-#define pthread_mutex_unlock(m)     (0)
-#define pthread_mutex_destroy(m)    (0)
+#define pthread_mutex_init(m, a)        (0)
+#define pthread_mutex_lock(m)           (0)
+#define pthread_mutex_unlock(m)         (0)
+#define pthread_mutex_destroy(m)        (0)
 
-#define pthread_cond_init(c, a)     (0)
-#define pthread_cond_wait(c, m)     (0)
-#define pthread_cond_signal(c)      (0)
-#define pthread_cond_broadcast(c)   (0)
-#define pthread_cond_destroy(c)     (0)
+#define pthread_cond_init(c, a)         (0)
+#define pthread_cond_wait(c, m)         (0)
+#define pthread_cond_timedwait(c, m, t) (0)
+#define pthread_cond_signal(c)          (0)
+#define pthread_cond_broadcast(c)       (0)
+#define pthread_cond_destroy(c)         (0)
 
 #endif /* __EMSCRIPTEN__ */
 

@@ -29,14 +29,12 @@ elseif(APPLE)
     set(PLATFORM_LIBS pthread)
 endif()
 
-# Library source files
-set(WEBLIB_SOURCES
+# Library source files — WASM-safe subset (pure logic, no OS I/O)
+set(WEBLIB_SOURCES_WASM_SAFE
     src/http_server.c
     src/router.c
     src/json.c
     src/event_loop.c
-    src/websocket.c
-    src/async_websocket.c
     src/body_parser.c
     src/cookie.c
     src/middleware_cors.c
@@ -55,12 +53,24 @@ set(WEBLIB_SOURCES
     src/cache.c
     src/middleware_metrics.c
     src/compression.c
-    src/benchmark.c
     src/env_config.c
     src/security_utils.c
     src/middleware_security_headers.c
     src/wasm_runtime.c
 )
+
+# OS-dependent modules (sockets, real benchmarking) — excluded from WASM builds
+set(WEBLIB_SOURCES_NATIVE_ONLY
+    src/websocket.c
+    src/async_websocket.c
+    src/benchmark.c
+)
+
+if(EMSCRIPTEN)
+    set(WEBLIB_SOURCES ${WEBLIB_SOURCES_WASM_SAFE})
+else()
+    set(WEBLIB_SOURCES ${WEBLIB_SOURCES_WASM_SAFE} ${WEBLIB_SOURCES_NATIVE_ONLY})
+endif()
 
 # Create static library
 add_library(weblib STATIC ${WEBLIB_SOURCES})

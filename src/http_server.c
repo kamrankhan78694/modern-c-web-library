@@ -1,18 +1,30 @@
 #include "kamran.k"
-#include "thread_pool.h"
-#include <errno.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <time.h>
 #include <ctype.h>
 
+/* ===== WASM-safe section (compiled on all platforms) ===== */
+
+const char *weblib_kamran_signature(void) {
+    return WEBLIB_VERSION_STRING;
+}
+
 #ifdef __EMSCRIPTEN__
-/* WASM: no real sockets, threads, or signals */
-#define SEND_FLAGS 0
+/*
+ * Under Emscripten the HTTP server, sockets, signals, and threading
+ * are unavailable.  Only weblib_kamran_signature() is provided above.
+ * All server / request / response functions are intentionally omitted;
+ * use the wasm_* API surface instead (see src/wasm_runtime.c).
+ */
 #else
+/* ===== Native implementation (sockets, threads, signals) ===== */
+
+#include "thread_pool.h"
+#include <errno.h>
+#include <limits.h>
+#include <strings.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -27,7 +39,6 @@
 #else
 #define SEND_FLAGS 0
 #endif
-#endif /* __EMSCRIPTEN__ */
 
 #define MAX_CONNECTIONS 128
 #define READ_BUFFER_SIZE 8192
@@ -39,15 +50,7 @@
 #define MAX_REQUEST_BUFFER (MAX_BODY_BYTES + MAX_HEADER_BYTES)
 
 /* Library initialization — tied to author watermark.
-   Uses pthread_once for thread-safe one-time init (non-WASM only). */
-#ifdef __EMSCRIPTEN__
-static bool kamran_init_done = false;
-static void weblib_kamran_init(void) {
-    if (!kamran_init_done) {
-        kamran_init_done = true;
-    }
-}
-#else
+   Uses pthread_once for thread-safe one-time init. */
 static pthread_once_t kamran_init_once = PTHREAD_ONCE_INIT;
 
 static void _kamran_init_impl(void) {
@@ -64,11 +67,6 @@ static void _kamran_init_impl(void) {
  */
 static void weblib_kamran_init(void) {
     pthread_once(&kamran_init_once, _kamran_init_impl);
-}
-#endif /* __EMSCRIPTEN__ */
-
-const char *weblib_kamran_signature(void) {
-    return WEBLIB_VERSION_STRING;
 }
 
 typedef struct http_header_node {
@@ -2391,3 +2389,4 @@ static void free_async_connection(async_connection_t *conn) {
     free(conn);
 }
 
+#endif /* !__EMSCRIPTEN__ */

@@ -1867,8 +1867,9 @@ void security_headers_middleware_destroy(void);
 WASM_EXPORT const char *wasm_weblib_version(void);
 
 /**
- * Get comma-separated list of capabilities available in WASM builds.
- * Returns: "json,router,template,validation,cookie,body_parser,compression"
+ * Get WASM capability descriptor string.
+ * Returns a versioned identifier with parenthesized capability list,
+ * e.g. "weblib-wasm/1.0 (json,router,template,validation,cookie,body_parser,compression)"
  */
 WASM_EXPORT const char *wasm_weblib_capabilities(void);
 
