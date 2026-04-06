@@ -13,7 +13,11 @@ else()
 endif()
 
 # Platform-specific settings
-if(WIN32)
+if(EMSCRIPTEN)
+    # WebAssembly (Emscripten) settings
+    set(PLATFORM_LIBS "")
+    add_compile_options(-sWASM=1)
+elseif(WIN32)
     # Windows-specific settings
     add_definitions(-D_WIN32_WINNT=0x0600)
     set(PLATFORM_LIBS ws2_32)
@@ -55,6 +59,7 @@ set(WEBLIB_SOURCES
     src/env_config.c
     src/security_utils.c
     src/middleware_security_headers.c
+    src/wasm_runtime.c
 )
 
 # Create static library
@@ -66,14 +71,16 @@ target_include_directories(weblib
 )
 target_link_libraries(weblib ${PLATFORM_LIBS})
 
-# Create shared library (optional)
-add_library(weblib_shared SHARED ${WEBLIB_SOURCES})
-target_include_directories(weblib_shared
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-           $<INSTALL_INTERFACE:include>
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-target_link_libraries(weblib_shared ${PLATFORM_LIBS})
+if(NOT EMSCRIPTEN)
+    # Create shared library (not supported for WASM)
+    add_library(weblib_shared SHARED ${WEBLIB_SOURCES})
+    target_include_directories(weblib_shared
+        PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+               $<INSTALL_INTERFACE:include>
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(weblib_shared ${PLATFORM_LIBS})
+endif()
 
 # Build examples
 option(BUILD_EXAMPLES "Build example programs" ON)
@@ -89,10 +96,17 @@ if(BUILD_TESTS)
 endif()
 
 # Installation
-install(TARGETS weblib weblib_shared
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-)
+if(EMSCRIPTEN)
+    install(TARGETS weblib
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+    )
+else()
+    install(TARGETS weblib weblib_shared
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+    )
+endif()
 
 install(FILES include/kamran.k include/db_pool.h DESTINATION include)
 

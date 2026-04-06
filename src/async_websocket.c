@@ -1,10 +1,12 @@
 #include "kamran.k"
 #include <stdlib.h>
 #include <string.h>
+#ifndef __EMSCRIPTEN__
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
+#endif
 
 /* Constants */
 #define ASYNC_WS_MAX_CONNECTIONS 1024

@@ -4,7 +4,16 @@
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
+#ifndef __EMSCRIPTEN__
 #include <pthread.h>
+#else
+/* WASM: single-threaded; no-op mutex stubs */
+typedef int pthread_mutex_t;
+#define pthread_mutex_init(m, a) (0)
+#define pthread_mutex_lock(m) (0)
+#define pthread_mutex_unlock(m) (0)
+#define pthread_mutex_destroy(m) (0)
+#endif
 
 #define MAX_SESSIONS 1024
 #define SESSION_ID_LENGTH 32

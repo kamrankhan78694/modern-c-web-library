@@ -10,9 +10,46 @@
  */
 
 #include "thread_pool.h"
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef __EMSCRIPTEN__
+/*
+ * WASM stub: Single-threaded environment — work is executed synchronously
+ * when submitted.  No real threads are created.
+ */
+
+struct thread_pool {
+    bool shutdown;
+};
+
+thread_pool_t *thread_pool_create(int thread_count, int queue_size) {
+    (void)thread_count;
+    (void)queue_size;
+    thread_pool_t *pool = (thread_pool_t *)calloc(1, sizeof(thread_pool_t));
+    return pool;
+}
+
+int thread_pool_submit(thread_pool_t *pool, thread_pool_work_fn_t work_fn, void *arg) {
+    if (!pool || !work_fn || pool->shutdown) return -1;
+    work_fn(arg); /* Execute synchronously */
+    return 0;
+}
+
+void thread_pool_destroy(thread_pool_t *pool) {
+    if (!pool) return;
+    pool->shutdown = true;
+    free(pool);
+}
+
+size_t thread_pool_pending(thread_pool_t *pool) {
+    (void)pool;
+    return 0;
+}
+
+#else /* !__EMSCRIPTEN__ */
+
+#include <pthread.h>
 
 /* Work item in the queue */
 typedef struct {
@@ -240,3 +277,5 @@ size_t thread_pool_pending(thread_pool_t *pool) {
 
     return count;
 }
+
+#endif /* __EMSCRIPTEN__ */

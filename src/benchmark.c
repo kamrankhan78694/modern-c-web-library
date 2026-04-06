@@ -15,12 +15,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <float.h>
-#include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#ifndef __EMSCRIPTEN__
+#include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#endif
 #include "kamran.k"
 
 /* ============================================================================

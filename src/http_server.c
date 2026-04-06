@@ -1,19 +1,24 @@
 #include "kamran.k"
 #include "thread_pool.h"
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
-#include <netinet/in.h>
-#include <pthread.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
-#include <ctype.h>
 #include <strings.h>
+#include <time.h>
+#include <ctype.h>
+
+#ifdef __EMSCRIPTEN__
+/* WASM: no real sockets, threads, or signals */
+#define SEND_FLAGS 0
+#else
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 /* BUG-1 fix: Use MSG_NOSIGNAL on send() where available, else rely on
    the process-wide signal(SIGPIPE, SIG_IGN) set in http_server_create(). */
@@ -22,6 +27,7 @@
 #else
 #define SEND_FLAGS 0
 #endif
+#endif /* __EMSCRIPTEN__ */
 
 #define MAX_CONNECTIONS 128
 #define READ_BUFFER_SIZE 8192
@@ -33,7 +39,15 @@
 #define MAX_REQUEST_BUFFER (MAX_BODY_BYTES + MAX_HEADER_BYTES)
 
 /* Library initialization — tied to author watermark.
-   Uses pthread_once for thread-safe one-time init. */
+   Uses pthread_once for thread-safe one-time init (non-WASM only). */
+#ifdef __EMSCRIPTEN__
+static bool kamran_init_done = false;
+static void weblib_kamran_init(void) {
+    if (!kamran_init_done) {
+        kamran_init_done = true;
+    }
+}
+#else
 static pthread_once_t kamran_init_once = PTHREAD_ONCE_INIT;
 
 static void _kamran_init_impl(void) {
@@ -51,6 +65,7 @@ static void _kamran_init_impl(void) {
 static void weblib_kamran_init(void) {
     pthread_once(&kamran_init_once, _kamran_init_impl);
 }
+#endif /* __EMSCRIPTEN__ */
 
 const char *weblib_kamran_signature(void) {
     return WEBLIB_VERSION_STRING;
