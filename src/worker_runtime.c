@@ -26,7 +26,7 @@
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
-/*  Internal limits                                                    */
+/*  Internal helpers                                                   */
 /* ------------------------------------------------------------------ */
 
 #define WORKER_MAX_METHOD_LEN     16
@@ -36,6 +36,20 @@
 #define WORKER_MAX_HEADER_VALUE   4096
 #define WORKER_KV_MAX_ENTRIES     256
 #define WORKER_KV_MAX_KEY_LEN     256
+
+/*
+ * Case-insensitive string comparison (ASCII only).
+ * Returns true if a and b are equal ignoring case.
+ */
+static bool _header_name_eq(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? (*a + 32) : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? (*b + 32) : *b;
+        if (ca != cb) return false;
+        a++; b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
 
 /* ------------------------------------------------------------------ */
 /*  worker_request_t                                                   */
@@ -110,17 +124,7 @@ const char *worker_request_get_header(worker_request_t *req,
                                       const char *name) {
     if (!req || !name) return NULL;
     for (int i = 0; i < req->header_count; i++) {
-        /* Case-insensitive comparison */
-        const char *a = req->headers[i].name;
-        const char *b = name;
-        bool match = true;
-        while (*a && *b) {
-            char ca = (*a >= 'A' && *a <= 'Z') ? (*a + 32) : *a;
-            char cb = (*b >= 'A' && *b <= 'Z') ? (*b + 32) : *b;
-            if (ca != cb) { match = false; break; }
-            a++; b++;
-        }
-        if (match && *a == '\0' && *b == '\0')
+        if (_header_name_eq(req->headers[i].name, name))
             return req->headers[i].value;
     }
     return NULL;
@@ -177,16 +181,7 @@ void worker_response_set_header(worker_response_t *res,
 
     /* Replace existing header with same name (case-insensitive) */
     for (int i = 0; i < res->header_count; i++) {
-        const char *a = res->headers[i].name;
-        const char *b = name;
-        bool match = true;
-        while (*a && *b) {
-            char ca = (*a >= 'A' && *a <= 'Z') ? (*a + 32) : *a;
-            char cb = (*b >= 'A' && *b <= 'Z') ? (*b + 32) : *b;
-            if (ca != cb) { match = false; break; }
-            a++; b++;
-        }
-        if (match && *a == '\0' && *b == '\0') {
+        if (_header_name_eq(res->headers[i].name, name)) {
             snprintf(res->headers[i].value,
                      WORKER_MAX_HEADER_VALUE, "%s", value);
             return;
@@ -250,16 +245,7 @@ const char *worker_response_get_header(worker_response_t *res,
                                        const char *name) {
     if (!res || !name) return NULL;
     for (int i = 0; i < res->header_count; i++) {
-        const char *a = res->headers[i].name;
-        const char *b = name;
-        bool match = true;
-        while (*a && *b) {
-            char ca = (*a >= 'A' && *a <= 'Z') ? (*a + 32) : *a;
-            char cb = (*b >= 'A' && *b <= 'Z') ? (*b + 32) : *b;
-            if (ca != cb) { match = false; break; }
-            a++; b++;
-        }
-        if (match && *a == '\0' && *b == '\0')
+        if (_header_name_eq(res->headers[i].name, name))
             return res->headers[i].value;
     }
     return NULL;
@@ -354,18 +340,9 @@ worker_response_t *worker_handle_fetch(worker_request_t *req,
         lib_req.body_length = req->body_len;
     }
 
-    /* Copy headers into the library request */
+    /* Copy headers into the library request using the same linked-list
+     * layout shared by request and response header stores. */
     for (int i = 0; i < req->header_count; i++) {
-        http_response_set_header((http_response_t *)NULL, NULL, NULL); /* unused */
-        /* Use the public API to set headers on the request's opaque header map.
-         * The internal header_list_add is static in http_server.c, so we
-         * re-use http_response_set_header via a small trick: the request
-         * and response header stores are identical linked-list structures. */
-    }
-    /* Actually set request headers using the same linked-list layout */
-    for (int i = 0; i < req->header_count; i++) {
-        /* We use the response header setter which operates on the same
-         * void* headers linked-list type shared by request and response. */
         http_response_t tmp_res;
         memset(&tmp_res, 0, sizeof(tmp_res));
         tmp_res.headers = lib_req.headers;

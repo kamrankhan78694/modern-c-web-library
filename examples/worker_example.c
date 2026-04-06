@@ -85,8 +85,8 @@ worker_response_t *worker_fetch(const char *method, const char *url) {
 /* Exported cleanup — called on Worker shutdown. */
 WASM_EXPORT
 void worker_cleanup(void) {
-    if (g_kv)     { worker_kv_destroy(g_kv);     g_kv = NULL; }
-    if (g_router) { router_destroy(g_router);     g_router = NULL; }
+    if (g_kv) { worker_kv_destroy(g_kv); g_kv = NULL; }
+    if (g_router) { router_destroy(g_router); g_router = NULL; }
 }
 
 /* ===== Native local-test harness ===== */
