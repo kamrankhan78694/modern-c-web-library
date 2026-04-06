@@ -8,15 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#ifndef __EMSCRIPTEN__
-#include <pthread.h>
+#ifdef __EMSCRIPTEN__
+#include "wasm_compat.h"
 #else
-/* WASM: single-threaded; no-op mutex stubs */
-typedef int pthread_mutex_t;
-#define pthread_mutex_init(m, a) (0)
-#define pthread_mutex_lock(m) (0)
-#define pthread_mutex_unlock(m) (0)
-#define pthread_mutex_destroy(m) (0)
+#include <pthread.h>
 #endif
 #include <stdio.h>
 #include "kamran.k"

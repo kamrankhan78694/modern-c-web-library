@@ -15,19 +15,14 @@
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
-#elif !defined(__EMSCRIPTEN__)
+#elif defined(__EMSCRIPTEN__)
+    #include "wasm_compat.h"
+#else
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
     #include <unistd.h>
     #include <pthread.h>
-#else
-    /* WASM: single-threaded; no-op mutex stubs */
-    typedef int pthread_mutex_t;
-    #define pthread_mutex_init(m, a) (0)
-    #define pthread_mutex_lock(m) (0)
-    #define pthread_mutex_unlock(m) (0)
-    #define pthread_mutex_destroy(m) (0)
 #endif
 
 /* Configuration */

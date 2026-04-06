@@ -251,11 +251,11 @@ static void test_wasm_free(void) {
 
 static void test_wasm_export_macro(void) {
     TEST("WASM_EXPORT macro defined");
-    /* WASM_EXPORT should be defined (to EMSCRIPTEN_KEEPALIVE or empty) */
-#if defined(WEBLIB_WASM)
-    ASSERT(WEBLIB_WASM == 0 || WEBLIB_WASM == 1);
+    /* WEBLIB_WASM is always defined: 1 under Emscripten, 0 otherwise */
+#if WEBLIB_WASM
+    ASSERT(WEBLIB_WASM == 1);
 #else
-    ASSERT(0 && "WEBLIB_WASM not defined");
+    ASSERT(WEBLIB_WASM == 0);
 #endif
     PASS();
 }

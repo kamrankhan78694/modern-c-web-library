@@ -29,6 +29,10 @@
 
 /* ===== WASM Capability Query ===== */
 
+/*
+ * Keep WASM_CAPABILITY_STRING in sync with the caps[] array in
+ * wasm_weblib_has_capability() below.
+ */
 static const char *WASM_CAPABILITY_STRING =
     "weblib-wasm/1.0 (json,router,template,validation,cookie,body_parser,compression)";
 

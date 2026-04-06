@@ -1,22 +1,11 @@
 #include "db_pool.h"
 #include <stdlib.h>
 #include <string.h>
-#ifndef __EMSCRIPTEN__
+#ifdef __EMSCRIPTEN__
+#include "wasm_compat.h"
+#else
 #include <pthread.h>
 #include <unistd.h>
-#else
-/* WASM: single-threaded; no-op mutex/cond stubs */
-typedef int pthread_mutex_t;
-typedef int pthread_cond_t;
-#define pthread_mutex_init(m, a) (0)
-#define pthread_mutex_lock(m) (0)
-#define pthread_mutex_unlock(m) (0)
-#define pthread_mutex_destroy(m) (0)
-#define pthread_cond_init(c, a) (0)
-#define pthread_cond_wait(c, m) (0)
-#define pthread_cond_signal(c) (0)
-#define pthread_cond_broadcast(c) (0)
-#define pthread_cond_destroy(c) (0)
 #endif
 
 /* Internal pool structure */
