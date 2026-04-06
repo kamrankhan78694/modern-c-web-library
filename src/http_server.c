@@ -1,19 +1,36 @@
 #include "kamran.k"
-#include "thread_pool.h"
-#include <errno.h>
-#include <fcntl.h>
-#include <limits.h>
-#include <netinet/in.h>
-#include <pthread.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <time.h>
-#include <unistd.h>
 #include <ctype.h>
+
+/* ===== WASM-safe section (compiled on all platforms) ===== */
+
+const char *weblib_kamran_signature(void) {
+    return WEBLIB_VERSION_STRING;
+}
+
+#ifdef __EMSCRIPTEN__
+/*
+ * Under Emscripten the HTTP server, sockets, signals, and threading
+ * are unavailable.  Only weblib_kamran_signature() (defined above)
+ * is compiled for WASM; use the wasm_* API surface instead
+ * (see src/wasm_runtime.c).
+ */
+#else
+/* ===== Native implementation (sockets, threads, signals) ===== */
+
+#include "thread_pool.h"
+#include <errno.h>
+#include <limits.h>
 #include <strings.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 /* BUG-1 fix: Use MSG_NOSIGNAL on send() where available, else rely on
    the process-wide signal(SIGPIPE, SIG_IGN) set in http_server_create(). */
@@ -50,10 +67,6 @@ static void _kamran_init_impl(void) {
  */
 static void weblib_kamran_init(void) {
     pthread_once(&kamran_init_once, _kamran_init_impl);
-}
-
-const char *weblib_kamran_signature(void) {
-    return WEBLIB_VERSION_STRING;
 }
 
 typedef struct http_header_node {
@@ -2376,3 +2389,4 @@ static void free_async_connection(async_connection_t *conn) {
     free(conn);
 }
 
+#endif /* !__EMSCRIPTEN__ */

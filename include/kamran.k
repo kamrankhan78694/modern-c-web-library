@@ -10,6 +10,16 @@ extern "C" {
 #include <stdbool.h>
 #include <stdio.h>
 
+/* ===== WebAssembly Support ===== */
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#define WASM_EXPORT EMSCRIPTEN_KEEPALIVE
+#define WEBLIB_WASM 1
+#else
+#define WASM_EXPORT
+#define WEBLIB_WASM 0
+#endif
+
 /* ===== Library Identity ===== */
 #define WEBLIB_AUTHOR_KAMRAN "kamran"
 #define WEBLIB_VERSION_STRING "weblib/1.0 (author:" WEBLIB_AUTHOR_KAMRAN ")"
@@ -1848,6 +1858,71 @@ middleware_fn_t security_headers_middleware_create(
  * Safe to call when the middleware was never created (no-op).
  */
 void security_headers_middleware_destroy(void);
+
+/* ===== WebAssembly Runtime API ===== */
+
+/**
+ * Get library version string (WASM-exported).
+ */
+WASM_EXPORT const char *wasm_weblib_version(void);
+
+/**
+ * Get WASM capability descriptor string.
+ * Returns a versioned identifier with parenthesized capability list,
+ * e.g. "weblib-wasm/1.0 (json,router,template,validation,cookie,body_parser,compression)"
+ */
+WASM_EXPORT const char *wasm_weblib_capabilities(void);
+
+/**
+ * Check whether a named capability is available in WASM builds.
+ * @param name  Capability name (e.g. "json", "router")
+ * @return true if the capability is available
+ */
+WASM_EXPORT bool wasm_weblib_has_capability(const char *name);
+
+/* WASM JSON wrappers */
+WASM_EXPORT json_value_t *wasm_json_parse(const char *input);
+WASM_EXPORT char         *wasm_json_stringify(json_value_t *value);
+WASM_EXPORT json_value_t *wasm_json_object_create(void);
+WASM_EXPORT json_value_t *wasm_json_array_create(void);
+WASM_EXPORT json_value_t *wasm_json_string_create(const char *value);
+WASM_EXPORT json_value_t *wasm_json_number_create(double value);
+WASM_EXPORT json_value_t *wasm_json_bool_create(bool value);
+WASM_EXPORT json_value_t *wasm_json_null_create(void);
+WASM_EXPORT void          wasm_json_object_set(json_value_t *obj,
+                                               const char *key,
+                                               json_value_t *value);
+WASM_EXPORT json_value_t *wasm_json_object_get(json_value_t *obj,
+                                               const char *key);
+WASM_EXPORT void          wasm_json_array_push(json_value_t *arr,
+                                               json_value_t *value);
+WASM_EXPORT void          wasm_json_free(json_value_t *value);
+
+/* WASM Router wrappers */
+WASM_EXPORT router_t *wasm_router_create(void);
+WASM_EXPORT void      wasm_router_destroy(router_t *router);
+WASM_EXPORT int       wasm_router_add_route(router_t *router,
+                                            http_method_t method,
+                                            const char *path,
+                                            route_handler_t handler);
+
+/* WASM Input Validation wrappers */
+WASM_EXPORT bool wasm_validate_email(const char *email);
+WASM_EXPORT bool wasm_validate_integer(const char *str, int *out);
+WASM_EXPORT bool wasm_validate_string_length(const char *str,
+                                             size_t min, size_t max);
+
+/* WASM Template wrappers */
+WASM_EXPORT template_context_t *wasm_template_context_create(void);
+WASM_EXPORT void  wasm_template_context_set(template_context_t *ctx,
+                                            const char *name,
+                                            const char *value);
+WASM_EXPORT char *wasm_template_render(const char *tmpl,
+                                       template_context_t *ctx);
+WASM_EXPORT void  wasm_template_context_destroy(template_context_t *ctx);
+
+/* WASM Memory helper (free strings returned by wasm_json_stringify, etc.) */
+WASM_EXPORT void wasm_free(void *ptr);
 
 #ifdef __cplusplus
 }

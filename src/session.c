@@ -4,7 +4,11 @@
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
+#ifdef __EMSCRIPTEN__
+#include "wasm_compat.h"
+#else
 #include <pthread.h>
+#endif
 
 #define MAX_SESSIONS 1024
 #define SESSION_ID_LENGTH 32

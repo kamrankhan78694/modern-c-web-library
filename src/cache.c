@@ -11,7 +11,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef __EMSCRIPTEN__
+#include "wasm_compat.h"
+#else
 #include <pthread.h>
+#endif
 #include "kamran.k"
 
 /* Internal cache entry structure */

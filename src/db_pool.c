@@ -1,8 +1,12 @@
 #include "db_pool.h"
 #include <stdlib.h>
 #include <string.h>
+#ifdef __EMSCRIPTEN__
+#include "wasm_compat.h"
+#else
 #include <pthread.h>
 #include <unistd.h>
+#endif
 
 /* Internal pool structure */
 struct db_pool {

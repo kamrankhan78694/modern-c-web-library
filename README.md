@@ -642,6 +642,74 @@ cmake .. -G "MinGW Makefiles"
 mingw32-make
 ```
 
+### WebAssembly (Emscripten)
+
+The library supports compilation to WebAssembly using [Emscripten](https://emscripten.org/).
+WASM-safe components (JSON, router, template engine, input validation, cookies, body
+parser, compression) are fully functional in browser and WASM runtime environments.
+
+#### Prerequisites
+
+Install the Emscripten SDK:
+
+```bash
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk && ./emsdk install latest && ./emsdk activate latest
+source ./emsdk_env.sh
+```
+
+#### Building for WASM
+
+```bash
+mkdir build-wasm && cd build-wasm
+emcmake cmake ..
+emmake make
+```
+
+This produces a static library (`libweblib.a`) compiled to WASM. Link it into
+your Emscripten project:
+
+```bash
+emcc -o app.js your_app.c -I../include -L. -lweblib \
+     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap -sWASM=1
+```
+
+#### WASM-Safe API
+
+All WASM-exported functions use the `wasm_` prefix:
+
+```c
+#include "kamran.k"
+
+// Query capabilities
+const char *ver  = wasm_weblib_version();
+bool has_json    = wasm_weblib_has_capability("json");
+
+// JSON (parse, build, stringify)
+json_value_t *obj = wasm_json_parse("{\"key\":\"value\"}");
+char *str = wasm_json_stringify(obj);
+wasm_free(str);
+wasm_json_free(obj);
+
+// Router
+router_t *r = wasm_router_create();
+wasm_router_add_route(r, HTTP_GET, "/api", handler);
+wasm_router_destroy(r);
+
+// Input validation
+wasm_validate_email("user@example.com");   // true
+int n; wasm_validate_integer("42", &n);    // true, n=42
+
+// Template rendering
+template_context_t *ctx = wasm_template_context_create();
+wasm_template_context_set(ctx, "name", "World");
+char *out = wasm_template_render("Hello {{name}}!", ctx);
+wasm_free(out);
+wasm_template_context_destroy(ctx);
+```
+
+See `examples/wasm_example.c` for a complete demonstration.
+
 ## Testing
 
 ### Using Docker (Recommended)
