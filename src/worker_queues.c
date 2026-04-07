@@ -200,7 +200,15 @@ worker_queue_batch_t *worker_queue_consume(worker_queue_t *q, int max_batch,
     }
 
     batch->count = fetched;
-    batch->queue_name = q->queue_name ? strdup(q->queue_name) : NULL;
+    if (q->queue_name) {
+        batch->queue_name = strdup(q->queue_name);
+        if (!batch->queue_name) {
+            worker_queue_batch_destroy(batch);
+            return NULL;
+        }
+    } else {
+        batch->queue_name = NULL;
+    }
     return batch;
 }
 
