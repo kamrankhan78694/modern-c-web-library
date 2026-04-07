@@ -99,6 +99,11 @@ int worker_queue_send(worker_queue_t *q, const char *body, size_t body_len) {
     e->body_len = body_len;
     e->timestamp = time(NULL);
     e->id = _queue_gen_id(q->total_sent);
+    if (!e->id) {
+        free(e->body);
+        memset(e, 0, sizeof(queue_entry_t));
+        return -1;
+    }
     e->attempts = 0;
     e->acked = false;
 
@@ -195,7 +200,7 @@ worker_queue_batch_t *worker_queue_consume(worker_queue_t *q, int max_batch,
     }
 
     batch->count = fetched;
-    batch->queue_name = q->queue_name;
+    batch->queue_name = q->queue_name ? strdup(q->queue_name) : NULL;
     return batch;
 }
 
@@ -205,5 +210,6 @@ void worker_queue_batch_destroy(worker_queue_batch_t *batch) {
         worker_queue_message_destroy(batch->messages[i]);
     }
     free(batch->messages);
+    free((char *)batch->queue_name);
     free(batch);
 }

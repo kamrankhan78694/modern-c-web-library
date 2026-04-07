@@ -169,12 +169,20 @@ void worker_d1_stmt_destroy(worker_d1_stmt_t *stmt) {
 
 int worker_d1_stmt_bind(worker_d1_stmt_t *stmt, int index,
                         const char *value) {
+    char *new_value = NULL;
+
     if (!stmt) return -1;
     if (index < 1 || index > D1_MAX_PARAMS) return -1;
 
     int idx = index - 1;  /* 1-based to 0-based */
+
+    if (value) {
+        new_value = strdup(value);
+        if (!new_value) return -1;
+    }
+
     free(stmt->params[idx]);
-    stmt->params[idx] = value ? strdup(value) : NULL;
+    stmt->params[idx] = new_value;
     if (idx >= stmt->param_count) stmt->param_count = idx + 1;
     return 0;
 }

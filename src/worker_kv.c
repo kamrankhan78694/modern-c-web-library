@@ -71,22 +71,6 @@ const char *worker_kv_get_namespace(const worker_kv_t *kv) {
 
 /* ===== Internal helpers ===== */
 
-static int _kv_find(const worker_kv_t *kv, const char *key) {
-    if (!kv || !key) return -1;
-    time_t now = time(NULL);
-    for (int i = 0; i < kv->count; i++) {
-        if (strcmp(kv->entries[i].key, key) == 0) {
-            /* Check expiration */
-            if (kv->entries[i].expiration > 0 &&
-                kv->entries[i].expiration <= now) {
-                return -1;  /* expired */
-            }
-            return i;
-        }
-    }
-    return -1;
-}
-
 static void _kv_remove_at(worker_kv_t *kv, int idx) {
     free(kv->entries[idx].key);
     free(kv->entries[idx].value);
@@ -97,6 +81,26 @@ static void _kv_remove_at(worker_kv_t *kv, int idx) {
     }
     kv->count--;
     memset(&kv->entries[kv->count], 0, sizeof(kv_entry_t));
+}
+
+static int _kv_is_expired(const kv_entry_t *entry, time_t now) {
+    return entry && entry->expiration > 0 && entry->expiration <= now;
+}
+
+static int _kv_find(worker_kv_t *kv, const char *key) {
+    if (!kv || !key) return -1;
+    time_t now = time(NULL);
+    for (int i = 0; i < kv->count; ) {
+        if (_kv_is_expired(&kv->entries[i], now)) {
+            _kv_remove_at(kv, i);
+            continue;
+        }
+        if (strcmp(kv->entries[i].key, key) == 0) {
+            return i;
+        }
+        i++;
+    }
+    return -1;
 }
 
 /* ===== KV Get ===== */
@@ -131,6 +135,20 @@ int worker_kv_put(worker_kv_t *kv, const char *key, const char *value,
     size_t vlen = strlen(value);
     if (vlen > WORKER_KV_MAX_VALUE_LEN) return -1;
 
+    /* Enforce metadata size limit per Cloudflare docs (1024 B) */
+    if (opts && opts->metadata &&
+        strlen(opts->metadata) > WORKER_KV_MAX_META_LEN) return -1;
+
+    /* Pre-allocate all buffers before modifying any entry state */
+    char *new_value = strdup(value);
+    if (!new_value) return -1;
+
+    char *new_metadata = NULL;
+    if (opts && opts->metadata) {
+        new_metadata = strdup(opts->metadata);
+        if (!new_metadata) { free(new_value); return -1; }
+    }
+
     /* Check if key already exists — update in place */
     int idx = -1;
     for (int i = 0; i < kv->count; i++) {
@@ -140,22 +158,35 @@ int worker_kv_put(worker_kv_t *kv, const char *key, const char *value,
         }
     }
 
-    if (idx < 0) {
-        /* New entry */
-        if (kv->count >= WORKER_KV_MAX_ENTRIES) return -1;
+    bool is_new = (idx < 0);
+    char *new_key = NULL;
+    if (is_new) {
+        if (kv->count >= WORKER_KV_MAX_ENTRIES) {
+            free(new_value);
+            free(new_metadata);
+            return -1;
+        }
+        new_key = strdup(key);
+        if (!new_key) {
+            free(new_value);
+            free(new_metadata);
+            return -1;
+        }
         idx = kv->count;
-        kv->entries[idx].key = strdup(key);
-        if (!kv->entries[idx].key) return -1;
+    }
+
+    /* All allocations succeeded — commit changes */
+    if (is_new) {
+        kv->entries[idx].key = new_key;
         kv->count++;
     } else {
-        /* Replace value/metadata */
         free(kv->entries[idx].value);
         free(kv->entries[idx].metadata);
     }
 
-    kv->entries[idx].value = strdup(value);
+    kv->entries[idx].value = new_value;
     kv->entries[idx].value_len = vlen;
-    kv->entries[idx].metadata = NULL;
+    kv->entries[idx].metadata = new_metadata;
     kv->entries[idx].expiration = 0;
 
     if (opts) {
@@ -163,9 +194,6 @@ int worker_kv_put(worker_kv_t *kv, const char *key, const char *value,
             kv->entries[idx].expiration = time(NULL) + opts->expiration_ttl;
         } else if (opts->expiration > 0) {
             kv->entries[idx].expiration = opts->expiration;
-        }
-        if (opts->metadata) {
-            kv->entries[idx].metadata = strdup(opts->metadata);
         }
     }
 
@@ -207,11 +235,11 @@ worker_kv_list_result_t *worker_kv_list(worker_kv_t *kv,
     time_t now = time(NULL);
     int found = 0;
     int skipped = 0;
+    bool has_more = false;
 
-    for (int i = 0; i < kv->count && found < limit; i++) {
+    for (int i = 0; i < kv->count; i++) {
         /* Skip expired */
-        if (kv->entries[i].expiration > 0 &&
-            kv->entries[i].expiration <= now) continue;
+        if (_kv_is_expired(&kv->entries[i], now)) continue;
 
         /* Prefix filter */
         if (prefix && strncmp(kv->entries[i].key, prefix,
@@ -219,13 +247,18 @@ worker_kv_list_result_t *worker_kv_list(worker_kv_t *kv,
 
         if (skipped < cursor_start) { skipped++; continue; }
 
-        result->keys[found] = strdup(kv->entries[i].key);
-        found++;
+        if (found < limit) {
+            result->keys[found] = strdup(kv->entries[i].key);
+            found++;
+        } else {
+            has_more = true;
+            break;
+        }
     }
 
     result->count = found;
-    result->list_complete = (found < limit);
-    result->cursor = cursor_start + found;
+    result->list_complete = !has_more;
+    result->cursor = has_more ? (cursor_start + found) : 0;
 
     return result;
 }

@@ -310,20 +310,14 @@ worker_response_t *worker_handle_fetch(worker_request_t *req,
     if (!res) return NULL;
 
     if (_global_worker_router) {
-        /* In a real WASM deployment the JS glue layer would bridge
-         * this to router_route() via http_request_t/http_response_t.
-         * For the native simulation, we indicate the router is available
-         * and return a simple matched/not-found response based on the
-         * URL path.  This is a lightweight check—full middleware and
-         * parameter extraction require the native HTTP types. */
-        const char *url = worker_request_get_url(req);
-        if (url) {
-            worker_response_set_header(res, "X-Worker-Routed", "true");
-            worker_response_set_body_text(res, "Route matched");
-        } else {
-            res->status = 404;
-            worker_response_set_body_text(res, "Not Found");
-        }
+        /* The native simulation in this file does not inspect the URL
+         * path or consult the router's route table, so avoid claiming
+         * that a route was matched.  Report only that a router is
+         * configured for this runtime. */
+        worker_response_set_header(res, "X-Worker-Routed", "configured");
+        worker_response_set_body_text(
+            res,
+            "Router configured; native worker simulation does not perform route matching");
     } else {
         res->status = 503;
         worker_response_set_body_text(res, "No router or handler configured");

@@ -2160,8 +2160,10 @@ json_value_t *worker_d1_stmt_all(worker_d1_stmt_t *stmt);
 worker_d1_result_t *worker_d1_exec(worker_d1_t *db, const char *sql);
 
 /**
- * Execute a batch of prepared statements atomically.
- * Returns array of results.  On failure returns NULL and rolls back.
+ * Execute a batch of prepared statements in sequence.
+ * Returns an array of results on success.
+ * On failure returns NULL; statements executed before the failure are not
+ * guaranteed to be rolled back.
  */
 worker_d1_result_t **worker_d1_batch(worker_d1_t *db,
                                      worker_d1_stmt_t **stmts, int count,
@@ -2186,7 +2188,7 @@ typedef struct {
 typedef struct {
     worker_queue_message_t **messages;  /**< Array of message pointers. */
     int                      count;     /**< Number of messages in batch. */
-    const char              *queue_name;/**< Name of the source queue. */
+    char                    *queue_name;/**< Owned copy of the source queue name. */
 } worker_queue_batch_t;
 
 /** Create a queue handle. */

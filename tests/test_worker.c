@@ -178,9 +178,8 @@ static void test_worker_fetch_with_router(void) {
     worker_request_t *req = worker_request_create("GET", "https://example.com/hello");
     worker_response_t *res = worker_handle_fetch(req, NULL);
     ASSERT(res != NULL);
-    /* Router is set, URL is valid → 200 */
     ASSERT(worker_response_get_status(res) == 200);
-    ASSERT(strcmp(worker_response_get_header(res, "X-Worker-Routed"), "true") == 0);
+    ASSERT(strcmp(worker_response_get_header(res, "X-Worker-Routed"), "configured") == 0);
 
     worker_request_destroy(req);
     worker_response_destroy(res);

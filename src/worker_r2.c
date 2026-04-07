@@ -142,44 +142,79 @@ worker_r2_object_t *worker_r2_head(worker_r2_bucket_t *bucket,
 int worker_r2_put(worker_r2_bucket_t *bucket, const char *key,
                   const uint8_t *body, size_t body_len,
                   const worker_r2_put_options_t *opts) {
+    char *new_key = NULL;
+    uint8_t *new_body = NULL;
+    size_t new_size = 0;
+    char *new_content_type = NULL;
+    char *new_etag = NULL;
+    time_t new_uploaded;
+    int idx;
+    int is_new;
+
     if (!bucket || !key) return -1;
 
-    /* Find existing or allocate new slot */
-    int idx = _r2_find(bucket, key);
-    if (idx < 0) {
+    /* Find existing entry or reserve the next slot, but do not modify it
+     * until all allocations for the replacement object succeed. */
+    idx = _r2_find(bucket, key);
+    is_new = (idx < 0);
+    if (is_new) {
         if (bucket->count >= WORKER_R2_MAX_OBJECTS) return -1;
         idx = bucket->count;
-        bucket->objects[idx].key = strdup(key);
-        if (!bucket->objects[idx].key) return -1;
-        bucket->count++;
-    } else {
-        free(bucket->objects[idx].body);
-        free(bucket->objects[idx].content_type);
-        free(bucket->objects[idx].etag);
+        new_key = strdup(key);
+        if (!new_key) return -1;
     }
 
-    r2_entry_t *e = &bucket->objects[idx];
-    e->body = NULL;
-    e->size = 0;
-    e->content_type = NULL;
-    e->etag = NULL;
-
     if (body && body_len > 0) {
-        e->body = malloc(body_len);
-        if (!e->body) return -1;
-        memcpy(e->body, body, body_len);
-        e->size = body_len;
+        new_body = malloc(body_len);
+        if (!new_body) {
+            free(new_key);
+            return -1;
+        }
+        memcpy(new_body, body, body_len);
+        new_size = body_len;
 
         /* Generate ETag */
         char etag_buf[16];
         _r2_make_etag(etag_buf, sizeof(etag_buf), body, body_len);
-        e->etag = strdup(etag_buf);
+        new_etag = strdup(etag_buf);
+        if (!new_etag) {
+            free(new_body);
+            free(new_key);
+            return -1;
+        }
     }
 
     if (opts && opts->content_type) {
-        e->content_type = strdup(opts->content_type);
+        new_content_type = strdup(opts->content_type);
+        if (!new_content_type) {
+            free(new_etag);
+            free(new_body);
+            free(new_key);
+            return -1;
+        }
     }
-    e->uploaded = time(NULL);
+
+    new_uploaded = time(NULL);
+
+    /* All allocations succeeded — commit changes */
+    {
+        r2_entry_t *e = &bucket->objects[idx];
+
+        if (is_new) {
+            e->key = new_key;
+            bucket->count++;
+        } else {
+            free(e->body);
+            free(e->content_type);
+            free(e->etag);
+        }
+
+        e->body = new_body;
+        e->size = new_size;
+        e->content_type = new_content_type;
+        e->etag = new_etag;
+        e->uploaded = new_uploaded;
+    }
 
     return 0;
 }
@@ -224,20 +259,26 @@ worker_r2_list_result_t *worker_r2_list(worker_r2_bucket_t *bucket,
 
     int found = 0;
     int skipped = 0;
+    bool has_more = false;
 
-    for (int i = 0; i < bucket->count && found < limit; i++) {
+    for (int i = 0; i < bucket->count; i++) {
         if (prefix && strncmp(bucket->objects[i].key, prefix,
                               strlen(prefix)) != 0) continue;
         if (skipped < cursor_start) { skipped++; continue; }
 
-        result->objects[found] = _r2_object_from_entry(&bucket->objects[i],
-                                                       false);
-        found++;
+        if (found < limit) {
+            result->objects[found] = _r2_object_from_entry(&bucket->objects[i],
+                                                           false);
+            found++;
+        } else {
+            has_more = true;
+            break;
+        }
     }
 
     result->count = found;
-    result->truncated = (found >= limit);
-    result->cursor = cursor_start + found;
+    result->truncated = has_more;
+    result->cursor = has_more ? (cursor_start + found) : 0;
     return result;
 }
 
