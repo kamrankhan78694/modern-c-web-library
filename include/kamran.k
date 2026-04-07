@@ -1938,14 +1938,23 @@ WASM_EXPORT void wasm_free(void *ptr);
  *   4. JS reads status/headers/body   from the returned worker_response_t
  *   5. JS destroys both objects
  *
- * An in-memory key-value store (worker_kv_t) is provided for caching
- * and lightweight data persistence within a single Worker invocation.
+ * Cloudflare infrastructure bindings:
+ *   - worker_kv_t        – KV namespace (get/put/delete/list, TTL support)
+ *   - worker_r2_bucket_t – R2 object storage (get/put/delete/list/head)
+ *   - worker_d1_t        – D1 edge SQL database (exec/query)
+ *   - worker_queue_t     – Queues producer (send/send_batch)
+ *   - worker_env_t       – env context (named bindings for KV/R2/D1/Queue)
  */
 
 /* Forward declarations */
-typedef struct worker_request  worker_request_t;
-typedef struct worker_response worker_response_t;
-typedef struct worker_kv       worker_kv_t;
+typedef struct worker_request    worker_request_t;
+typedef struct worker_response   worker_response_t;
+typedef struct worker_kv         worker_kv_t;
+typedef struct worker_r2_bucket  worker_r2_bucket_t;
+typedef struct worker_d1         worker_d1_t;
+typedef struct worker_d1_result  worker_d1_result_t;
+typedef struct worker_queue      worker_queue_t;
+typedef struct worker_env        worker_env_t;
 
 /* --- Worker Request --- */
 
@@ -2081,24 +2090,35 @@ WASM_EXPORT void worker_response_destroy(worker_response_t *res);
 WASM_EXPORT worker_response_t *worker_handle_fetch(worker_request_t *req,
                                                    router_t *router);
 
-/* --- Worker KV Store (in-memory) --- */
+/* --- Worker KV Store (Cloudflare KV namespace binding) --- */
 
 /**
- * Create an in-memory key-value store.
- * Suitable for caching within a Worker invocation.
+ * Create an in-memory KV namespace.
+ * Models the Cloudflare KV binding: env.MY_KV.get/put/delete/list().
  */
 WASM_EXPORT worker_kv_t *worker_kv_create(void);
 
 /**
  * Store a key-value pair (overwrites existing key).
+ * Keys exceeding 512 bytes are rejected.
  * @return 0 on success, -1 on failure
  */
 WASM_EXPORT int worker_kv_put(worker_kv_t *kv,
                               const char *key, const char *value);
 
 /**
- * Retrieve a value by key.
- * @return Value string or NULL if not found
+ * Store a key-value pair with a TTL (time-to-live) in seconds.
+ * Mirrors Cloudflare KV put(key, value, { expirationTtl }).
+ * @param ttl_seconds  Seconds until expiration (0 = no expiration)
+ * @return 0 on success, -1 on failure
+ */
+WASM_EXPORT int worker_kv_put_with_ttl(worker_kv_t *kv,
+                                       const char *key, const char *value,
+                                       int ttl_seconds);
+
+/**
+ * Retrieve a value by key.  Expired keys return NULL.
+ * @return Value string or NULL if not found / expired
  */
 WASM_EXPORT const char *worker_kv_get(worker_kv_t *kv, const char *key);
 
@@ -2108,8 +2128,229 @@ WASM_EXPORT const char *worker_kv_get(worker_kv_t *kv, const char *key);
  */
 WASM_EXPORT int worker_kv_delete(worker_kv_t *kv, const char *key);
 
+/**
+ * List keys with optional prefix filter.
+ * Mirrors Cloudflare KV list({ prefix, limit }).
+ *
+ * @param prefix   Key prefix filter (NULL = all keys)
+ * @param limit    Max keys to return (0 or >1000 = default 1000)
+ * @param out_keys Output array of key strings (caller frees with worker_kv_list_free)
+ * @param out_count Output count
+ * @return 0 on success, -1 on failure
+ */
+WASM_EXPORT int worker_kv_list(worker_kv_t *kv, const char *prefix,
+                               int limit,
+                               const char ***out_keys, int *out_count);
+
+/** Free a key list returned by worker_kv_list(). */
+WASM_EXPORT void worker_kv_list_free(const char **keys);
+
 /** Destroy the KV store and free all entries. */
 WASM_EXPORT void worker_kv_destroy(worker_kv_t *kv);
+
+/* --- Worker R2 Object Storage (Cloudflare R2 bucket binding) --- */
+
+/**
+ * Create an in-memory R2 bucket.
+ * Models the Cloudflare R2 binding: env.MY_BUCKET.get/put/delete/list/head().
+ */
+WASM_EXPORT worker_r2_bucket_t *worker_r2_create(void);
+
+/**
+ * Store an object in the R2 bucket.
+ * @param key           Object key (max 1024 bytes)
+ * @param data          Object body
+ * @param size          Body size in bytes
+ * @param content_type  MIME type (NULL = "application/octet-stream")
+ * @return 0 on success, -1 on failure
+ */
+WASM_EXPORT int worker_r2_put(worker_r2_bucket_t *r2, const char *key,
+                              const char *data, size_t size,
+                              const char *content_type);
+
+/**
+ * Retrieve an object's body.
+ * @param out_size  Receives body size
+ * @return Pointer to body data or NULL if not found
+ */
+WASM_EXPORT const char *worker_r2_get(worker_r2_bucket_t *r2,
+                                      const char *key, size_t *out_size);
+
+/**
+ * Get object metadata without body (mirrors R2 head()).
+ * @param out_size          Receives body size
+ * @param out_content_type  Receives content-type string
+ * @return 0 on success, -1 if not found
+ */
+WASM_EXPORT int worker_r2_head(worker_r2_bucket_t *r2, const char *key,
+                               size_t *out_size,
+                               const char **out_content_type);
+
+/**
+ * Delete an object from the R2 bucket.
+ * @return 0 on success, -1 if not found
+ */
+WASM_EXPORT int worker_r2_delete(worker_r2_bucket_t *r2, const char *key);
+
+/**
+ * List object keys with optional prefix filter.
+ * Mirrors R2 list({ prefix, limit }).
+ *
+ * @param prefix    Key prefix filter (NULL = all)
+ * @param limit     Max keys (0 or >1000 = default 1000)
+ * @param out_keys  Output array (caller frees with worker_r2_list_free)
+ * @param out_count Output count
+ * @return 0 on success, -1 on failure
+ */
+WASM_EXPORT int worker_r2_list(worker_r2_bucket_t *r2, const char *prefix,
+                               int limit,
+                               const char ***out_keys, int *out_count);
+
+/** Free a key list returned by worker_r2_list(). */
+WASM_EXPORT void worker_r2_list_free(const char **keys);
+
+/** Destroy the R2 bucket and free all objects. */
+WASM_EXPORT void worker_r2_destroy(worker_r2_bucket_t *r2);
+
+/* --- Worker D1 Database (Cloudflare D1 edge SQL binding) --- */
+
+/**
+ * Create an in-memory D1 database.
+ * Models the Cloudflare D1 binding: env.DB.prepare(sql).run/all().
+ */
+WASM_EXPORT worker_d1_t *worker_d1_create(void);
+
+/**
+ * Execute a DDL/DML statement (CREATE TABLE, INSERT, etc.).
+ * @return 0 on success, -1 on failure
+ */
+WASM_EXPORT int worker_d1_exec(worker_d1_t *d1, const char *sql);
+
+/**
+ * Execute a query and return results.
+ * Mirrors D1 prepare(sql).all().
+ * @return Result set (caller must destroy), or NULL on error
+ */
+WASM_EXPORT worker_d1_result_t *worker_d1_query(worker_d1_t *d1,
+                                                const char *sql);
+
+/** Get the number of rows in a D1 result. */
+WASM_EXPORT int worker_d1_result_get_row_count(worker_d1_result_t *result);
+
+/** Get the number of columns in a D1 result. */
+WASM_EXPORT int worker_d1_result_get_col_count(worker_d1_result_t *result);
+
+/** Get a column name by index. */
+WASM_EXPORT const char *worker_d1_result_get_col_name(
+    worker_d1_result_t *result, int col);
+
+/** Get a cell value by row and column index. */
+WASM_EXPORT const char *worker_d1_result_get_value(
+    worker_d1_result_t *result, int row, int col);
+
+/** Check whether a D1 query succeeded. */
+WASM_EXPORT bool worker_d1_result_is_success(worker_d1_result_t *result);
+
+/** Get the error message (NULL if success). */
+WASM_EXPORT const char *worker_d1_result_get_error(
+    worker_d1_result_t *result);
+
+/** Destroy a D1 result and free its rows/columns. */
+WASM_EXPORT void worker_d1_result_destroy(worker_d1_result_t *result);
+
+/** Destroy the D1 database and free all tables. */
+WASM_EXPORT void worker_d1_destroy(worker_d1_t *d1);
+
+/* --- Worker Queue (Cloudflare Queues producer binding) --- */
+
+/**
+ * Create a Queue producer.
+ * Models the Cloudflare Queue binding: env.MY_QUEUE.send/sendBatch().
+ */
+WASM_EXPORT worker_queue_t *worker_queue_create(void);
+
+/**
+ * Send a single message to the queue.
+ * @param body  Message body
+ * @param len   Body length (max 128 KB per Cloudflare limit)
+ * @return 0 on success, -1 on failure
+ */
+WASM_EXPORT int worker_queue_send(worker_queue_t *q,
+                                  const char *body, size_t len);
+
+/**
+ * Send a batch of messages to the queue.
+ * Mirrors Queue.sendBatch() (max 100 messages, 256 KB total).
+ * @param bodies   Array of message body pointers
+ * @param lengths  Array of body lengths
+ * @param count    Number of messages
+ * @return 0 on success, -1 on failure
+ */
+WASM_EXPORT int worker_queue_send_batch(worker_queue_t *q,
+                                        const char **bodies,
+                                        const size_t *lengths,
+                                        int count);
+
+/** Get the number of messages in the queue. */
+WASM_EXPORT int worker_queue_get_count(worker_queue_t *q);
+
+/**
+ * Peek at a message by index (does not remove it).
+ * @param out_len  Receives message length
+ * @return Pointer to message body or NULL
+ */
+WASM_EXPORT const char *worker_queue_peek(worker_queue_t *q, int index,
+                                          size_t *out_len);
+
+/** Destroy the queue and free all messages. */
+WASM_EXPORT void worker_queue_destroy(worker_queue_t *q);
+
+/* --- Worker Environment Context (Cloudflare env object) --- */
+
+/**
+ * Create a Worker environment context.
+ * Models the Cloudflare Workers env object that holds named bindings
+ * for KV namespaces, R2 buckets, D1 databases, and Queues.
+ */
+WASM_EXPORT worker_env_t *worker_env_create(void);
+
+/** Bind a KV namespace.  env does not take ownership. */
+WASM_EXPORT int worker_env_bind_kv(worker_env_t *env, const char *name,
+                                   worker_kv_t *kv);
+
+/** Bind an R2 bucket.  env does not take ownership. */
+WASM_EXPORT int worker_env_bind_r2(worker_env_t *env, const char *name,
+                                   worker_r2_bucket_t *r2);
+
+/** Bind a D1 database.  env does not take ownership. */
+WASM_EXPORT int worker_env_bind_d1(worker_env_t *env, const char *name,
+                                   worker_d1_t *d1);
+
+/** Bind a Queue producer.  env does not take ownership. */
+WASM_EXPORT int worker_env_bind_queue(worker_env_t *env, const char *name,
+                                      worker_queue_t *q);
+
+/** Look up a KV namespace by binding name. */
+WASM_EXPORT worker_kv_t *worker_env_get_kv(worker_env_t *env,
+                                            const char *name);
+
+/** Look up an R2 bucket by binding name. */
+WASM_EXPORT worker_r2_bucket_t *worker_env_get_r2(worker_env_t *env,
+                                                   const char *name);
+
+/** Look up a D1 database by binding name. */
+WASM_EXPORT worker_d1_t *worker_env_get_d1(worker_env_t *env,
+                                            const char *name);
+
+/** Look up a Queue producer by binding name. */
+WASM_EXPORT worker_queue_t *worker_env_get_queue(worker_env_t *env,
+                                                  const char *name);
+
+/**
+ * Destroy the env context.  Does NOT destroy bound resources –
+ * the caller owns those and must destroy them separately.
+ */
+WASM_EXPORT void worker_env_destroy(worker_env_t *env);
 
 /* --- Worker Runtime Info --- */
 

@@ -6,8 +6,8 @@
  * using Emscripten.
  *
  * Build the WASM module:
- *   emcc -o worker.js worker_example.c -I../include -L../build-wasm -lweblib \
- *        -sEXPORTED_RUNTIME_METHODS=ccall,cwrap \
+ *   emcc -o worker.wasm.js worker_example.c -I../include -L../build-wasm -lweblib \
+ *        -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,allocateUTF8,UTF8ToString \
  *        -sEXPORTED_FUNCTIONS=_worker_init,_worker_fetch,_worker_cleanup,_worker_response_get_status,_worker_response_get_body,_worker_response_get_header_count,_worker_response_get_header_name,_worker_response_get_header_value,_worker_response_destroy,_malloc,_free \
  *        -sWASM=1 -sMODULARIZE=1 -sEXPORT_NAME=createModule
  *
@@ -33,9 +33,14 @@ async function ensureInit() {
 /**
  * Cloudflare Workers fetch handler.
  * Converts the incoming Request into WASM calls and returns a Response.
+ *
+ * Signature: async fetch(request, env, ctx)
+ * - request: Incoming HTTP request object
+ * - env: Cloudflare Workers environment bindings (KV, R2, D1, Queues)
+ * - ctx: Execution context (waitUntil, passThroughOnException)
  */
 export default {
-    async fetch(request) {
+    async fetch(request, env, ctx) {
         await ensureInit();
 
         const url = new URL(request.url);

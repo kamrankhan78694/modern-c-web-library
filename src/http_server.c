@@ -69,18 +69,11 @@ static void weblib_kamran_init(void) {
     pthread_once(&kamran_init_once, _kamran_init_impl);
 }
 
-typedef struct http_header_node {
-    char *name;      /* lower-case for lookup */
-    char *raw_name;  /* original casing for serialization */
-    char *value;
-    struct http_header_node *next;
-} http_header_node_t;
-
-typedef struct http_param_node {
-    char *key;
-    char *value;
-    struct http_param_node *next;
-} http_param_node_t;
+/*
+ * Internal shared struct definitions for header/param linked lists.
+ * These are used by worker_runtime.c too, so they live in a shared header.
+ */
+#include "weblib_internal.h"
 
 typedef enum {
     PARSE_STATE_REQUEST_LINE,

@@ -715,7 +715,8 @@ See `examples/wasm_example.c` for a complete demonstration.
 The library provides first-class support for running inside
 [Cloudflare Workers](https://developers.cloudflare.com/workers/) via WASM.
 The Worker runtime layer (`worker_*` API) bridges the Workers fetch-event
-model to the library's router and response helpers.
+model to the library's router and response helpers, and provides in-memory
+emulations of Cloudflare's infrastructure bindings (KV, R2, D1, Queues).
 
 #### Worker API Overview
 
@@ -726,8 +727,17 @@ model to the library's router and response helpers.
 | `worker_handle_fetch(req, router)` | Route request through a `router_t` |
 | `worker_response_get_status/body/header()` | Read response fields |
 | `worker_response_set_text/json()` | Convenience response builders |
-| `worker_kv_create/put/get/delete()` | In-memory key-value store |
 | `worker_runtime_version()` | Runtime version string |
+
+#### Cloudflare Infrastructure Bindings
+
+| Binding | C Type | Cloudflare API | Functions |
+|---------|--------|----------------|-----------|
+| **KV** | `worker_kv_t` | `env.KV.get/put/delete/list` | `worker_kv_create/put/put_with_ttl/get/delete/list/destroy` |
+| **R2** | `worker_r2_bucket_t` | `env.BUCKET.get/put/delete/list/head` | `worker_r2_create/put/get/delete/list/head/destroy` |
+| **D1** | `worker_d1_t` | `env.DB.prepare().run/all` | `worker_d1_create/exec/query/destroy` |
+| **Queues** | `worker_queue_t` | `env.QUEUE.send/sendBatch` | `worker_queue_create/send/send_batch/destroy` |
+| **env** | `worker_env_t` | `fetch(request, env, ctx)` | `worker_env_create/bind_kv/bind_r2/bind_d1/bind_queue/get_*/destroy` |
 
 #### Quick Start
 
@@ -772,7 +782,7 @@ mkdir build-wasm && cd build-wasm
 emcmake cmake ..
 emmake make
 
-emcc -o worker.js your_worker.c -I../include -L. -lweblib \
+emcc -o worker.wasm.js your_worker.c -I../include -L. -lweblib \
      -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,allocateUTF8,UTF8ToString \
      -sEXPORTED_FUNCTIONS=_worker_init,_worker_fetch,_worker_cleanup,_worker_response_get_status,_worker_response_get_body,_worker_response_get_header_count,_worker_response_get_header_name,_worker_response_get_header_value,_worker_response_destroy,_malloc,_free \
      -sWASM=1 -sMODULARIZE=1 -sEXPORT_NAME=createModule
@@ -791,7 +801,7 @@ async function ensureInit() {
 }
 
 export default {
-    async fetch(request) {
+    async fetch(request, env, ctx) {
         await ensureInit();
         const url = new URL(request.url);
         const methodPtr = wasm.allocateUTF8(request.method);
@@ -818,20 +828,132 @@ export default {
 
 #### Worker KV Store
 
-An in-memory key-value store is provided for caching within a Worker invocation:
+Models Cloudflare Workers KV with TTL support and key listing:
 
 ```c
 worker_kv_t *kv = worker_kv_create();
+
+/* Simple put/get */
 worker_kv_put(kv, "session", "abc123");
-
 const char *val = worker_kv_get(kv, "session");  // "abc123"
-worker_kv_delete(kv, "session");
 
+/* Put with TTL (expires after 3600 seconds) */
+worker_kv_put_with_ttl(kv, "cache:page", "<html>…</html>", 3600);
+
+/* List keys with prefix */
+const char **keys;
+int count;
+worker_kv_list(kv, "session:", 100, &keys, &count);
+worker_kv_list_free(keys);
+
+worker_kv_delete(kv, "session");
 worker_kv_destroy(kv);
 ```
 
-See `examples/worker_example.c` for a complete native-testable Worker example
-and `examples/worker.js` for the Cloudflare Workers JavaScript glue.
+#### Worker R2 Object Storage
+
+Models Cloudflare R2 with put, get, head, delete, and list:
+
+```c
+worker_r2_bucket_t *bucket = worker_r2_create();
+
+/* Store an object */
+worker_r2_put(bucket, "images/logo.png", data, size, "image/png");
+
+/* Retrieve an object */
+size_t obj_size;
+const char *obj = worker_r2_get(bucket, "images/logo.png", &obj_size);
+
+/* Get metadata only (head) */
+const char *content_type;
+worker_r2_head(bucket, "images/logo.png", &obj_size, &content_type);
+
+/* List objects by prefix */
+const char **keys;
+int count;
+worker_r2_list(bucket, "images/", 100, &keys, &count);
+worker_r2_list_free(keys);
+
+worker_r2_delete(bucket, "images/logo.png");
+worker_r2_destroy(bucket);
+```
+
+#### Worker D1 Database
+
+Models Cloudflare D1 edge SQL with CREATE TABLE, INSERT, and SELECT:
+
+```c
+worker_d1_t *db = worker_d1_create();
+
+/* Create table and insert data */
+worker_d1_exec(db, "CREATE TABLE users (id TEXT, name TEXT, email TEXT)");
+worker_d1_exec(db, "INSERT INTO users VALUES ('1', 'Alice', 'alice@example.com')");
+
+/* Query */
+worker_d1_result_t *result = worker_d1_query(db, "SELECT * FROM users WHERE id = '1'");
+if (worker_d1_result_is_success(result)) {
+    int rows = worker_d1_result_get_row_count(result);
+    for (int r = 0; r < rows; r++) {
+        printf("name = %s\n", worker_d1_result_get_value(result, r, 1));
+    }
+}
+worker_d1_result_destroy(result);
+worker_d1_destroy(db);
+```
+
+#### Worker Queues
+
+Models Cloudflare Queues producer with send and batch send:
+
+```c
+worker_queue_t *q = worker_queue_create();
+
+/* Send a single message */
+const char *msg = "{\"type\":\"email\",\"to\":\"user@example.com\"}";
+worker_queue_send(q, msg, strlen(msg));
+
+/* Send a batch of messages (max 100, 256 KB total) */
+const char *batch[] = { "msg1", "msg2", "msg3" };
+size_t lengths[] = { 4, 4, 4 };
+worker_queue_send_batch(q, batch, lengths, 3);
+
+worker_queue_destroy(q);
+```
+
+#### Worker Environment Context
+
+The `worker_env_t` models Cloudflare's `env` object, allowing named
+bindings for KV, R2, D1, and Queues — matching the `wrangler.toml` pattern:
+
+```c
+/* Create resources */
+worker_kv_t *kv = worker_kv_create();
+worker_r2_bucket_t *r2 = worker_r2_create();
+worker_d1_t *db = worker_d1_create();
+worker_queue_t *q = worker_queue_create();
+
+/* Create env and bind (matches wrangler.toml binding names) */
+worker_env_t *env = worker_env_create();
+worker_env_bind_kv(env, "CACHE", kv);
+worker_env_bind_r2(env, "ASSETS", r2);
+worker_env_bind_d1(env, "DB", db);
+worker_env_bind_queue(env, "JOBS", q);
+
+/* Access bindings by name (like JS: env.CACHE, env.DB, etc.) */
+worker_kv_t *cache = worker_env_get_kv(env, "CACHE");
+worker_d1_t *database = worker_env_get_d1(env, "DB");
+
+/* Cleanup */
+worker_env_destroy(env);   /* does NOT free bound resources */
+worker_kv_destroy(kv);
+worker_r2_destroy(r2);
+worker_d1_destroy(db);
+worker_queue_destroy(q);
+```
+
+See `examples/worker_example.c` for a complete native-testable Worker example,
+`examples/worker.js` for the Cloudflare Workers JavaScript glue, and
+`docs/WORKER_API.md` for the full API reference.
 
 ## Testing
 
