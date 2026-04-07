@@ -48,6 +48,7 @@
 #define WORKER_D1_MAX_COLS        32
 #define WORKER_QUEUE_MAX_MSGS     100
 #define WORKER_QUEUE_MAX_MSG_LEN  131072  /* 128 KB per Cloudflare limit */
+#define WORKER_QUEUE_MAX_PENDING  4096    /* max queued messages in memory */
 #define WORKER_ENV_MAX_BINDINGS   32
 
 /*
@@ -62,6 +63,26 @@ static bool _header_name_eq(const char *a, const char *b) {
         a++; b++;
     }
     return *a == '\0' && *b == '\0';
+}
+
+/*
+ * Generic capacity-growth helper for dynamic arrays.
+ * Doubles capacity up to max_cap, zeroes the new region, and updates
+ * *arr_ptr / *cap_ptr in place.  Returns 0 on success, -1 on failure.
+ */
+static int _grow_array(void **arr_ptr, int *cap_ptr, int max_cap,
+                       size_t elem_size) {
+    int old_cap = *cap_ptr;
+    if (old_cap >= max_cap) return -1;
+    int new_cap = old_cap * 2;
+    if (new_cap > max_cap) new_cap = max_cap;
+    void *new_arr = realloc(*arr_ptr, (size_t)new_cap * elem_size);
+    if (!new_arr) return -1;
+    memset((char *)new_arr + (size_t)old_cap * elem_size, 0,
+           (size_t)(new_cap - old_cap) * elem_size);
+    *arr_ptr = new_arr;
+    *cap_ptr = new_cap;
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -526,16 +547,10 @@ int worker_kv_put(worker_kv_t *kv, const char *key, const char *value) {
 
     /* Grow if needed */
     if (kv->count >= kv->capacity) {
-        if (kv->capacity >= WORKER_KV_MAX_ENTRIES) return -1;
-        int new_cap = kv->capacity * 2;
-        if (new_cap > WORKER_KV_MAX_ENTRIES) new_cap = WORKER_KV_MAX_ENTRIES;
-        struct worker_kv_entry *new_entries = (struct worker_kv_entry *)realloc(
-            kv->entries, (size_t)new_cap * sizeof(struct worker_kv_entry));
-        if (!new_entries) return -1;
-        memset(new_entries + kv->capacity, 0,
-               (size_t)(new_cap - kv->capacity) * sizeof(struct worker_kv_entry));
-        kv->entries = new_entries;
-        kv->capacity = new_cap;
+        if (_grow_array((void **)&kv->entries, &kv->capacity,
+                        WORKER_KV_MAX_ENTRIES,
+                        sizeof(struct worker_kv_entry)) != 0)
+            return -1;
     }
 
     /* Allocate key and value before committing */
@@ -575,16 +590,10 @@ int worker_kv_put_with_ttl(worker_kv_t *kv, const char *key,
 
     /* Grow if needed */
     if (kv->count >= kv->capacity) {
-        if (kv->capacity >= WORKER_KV_MAX_ENTRIES) return -1;
-        int new_cap = kv->capacity * 2;
-        if (new_cap > WORKER_KV_MAX_ENTRIES) new_cap = WORKER_KV_MAX_ENTRIES;
-        struct worker_kv_entry *new_entries = (struct worker_kv_entry *)realloc(
-            kv->entries, (size_t)new_cap * sizeof(struct worker_kv_entry));
-        if (!new_entries) return -1;
-        memset(new_entries + kv->capacity, 0,
-               (size_t)(new_cap - kv->capacity) * sizeof(struct worker_kv_entry));
-        kv->entries = new_entries;
-        kv->capacity = new_cap;
+        if (_grow_array((void **)&kv->entries, &kv->capacity,
+                        WORKER_KV_MAX_ENTRIES,
+                        sizeof(struct worker_kv_entry)) != 0)
+            return -1;
     }
 
     char *k = strdup(key);
@@ -749,16 +758,10 @@ int worker_r2_put(worker_r2_bucket_t *r2, const char *key,
 
     /* Grow if needed */
     if (r2->count >= r2->capacity) {
-        if (r2->capacity >= WORKER_R2_MAX_OBJECTS) return -1;
-        int new_cap = r2->capacity * 2;
-        if (new_cap > WORKER_R2_MAX_OBJECTS) new_cap = WORKER_R2_MAX_OBJECTS;
-        struct worker_r2_object *new_objs = (struct worker_r2_object *)realloc(
-            r2->objects, (size_t)new_cap * sizeof(struct worker_r2_object));
-        if (!new_objs) return -1;
-        memset(new_objs + r2->capacity, 0,
-               (size_t)(new_cap - r2->capacity) * sizeof(struct worker_r2_object));
-        r2->objects = new_objs;
-        r2->capacity = new_cap;
+        if (_grow_array((void **)&r2->objects, &r2->capacity,
+                        WORKER_R2_MAX_OBJECTS,
+                        sizeof(struct worker_r2_object)) != 0)
+            return -1;
     }
 
     /* Pre-allocate then commit */
@@ -1275,14 +1278,10 @@ int worker_queue_send(worker_queue_t *q, const char *body, size_t len) {
     if (len > WORKER_QUEUE_MAX_MSG_LEN) return -1;
 
     if (q->count >= q->capacity) {
-        int new_cap = q->capacity * 2;
-        struct worker_queue_msg *new_msgs = (struct worker_queue_msg *)realloc(
-            q->messages, (size_t)new_cap * sizeof(struct worker_queue_msg));
-        if (!new_msgs) return -1;
-        memset(new_msgs + q->capacity, 0,
-               (size_t)(new_cap - q->capacity) * sizeof(struct worker_queue_msg));
-        q->messages = new_msgs;
-        q->capacity = new_cap;
+        if (_grow_array((void **)&q->messages, &q->capacity,
+                        WORKER_QUEUE_MAX_PENDING,
+                        sizeof(struct worker_queue_msg)) != 0)
+            return -1;
     }
 
     char *b = (char *)malloc(len + 1);
