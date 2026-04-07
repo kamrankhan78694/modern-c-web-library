@@ -1859,6 +1859,382 @@ middleware_fn_t security_headers_middleware_create(
  */
 void security_headers_middleware_destroy(void);
 
+/* ===== Cloudflare Worker Runtime API ===== */
+
+/**
+ * Cloudflare Worker environment binding types.
+ * Each binding corresponds to a Cloudflare service accessible
+ * from the Worker's env object (env.MY_KV, env.MY_BUCKET, etc.).
+ */
+typedef enum {
+    WORKER_BINDING_KV,          /**< KV Namespace           */
+    WORKER_BINDING_R2,          /**< R2 Object Storage      */
+    WORKER_BINDING_D1,          /**< D1 SQL Database         */
+    WORKER_BINDING_QUEUE,       /**< Queue (producer/consumer) */
+    WORKER_BINDING_SECRET,      /**< Secret / env variable   */
+    WORKER_BINDING_SERVICE      /**< Service binding (Worker-to-Worker) */
+} worker_binding_type_t;
+
+/* Forward declarations — Worker types */
+typedef struct worker_request    worker_request_t;
+typedef struct worker_response   worker_response_t;
+typedef struct worker_env        worker_env_t;
+typedef struct worker_kv         worker_kv_t;
+typedef struct worker_r2_bucket  worker_r2_bucket_t;
+typedef struct worker_d1         worker_d1_t;
+typedef struct worker_d1_stmt    worker_d1_stmt_t;
+typedef struct worker_queue      worker_queue_t;
+
+/**
+ * Fetch handler signature for a Cloudflare Worker.
+ * Called by the JS glue layer when the Worker receives a request.
+ */
+typedef worker_response_t *(*worker_fetch_handler_t)(
+    worker_request_t *req, worker_env_t *env);
+
+/* ----- Worker Request ----- */
+
+/** Create a new Worker request with the given HTTP method and URL. */
+worker_request_t *worker_request_create(const char *method, const char *url);
+
+/** Destroy a Worker request and free all associated memory. */
+void worker_request_destroy(worker_request_t *req);
+
+/** Set a header on the Worker request. */
+int worker_request_set_header(worker_request_t *req, const char *name,
+                              const char *value);
+
+/** Get a header value by name (case-insensitive). Returns NULL if absent. */
+const char *worker_request_get_header(const worker_request_t *req,
+                                      const char *name);
+
+/** Set the request body. Pass NULL/0 to clear. */
+int worker_request_set_body(worker_request_t *req, const char *body,
+                            size_t len);
+
+/** Get the HTTP method string (e.g. "GET", "POST"). */
+const char *worker_request_get_method(const worker_request_t *req);
+
+/** Get the request URL string. */
+const char *worker_request_get_url(const worker_request_t *req);
+
+/** Get the request body. If out_len is non-NULL, writes the body length. */
+const char *worker_request_get_body(const worker_request_t *req,
+                                    size_t *out_len);
+
+/* ----- Worker Response ----- */
+
+/** Create a new Worker response with the given HTTP status code. */
+worker_response_t *worker_response_create(int status);
+
+/** Destroy a Worker response and free all associated memory. */
+void worker_response_destroy(worker_response_t *res);
+
+/** Set a header on the Worker response. */
+int worker_response_set_header(worker_response_t *res, const char *name,
+                               const char *value);
+
+/** Get a response header value by name (case-insensitive). */
+const char *worker_response_get_header(const worker_response_t *res,
+                                       const char *name);
+
+/** Set the response body (binary). */
+int worker_response_set_body(worker_response_t *res, const char *body,
+                             size_t len);
+
+/** Set the response body from a NUL-terminated string. */
+int worker_response_set_body_text(worker_response_t *res, const char *text);
+
+/** Set the response body to a JSON-serialised value (sets Content-Type). */
+int worker_response_set_json(worker_response_t *res, json_value_t *json);
+
+/** Get the response HTTP status code. */
+int worker_response_get_status(const worker_response_t *res);
+
+/** Get the response body. If out_len is non-NULL, writes the body length. */
+const char *worker_response_get_body(const worker_response_t *res,
+                                     size_t *out_len);
+
+/* ----- Worker Environment ----- */
+
+/** Create a new Worker environment container for service bindings. */
+worker_env_t *worker_env_create(void);
+
+/** Destroy the Worker environment (does NOT destroy bound handles). */
+void worker_env_destroy(worker_env_t *env);
+
+/** Register a named binding of the given type in the environment. */
+int worker_env_add_binding(worker_env_t *env, const char *name,
+                           worker_binding_type_t type, void *handle);
+
+/** Look up a binding by name and expected type. Returns NULL if absent. */
+void *worker_env_get_binding(const worker_env_t *env, const char *name,
+                             worker_binding_type_t type);
+
+/** Return the number of registered bindings. */
+int worker_env_binding_count(const worker_env_t *env);
+
+/* ----- Fetch Handler ----- */
+
+/** Register a custom fetch handler for the Worker. */
+void worker_set_fetch_handler(worker_fetch_handler_t handler);
+
+/** Set the library router for automatic route matching in Workers. */
+void worker_set_router(router_t *router);
+
+/**
+ * Handle an incoming Worker fetch event.  WASM-exported entry point.
+ * If a custom handler is set, delegates to it; otherwise uses the
+ * library router for route matching.
+ */
+WASM_EXPORT
+worker_response_t *worker_handle_fetch(worker_request_t *req,
+                                       worker_env_t *env);
+
+/* ===== Cloudflare KV Namespace API ===== */
+
+/** Options for worker_kv_put(). All fields optional (zero-init for defaults). */
+typedef struct {
+    int64_t  expiration;       /**< Unix timestamp for absolute expiration. */
+    int      expiration_ttl;   /**< Seconds from now until expiration. */
+    const char *metadata;      /**< Optional JSON metadata string (max 1024 B). */
+} worker_kv_put_options_t;
+
+/** Options for worker_kv_list(). All fields optional. */
+typedef struct {
+    const char *prefix;   /**< Only return keys starting with this prefix. */
+    int         limit;    /**< Max keys to return (default 1000, max 1000). */
+    int         cursor;   /**< Pagination cursor (from previous result). */
+} worker_kv_list_options_t;
+
+/** Result of worker_kv_list(). */
+typedef struct {
+    char **keys;          /**< Array of key strings (caller frees). */
+    int    count;         /**< Number of keys returned. */
+    bool   list_complete; /**< true if all matching keys returned. */
+    int    cursor;        /**< Cursor for next page (0 if complete). */
+} worker_kv_list_result_t;
+
+/** Create a KV namespace handle (simulated in native builds). */
+worker_kv_t *worker_kv_create(const char *namespace_name);
+
+/** Destroy a KV namespace and free all stored entries. */
+void worker_kv_destroy(worker_kv_t *kv);
+
+/** Get the namespace name. */
+const char *worker_kv_get_namespace(const worker_kv_t *kv);
+
+/**
+ * Get a value by key.  Returns a newly-allocated string the caller must
+ * free, or NULL if the key does not exist or is expired.
+ */
+char *worker_kv_get(worker_kv_t *kv, const char *key);
+
+/**
+ * Get a value with its metadata.  Writes a newly-allocated metadata
+ * JSON string to *out_metadata (or NULL).  Caller frees both.
+ */
+char *worker_kv_get_with_metadata(worker_kv_t *kv, const char *key,
+                                  char **out_metadata);
+
+/** Store a key-value pair with optional put options. */
+int worker_kv_put(worker_kv_t *kv, const char *key, const char *value,
+                  const worker_kv_put_options_t *opts);
+
+/** Delete a key. Returns 0 on success, -1 if not found. */
+int worker_kv_delete(worker_kv_t *kv, const char *key);
+
+/** List keys with optional prefix/limit/cursor filtering. */
+worker_kv_list_result_t *worker_kv_list(worker_kv_t *kv,
+                                        const worker_kv_list_options_t *opts);
+
+/** Free a KV list result (including all key strings). */
+void worker_kv_list_result_destroy(worker_kv_list_result_t *result);
+
+/* ===== Cloudflare R2 Object Storage API ===== */
+
+/** An R2 object (returned by get/head/list). */
+typedef struct {
+    char    *key;           /**< Object key. */
+    uint8_t *body;          /**< Object body (NULL for head/list). */
+    size_t   body_len;      /**< Body length. */
+    size_t   size;          /**< Total object size (available even without body). */
+    char    *etag;          /**< ETag string. */
+    char    *content_type;  /**< Content-Type header. */
+    int64_t  uploaded;      /**< Upload timestamp (Unix epoch). */
+} worker_r2_object_t;
+
+/** Options for worker_r2_put(). */
+typedef struct {
+    const char *content_type;   /**< MIME type for the object. */
+} worker_r2_put_options_t;
+
+/** Options for worker_r2_list(). */
+typedef struct {
+    const char *prefix;   /**< Prefix filter. */
+    int         limit;    /**< Max results (default 1000). */
+    int         cursor;   /**< Pagination cursor. */
+} worker_r2_list_options_t;
+
+/** Result of worker_r2_list(). */
+typedef struct {
+    worker_r2_object_t **objects;   /**< Array of object pointers (metadata only). */
+    int    count;                   /**< Number of objects returned. */
+    bool   truncated;               /**< true if more results available. */
+    int    cursor;                  /**< Cursor for next page. */
+} worker_r2_list_result_t;
+
+/** Create an R2 bucket handle. */
+worker_r2_bucket_t *worker_r2_bucket_create(const char *bucket_name);
+
+/** Destroy an R2 bucket and free all stored objects. */
+void worker_r2_bucket_destroy(worker_r2_bucket_t *bucket);
+
+/** Get the bucket name. */
+const char *worker_r2_bucket_get_name(const worker_r2_bucket_t *bucket);
+
+/** Get an object with body. Returns NULL if not found. Caller frees. */
+worker_r2_object_t *worker_r2_get(worker_r2_bucket_t *bucket, const char *key);
+
+/** Get object metadata only (no body). Returns NULL if not found. */
+worker_r2_object_t *worker_r2_head(worker_r2_bucket_t *bucket, const char *key);
+
+/** Store an object. Returns 0 on success. */
+int worker_r2_put(worker_r2_bucket_t *bucket, const char *key,
+                  const uint8_t *body, size_t body_len,
+                  const worker_r2_put_options_t *opts);
+
+/** Delete an object. Returns 0 on success, -1 if not found. */
+int worker_r2_delete(worker_r2_bucket_t *bucket, const char *key);
+
+/** List objects with optional prefix/limit/cursor filtering. */
+worker_r2_list_result_t *worker_r2_list(worker_r2_bucket_t *bucket,
+                                        const worker_r2_list_options_t *opts);
+
+/** Free an R2 object. */
+void worker_r2_object_destroy(worker_r2_object_t *obj);
+
+/** Free an R2 list result (including all contained objects). */
+void worker_r2_list_result_destroy(worker_r2_list_result_t *result);
+
+/* ===== Cloudflare D1 Database API ===== */
+
+/** Result of a D1 query execution. */
+typedef struct {
+    bool          success;        /**< Whether the statement succeeded. */
+    json_value_t *results;        /**< JSON array of row objects (for SELECT). */
+    int           meta_changes;   /**< Number of rows affected (INSERT/DELETE). */
+} worker_d1_result_t;
+
+/** Create a D1 database handle. */
+worker_d1_t *worker_d1_create(const char *database_name);
+
+/** Destroy a D1 database and free all in-memory tables. */
+void worker_d1_destroy(worker_d1_t *db);
+
+/** Get the database name. */
+const char *worker_d1_get_name(const worker_d1_t *db);
+
+/** Prepare a SQL statement.  Returns a statement handle. */
+worker_d1_stmt_t *worker_d1_prepare(worker_d1_t *db, const char *sql);
+
+/** Destroy a prepared statement. */
+void worker_d1_stmt_destroy(worker_d1_stmt_t *stmt);
+
+/** Bind a parameter (1-based index) to a statement. Pass NULL for SQL NULL. */
+int worker_d1_stmt_bind(worker_d1_stmt_t *stmt, int index, const char *value);
+
+/** Execute a prepared statement and return full result with metadata. */
+worker_d1_result_t *worker_d1_stmt_run(worker_d1_stmt_t *stmt);
+
+/** Execute a statement and return only the first row as a JSON object. */
+json_value_t *worker_d1_stmt_first(worker_d1_stmt_t *stmt);
+
+/** Execute a statement and return all rows as a JSON array. */
+json_value_t *worker_d1_stmt_all(worker_d1_stmt_t *stmt);
+
+/**
+ * Execute raw SQL (no parameter binding).
+ * Useful for DDL statements like CREATE TABLE.
+ */
+worker_d1_result_t *worker_d1_exec(worker_d1_t *db, const char *sql);
+
+/**
+ * Execute a batch of prepared statements in sequence.
+ * Returns an array of results on success.
+ * On failure returns NULL; statements executed before the failure are not
+ * guaranteed to be rolled back.
+ */
+worker_d1_result_t **worker_d1_batch(worker_d1_t *db,
+                                     worker_d1_stmt_t **stmts, int count,
+                                     int *out_count);
+
+/** Destroy a D1 result. */
+void worker_d1_result_destroy(worker_d1_result_t *result);
+
+/* ===== Cloudflare Queues API ===== */
+
+/** A single queue message. */
+typedef struct {
+    char   *id;         /**< Unique message ID. */
+    char   *body;       /**< Message body. */
+    size_t  body_len;   /**< Body length. */
+    int64_t timestamp;  /**< Enqueue timestamp (Unix epoch). */
+    int     attempts;   /**< Delivery attempt count. */
+    bool    acked;      /**< Whether message has been acknowledged. */
+} worker_queue_message_t;
+
+/** A batch of consumed messages. */
+typedef struct {
+    worker_queue_message_t **messages;  /**< Array of message pointers. */
+    int                      count;     /**< Number of messages in batch. */
+    char                    *queue_name;/**< Owned copy of the source queue name. */
+} worker_queue_batch_t;
+
+/** Create a queue handle. */
+worker_queue_t *worker_queue_create(const char *queue_name);
+
+/** Destroy a queue and free all pending messages. */
+void worker_queue_destroy(worker_queue_t *q);
+
+/** Get the queue name. */
+const char *worker_queue_get_name(const worker_queue_t *q);
+
+/** Get the current queue depth (pending messages). */
+int worker_queue_get_depth(const worker_queue_t *q);
+
+/** Enqueue a single message (binary body). */
+int worker_queue_send(worker_queue_t *q, const char *body, size_t body_len);
+
+/** Enqueue a text message. */
+int worker_queue_send_text(worker_queue_t *q, const char *text);
+
+/** Enqueue a JSON value (serialised automatically). */
+int worker_queue_send_json(worker_queue_t *q, json_value_t *json);
+
+/** Enqueue a batch of messages (up to 100). Atomic: all or none. */
+int worker_queue_send_batch(worker_queue_t *q, const char **bodies,
+                            const size_t *lengths, int count);
+
+/**
+ * Consume messages from the queue in a batch.
+ * @param max_batch       Max messages to dequeue (1–100).
+ * @param max_wait_seconds Ignored in in-memory impl.
+ * @return Batch of messages.  Caller must destroy with
+ *         worker_queue_batch_destroy().
+ */
+worker_queue_batch_t *worker_queue_consume(worker_queue_t *q, int max_batch,
+                                           int max_wait_seconds);
+
+/** Acknowledge a consumed message (marks as processed). */
+void worker_queue_message_ack(worker_queue_message_t *msg);
+
+/** Destroy a single queue message. */
+void worker_queue_message_destroy(worker_queue_message_t *msg);
+
+/** Destroy a consumed batch (and all messages within). */
+void worker_queue_batch_destroy(worker_queue_batch_t *batch);
+
 /* ===== WebAssembly Runtime API ===== */
 
 /**
@@ -1923,442 +2299,6 @@ WASM_EXPORT void  wasm_template_context_destroy(template_context_t *ctx);
 
 /* WASM Memory helper (free strings returned by wasm_json_stringify, etc.) */
 WASM_EXPORT void wasm_free(void *ptr);
-
-/* ===== Cloudflare Worker Runtime API ===== */
-
-/*
- * The Worker runtime provides a fetch-event model for Cloudflare Workers.
- * A JavaScript glue layer deserialises the incoming Request, calls the
- * WASM-exported functions below, and returns the Response.
- *
- * Typical flow:
- *   1. JS creates a worker_request_t  via worker_request_create()
- *   2. JS sets headers/body           via worker_request_set_header/body()
- *   3. JS calls worker_handle_fetch() to route through a router_t
- *   4. JS reads status/headers/body   from the returned worker_response_t
- *   5. JS destroys both objects
- *
- * Cloudflare infrastructure bindings:
- *   - worker_kv_t        – KV namespace (get/put/delete/list, TTL support)
- *   - worker_r2_bucket_t – R2 object storage (get/put/delete/list/head)
- *   - worker_d1_t        – D1 edge SQL database (exec/query)
- *   - worker_queue_t     – Queues producer (send/send_batch)
- *   - worker_env_t       – env context (named bindings for KV/R2/D1/Queue)
- */
-
-/* Forward declarations */
-typedef struct worker_request    worker_request_t;
-typedef struct worker_response   worker_response_t;
-typedef struct worker_kv         worker_kv_t;
-typedef struct worker_r2_bucket  worker_r2_bucket_t;
-typedef struct worker_d1         worker_d1_t;
-typedef struct worker_d1_result  worker_d1_result_t;
-typedef struct worker_queue      worker_queue_t;
-typedef struct worker_env        worker_env_t;
-
-/* --- Worker Request --- */
-
-/**
- * Create a Worker request.
- * @param method  HTTP method string ("GET", "POST", …)
- * @param url     Request URL path, optionally with query string
- * @return New request or NULL on failure
- */
-WASM_EXPORT worker_request_t *worker_request_create(const char *method,
-                                                    const char *url);
-
-/**
- * Add a header to the Worker request.
- * @param req   Worker request
- * @param name  Header name
- * @param value Header value
- */
-WASM_EXPORT void worker_request_set_header(worker_request_t *req,
-                                           const char *name,
-                                           const char *value);
-
-/**
- * Set the request body.
- * @param req  Worker request
- * @param body Body bytes (copied)
- * @param len  Body length
- */
-WASM_EXPORT void worker_request_set_body(worker_request_t *req,
-                                         const char *body, size_t len);
-
-/** Get the request method string. */
-WASM_EXPORT const char *worker_request_get_method(worker_request_t *req);
-
-/** Get the request URL string. */
-WASM_EXPORT const char *worker_request_get_url(worker_request_t *req);
-
-/**
- * Look up a request header by name (case-insensitive).
- * @return Header value or NULL if not found
- */
-WASM_EXPORT const char *worker_request_get_header(worker_request_t *req,
-                                                  const char *name);
-
-/** Get the request body (NULL if none). */
-WASM_EXPORT const char *worker_request_get_body(worker_request_t *req);
-
-/** Get the request body length. */
-WASM_EXPORT size_t worker_request_get_body_len(worker_request_t *req);
-
-/** Destroy a Worker request and free its resources. */
-WASM_EXPORT void worker_request_destroy(worker_request_t *req);
-
-/* --- Worker Response --- */
-
-/**
- * Create an empty Worker response (default status 200).
- */
-WASM_EXPORT worker_response_t *worker_response_create(void);
-
-/** Set response HTTP status code. */
-WASM_EXPORT void worker_response_set_status(worker_response_t *res,
-                                            int status);
-
-/**
- * Set a response header (replaces existing header with same name).
- */
-WASM_EXPORT void worker_response_set_header(worker_response_t *res,
-                                            const char *name,
-                                            const char *value);
-
-/**
- * Set the response body from raw bytes.
- */
-WASM_EXPORT void worker_response_set_body(worker_response_t *res,
-                                          const char *body, size_t len);
-
-/**
- * Convenience: set status + text/plain body.
- */
-WASM_EXPORT void worker_response_set_text(worker_response_t *res,
-                                          int status, const char *text);
-
-/**
- * Convenience: set status + application/json body from a json_value_t.
- */
-WASM_EXPORT void worker_response_set_json(worker_response_t *res,
-                                          int status, json_value_t *json);
-
-/** Get response status code. */
-WASM_EXPORT int worker_response_get_status(worker_response_t *res);
-
-/**
- * Look up a response header by name (case-insensitive).
- * @return Header value or NULL if not found
- */
-WASM_EXPORT const char *worker_response_get_header(worker_response_t *res,
-                                                   const char *name);
-
-/** Get the number of response headers. */
-WASM_EXPORT int worker_response_get_header_count(worker_response_t *res);
-
-/** Get the name of the header at the given index. */
-WASM_EXPORT const char *worker_response_get_header_name(worker_response_t *res,
-                                                        int index);
-
-/** Get the value of the header at the given index. */
-WASM_EXPORT const char *worker_response_get_header_value(worker_response_t *res,
-                                                         int index);
-
-/** Get response body pointer (NULL if empty). */
-WASM_EXPORT const char *worker_response_get_body(worker_response_t *res);
-
-/** Get response body length. */
-WASM_EXPORT size_t worker_response_get_body_len(worker_response_t *res);
-
-/** Destroy a Worker response and free its resources. */
-WASM_EXPORT void worker_response_destroy(worker_response_t *res);
-
-/* --- Fetch Handler --- */
-
-/**
- * Route a Worker request through a router_t and return the response.
- *
- * Creates temporary library-level request/response objects, dispatches
- * through the router (including middleware), and converts the result
- * back to a worker_response_t.
- *
- * @param req    Incoming Worker request
- * @param router Router with registered routes/middleware
- * @return Worker response (caller must destroy), or NULL on error
- */
-WASM_EXPORT worker_response_t *worker_handle_fetch(worker_request_t *req,
-                                                   router_t *router);
-
-/* --- Worker KV Store (Cloudflare KV namespace binding) --- */
-
-/**
- * Create an in-memory KV namespace.
- * Models the Cloudflare KV binding: env.MY_KV.get/put/delete/list().
- */
-WASM_EXPORT worker_kv_t *worker_kv_create(void);
-
-/**
- * Store a key-value pair (overwrites existing key).
- * Keys exceeding 512 bytes are rejected.
- * @return 0 on success, -1 on failure
- */
-WASM_EXPORT int worker_kv_put(worker_kv_t *kv,
-                              const char *key, const char *value);
-
-/**
- * Store a key-value pair with a TTL (time-to-live) in seconds.
- * Mirrors Cloudflare KV put(key, value, { expirationTtl }).
- * @param ttl_seconds  Seconds until expiration (0 = no expiration)
- * @return 0 on success, -1 on failure
- */
-WASM_EXPORT int worker_kv_put_with_ttl(worker_kv_t *kv,
-                                       const char *key, const char *value,
-                                       int ttl_seconds);
-
-/**
- * Retrieve a value by key.  Expired keys return NULL.
- * @return Value string or NULL if not found / expired
- */
-WASM_EXPORT const char *worker_kv_get(worker_kv_t *kv, const char *key);
-
-/**
- * Delete a key-value pair.
- * @return 0 on success, -1 if key not found
- */
-WASM_EXPORT int worker_kv_delete(worker_kv_t *kv, const char *key);
-
-/**
- * List keys with optional prefix filter.
- * Mirrors Cloudflare KV list({ prefix, limit }).
- *
- * @param prefix   Key prefix filter (NULL = all keys)
- * @param limit    Max keys to return (0 or >1000 = default 1000)
- * @param out_keys Output array of key strings (caller frees with worker_kv_list_free)
- * @param out_count Output count
- * @return 0 on success, -1 on failure
- */
-WASM_EXPORT int worker_kv_list(worker_kv_t *kv, const char *prefix,
-                               int limit,
-                               const char ***out_keys, int *out_count);
-
-/** Free a key list returned by worker_kv_list(). */
-WASM_EXPORT void worker_kv_list_free(const char **keys);
-
-/** Destroy the KV store and free all entries. */
-WASM_EXPORT void worker_kv_destroy(worker_kv_t *kv);
-
-/* --- Worker R2 Object Storage (Cloudflare R2 bucket binding) --- */
-
-/**
- * Create an in-memory R2 bucket.
- * Models the Cloudflare R2 binding: env.MY_BUCKET.get/put/delete/list/head().
- */
-WASM_EXPORT worker_r2_bucket_t *worker_r2_create(void);
-
-/**
- * Store an object in the R2 bucket.
- * @param key           Object key (max 1024 bytes)
- * @param data          Object body
- * @param size          Body size in bytes
- * @param content_type  MIME type (NULL = "application/octet-stream")
- * @return 0 on success, -1 on failure
- */
-WASM_EXPORT int worker_r2_put(worker_r2_bucket_t *r2, const char *key,
-                              const char *data, size_t size,
-                              const char *content_type);
-
-/**
- * Retrieve an object's body.
- * @param out_size  Receives body size
- * @return Pointer to body data or NULL if not found
- */
-WASM_EXPORT const char *worker_r2_get(worker_r2_bucket_t *r2,
-                                      const char *key, size_t *out_size);
-
-/**
- * Get object metadata without body (mirrors R2 head()).
- * @param out_size          Receives body size
- * @param out_content_type  Receives content-type string
- * @return 0 on success, -1 if not found
- */
-WASM_EXPORT int worker_r2_head(worker_r2_bucket_t *r2, const char *key,
-                               size_t *out_size,
-                               const char **out_content_type);
-
-/**
- * Delete an object from the R2 bucket.
- * @return 0 on success, -1 if not found
- */
-WASM_EXPORT int worker_r2_delete(worker_r2_bucket_t *r2, const char *key);
-
-/**
- * List object keys with optional prefix filter.
- * Mirrors R2 list({ prefix, limit }).
- *
- * @param prefix    Key prefix filter (NULL = all)
- * @param limit     Max keys (0 or >1000 = default 1000)
- * @param out_keys  Output array (caller frees with worker_r2_list_free)
- * @param out_count Output count
- * @return 0 on success, -1 on failure
- */
-WASM_EXPORT int worker_r2_list(worker_r2_bucket_t *r2, const char *prefix,
-                               int limit,
-                               const char ***out_keys, int *out_count);
-
-/** Free a key list returned by worker_r2_list(). */
-WASM_EXPORT void worker_r2_list_free(const char **keys);
-
-/** Destroy the R2 bucket and free all objects. */
-WASM_EXPORT void worker_r2_destroy(worker_r2_bucket_t *r2);
-
-/* --- Worker D1 Database (Cloudflare D1 edge SQL binding) --- */
-
-/**
- * Create an in-memory D1 database.
- * Models the Cloudflare D1 binding: env.DB.prepare(sql).run/all().
- */
-WASM_EXPORT worker_d1_t *worker_d1_create(void);
-
-/**
- * Execute a DDL/DML statement (CREATE TABLE, INSERT, etc.).
- * @return 0 on success, -1 on failure
- */
-WASM_EXPORT int worker_d1_exec(worker_d1_t *d1, const char *sql);
-
-/**
- * Execute a query and return results.
- * Mirrors D1 prepare(sql).all().
- * @return Result set (caller must destroy), or NULL on error
- */
-WASM_EXPORT worker_d1_result_t *worker_d1_query(worker_d1_t *d1,
-                                                const char *sql);
-
-/** Get the number of rows in a D1 result. */
-WASM_EXPORT int worker_d1_result_get_row_count(worker_d1_result_t *result);
-
-/** Get the number of columns in a D1 result. */
-WASM_EXPORT int worker_d1_result_get_col_count(worker_d1_result_t *result);
-
-/** Get a column name by index. */
-WASM_EXPORT const char *worker_d1_result_get_col_name(
-    worker_d1_result_t *result, int col);
-
-/** Get a cell value by row and column index. */
-WASM_EXPORT const char *worker_d1_result_get_value(
-    worker_d1_result_t *result, int row, int col);
-
-/** Check whether a D1 query succeeded. */
-WASM_EXPORT bool worker_d1_result_is_success(worker_d1_result_t *result);
-
-/** Get the error message (NULL if success). */
-WASM_EXPORT const char *worker_d1_result_get_error(
-    worker_d1_result_t *result);
-
-/** Destroy a D1 result and free its rows/columns. */
-WASM_EXPORT void worker_d1_result_destroy(worker_d1_result_t *result);
-
-/** Destroy the D1 database and free all tables. */
-WASM_EXPORT void worker_d1_destroy(worker_d1_t *d1);
-
-/* --- Worker Queue (Cloudflare Queues producer binding) --- */
-
-/**
- * Create a Queue producer.
- * Models the Cloudflare Queue binding: env.MY_QUEUE.send/sendBatch().
- */
-WASM_EXPORT worker_queue_t *worker_queue_create(void);
-
-/**
- * Send a single message to the queue.
- * @param body  Message body
- * @param len   Body length (max 128 KB per Cloudflare limit)
- * @return 0 on success, -1 on failure
- */
-WASM_EXPORT int worker_queue_send(worker_queue_t *q,
-                                  const char *body, size_t len);
-
-/**
- * Send a batch of messages to the queue.
- * Mirrors Queue.sendBatch() (max 100 messages, 256 KB total).
- * @param bodies   Array of message body pointers
- * @param lengths  Array of body lengths
- * @param count    Number of messages
- * @return 0 on success, -1 on failure
- */
-WASM_EXPORT int worker_queue_send_batch(worker_queue_t *q,
-                                        const char **bodies,
-                                        const size_t *lengths,
-                                        int count);
-
-/** Get the number of messages in the queue. */
-WASM_EXPORT int worker_queue_get_count(worker_queue_t *q);
-
-/**
- * Peek at a message by index (does not remove it).
- * @param out_len  Receives message length
- * @return Pointer to message body or NULL
- */
-WASM_EXPORT const char *worker_queue_peek(worker_queue_t *q, int index,
-                                          size_t *out_len);
-
-/** Destroy the queue and free all messages. */
-WASM_EXPORT void worker_queue_destroy(worker_queue_t *q);
-
-/* --- Worker Environment Context (Cloudflare env object) --- */
-
-/**
- * Create a Worker environment context.
- * Models the Cloudflare Workers env object that holds named bindings
- * for KV namespaces, R2 buckets, D1 databases, and Queues.
- */
-WASM_EXPORT worker_env_t *worker_env_create(void);
-
-/** Bind a KV namespace.  env does not take ownership. */
-WASM_EXPORT int worker_env_bind_kv(worker_env_t *env, const char *name,
-                                   worker_kv_t *kv);
-
-/** Bind an R2 bucket.  env does not take ownership. */
-WASM_EXPORT int worker_env_bind_r2(worker_env_t *env, const char *name,
-                                   worker_r2_bucket_t *r2);
-
-/** Bind a D1 database.  env does not take ownership. */
-WASM_EXPORT int worker_env_bind_d1(worker_env_t *env, const char *name,
-                                   worker_d1_t *d1);
-
-/** Bind a Queue producer.  env does not take ownership. */
-WASM_EXPORT int worker_env_bind_queue(worker_env_t *env, const char *name,
-                                      worker_queue_t *q);
-
-/** Look up a KV namespace by binding name. */
-WASM_EXPORT worker_kv_t *worker_env_get_kv(worker_env_t *env,
-                                            const char *name);
-
-/** Look up an R2 bucket by binding name. */
-WASM_EXPORT worker_r2_bucket_t *worker_env_get_r2(worker_env_t *env,
-                                                   const char *name);
-
-/** Look up a D1 database by binding name. */
-WASM_EXPORT worker_d1_t *worker_env_get_d1(worker_env_t *env,
-                                            const char *name);
-
-/** Look up a Queue producer by binding name. */
-WASM_EXPORT worker_queue_t *worker_env_get_queue(worker_env_t *env,
-                                                  const char *name);
-
-/**
- * Destroy the env context.  Does NOT destroy bound resources –
- * the caller owns those and must destroy them separately.
- */
-WASM_EXPORT void worker_env_destroy(worker_env_t *env);
-
-/* --- Worker Runtime Info --- */
-
-/** Get the Worker runtime version string (e.g. "weblib-worker/1.0"). */
-WASM_EXPORT const char *worker_runtime_version(void);
-
-/** Check whether Worker runtime support is compiled in. */
-WASM_EXPORT bool worker_runtime_is_supported(void);
 
 #ifdef __cplusplus
 }

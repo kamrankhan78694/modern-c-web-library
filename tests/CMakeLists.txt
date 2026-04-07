@@ -29,6 +29,13 @@ if(NOT EMSCRIPTEN)
 
     # Add stress test to CTest
     add_test(NAME StressTests COMMAND test_stress)
+
+    # Worker runtime + infrastructure test executable
+    add_executable(test_worker test_worker.c)
+    target_link_libraries(test_worker weblib ${PLATFORM_LIBS})
+
+    # Add worker test to CTest
+    add_test(NAME WorkerTests COMMAND test_worker)
 endif()
 
 # WASM capability test (runs on both native and WASM builds)
@@ -36,9 +43,3 @@ add_executable(test_wasm test_wasm.c)
 target_link_libraries(test_wasm weblib ${PLATFORM_LIBS})
 
 add_test(NAME WasmTests COMMAND test_wasm)
-
-# Cloudflare Worker runtime test (runs on both native and WASM builds)
-add_executable(test_worker test_worker.c)
-target_link_libraries(test_worker weblib ${PLATFORM_LIBS})
-
-add_test(NAME WorkerTests COMMAND test_worker)

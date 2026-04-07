@@ -51,8 +51,11 @@ export default {
         const methodPtr = wasmModule.allocateUTF8(method);
         const pathPtr = wasmModule.allocateUTF8(path);
 
-        /* Call the C fetch handler */
-        const resPtr = wasmModule._worker_fetch(methodPtr, pathPtr);
+        /* Forward env to the WASM module if an env pointer is available */
+        const envPtr = wasmModule._worker_get_env ? wasmModule._worker_get_env() : 0;
+
+        /* Call the C fetch handler (passes env for binding access) */
+        const resPtr = wasmModule._worker_fetch(methodPtr, pathPtr, envPtr);
 
         /* Free input strings */
         wasmModule._free(methodPtr);

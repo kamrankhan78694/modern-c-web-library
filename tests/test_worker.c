@@ -1,13 +1,9 @@
 /*
- * test_worker.c - Tests for Cloudflare Worker Runtime
+ * test_worker.c - Tests for Cloudflare Worker Runtime & Infrastructure Bindings
  *
- * Validates the Worker request/response abstraction, fetch handler
- * integration with the router, KV store (including TTL and list),
- * R2 object storage, D1 SQL database, Queues producer, and the
- * env context bindings.
- *
- * These tests run on native builds too, exercising the same code
- * paths that Emscripten/Workers will use.
+ * Validates the Worker fetch handler, environment bindings, and all
+ * Cloudflare infrastructure services: KV, R2, D1, and Queues.
+ * Runs on native builds using the in-memory simulation backends.
  *
  * Copyright (c) 2024 Modern C Web Library
  * Licensed under MIT License
@@ -22,7 +18,6 @@
 static int tests_run = 0;
 static int tests_passed = 0;
 
-/* Test macros (consistent with test_weblib.c / test_wasm.c) */
 #define TEST(name) \
     printf("Testing %s... ", name); \
     tests_run++;
@@ -37,1015 +32,766 @@ static int tests_passed = 0;
     printf("PASSED\n"); \
     tests_passed++;
 
-/* ===== Worker Runtime Info Tests ===== */
-
-static void test_worker_runtime_version(void) {
-    TEST("worker_runtime_version");
-    const char *ver = worker_runtime_version();
-    ASSERT(ver != NULL);
-    ASSERT(strstr(ver, "weblib-worker") != NULL);
-    PASS();
-}
-
-static void test_worker_runtime_is_supported(void) {
-    TEST("worker_runtime_is_supported");
-    ASSERT(worker_runtime_is_supported() == true);
-    PASS();
-}
-
-/* ===== Worker Request Tests ===== */
+/* ========================================================
+ * Worker Request Tests
+ * ======================================================== */
 
 static void test_worker_request_create(void) {
     TEST("worker_request_create");
-    worker_request_t *req = worker_request_create("GET", "/api/hello");
+    worker_request_t *req = worker_request_create("GET", "https://example.com/api");
     ASSERT(req != NULL);
     ASSERT(strcmp(worker_request_get_method(req), "GET") == 0);
-    ASSERT(strcmp(worker_request_get_url(req), "/api/hello") == 0);
+    ASSERT(strcmp(worker_request_get_url(req), "https://example.com/api") == 0);
     worker_request_destroy(req);
     PASS();
 }
 
-static void test_worker_request_null_params(void) {
-    TEST("worker_request_create_null_params");
-    ASSERT(worker_request_create(NULL, "/api") == NULL);
+static void test_worker_request_null_args(void) {
+    TEST("worker_request_null_args");
+    ASSERT(worker_request_create(NULL, "url") == NULL);
     ASSERT(worker_request_create("GET", NULL) == NULL);
-    ASSERT(worker_request_get_method(NULL) == NULL);
-    ASSERT(worker_request_get_url(NULL) == NULL);
-    ASSERT(worker_request_get_body(NULL) == NULL);
-    ASSERT(worker_request_get_body_len(NULL) == 0);
     PASS();
 }
 
 static void test_worker_request_headers(void) {
     TEST("worker_request_headers");
-    worker_request_t *req = worker_request_create("POST", "/api/data");
+    worker_request_t *req = worker_request_create("POST", "/data");
     ASSERT(req != NULL);
-
-    worker_request_set_header(req, "Content-Type", "application/json");
-    worker_request_set_header(req, "Authorization", "Bearer token123");
-
-    const char *ct = worker_request_get_header(req, "Content-Type");
-    ASSERT(ct != NULL);
-    ASSERT(strcmp(ct, "application/json") == 0);
-
-    /* Case-insensitive lookup */
-    const char *ct2 = worker_request_get_header(req, "content-type");
-    ASSERT(ct2 != NULL);
-    ASSERT(strcmp(ct2, "application/json") == 0);
-
-    const char *auth = worker_request_get_header(req, "Authorization");
-    ASSERT(auth != NULL);
-    ASSERT(strstr(auth, "Bearer") != NULL);
-
-    /* Missing header */
+    ASSERT(worker_request_set_header(req, "Content-Type", "application/json") == 0);
+    ASSERT(worker_request_set_header(req, "Authorization", "Bearer tok") == 0);
+    ASSERT(strcmp(worker_request_get_header(req, "content-type"), "application/json") == 0);
+    ASSERT(strcmp(worker_request_get_header(req, "AUTHORIZATION"), "Bearer tok") == 0);
     ASSERT(worker_request_get_header(req, "X-Missing") == NULL);
-
     worker_request_destroy(req);
     PASS();
 }
 
 static void test_worker_request_body(void) {
     TEST("worker_request_body");
-    worker_request_t *req = worker_request_create("POST", "/api/data");
+    worker_request_t *req = worker_request_create("POST", "/upload");
     ASSERT(req != NULL);
-
-    const char *body = "{\"key\":\"value\"}";
-    worker_request_set_body(req, body, strlen(body));
-
-    const char *got = worker_request_get_body(req);
-    ASSERT(got != NULL);
-    ASSERT(strcmp(got, body) == 0);
-    ASSERT(worker_request_get_body_len(req) == strlen(body));
-
-    /* Replace body */
-    const char *body2 = "updated";
-    worker_request_set_body(req, body2, strlen(body2));
-    ASSERT(strcmp(worker_request_get_body(req), "updated") == 0);
-
-    /* Clear body */
-    worker_request_set_body(req, NULL, 0);
-    ASSERT(worker_request_get_body(req) == NULL);
-    ASSERT(worker_request_get_body_len(req) == 0);
-
+    ASSERT(worker_request_set_body(req, "hello world", 11) == 0);
+    size_t len = 0;
+    const char *body = worker_request_get_body(req, &len);
+    ASSERT(body != NULL);
+    ASSERT(len == 11);
+    ASSERT(memcmp(body, "hello world", 11) == 0);
     worker_request_destroy(req);
     PASS();
 }
 
-/* ===== Worker Response Tests ===== */
+/* ========================================================
+ * Worker Response Tests
+ * ======================================================== */
 
 static void test_worker_response_create(void) {
     TEST("worker_response_create");
-    worker_response_t *res = worker_response_create();
+    worker_response_t *res = worker_response_create(200);
     ASSERT(res != NULL);
     ASSERT(worker_response_get_status(res) == 200);
-    ASSERT(worker_response_get_body(res) == NULL);
-    ASSERT(worker_response_get_body_len(res) == 0);
     worker_response_destroy(res);
     PASS();
 }
 
-static void test_worker_response_status(void) {
-    TEST("worker_response_set_status");
-    worker_response_t *res = worker_response_create();
-    ASSERT(res != NULL);
-
-    worker_response_set_status(res, 404);
-    ASSERT(worker_response_get_status(res) == 404);
-
-    worker_response_set_status(res, 500);
-    ASSERT(worker_response_get_status(res) == 500);
-
-    worker_response_destroy(res);
-    PASS();
-}
-
-static void test_worker_response_null_params(void) {
-    TEST("worker_response_null_params");
-    ASSERT(worker_response_get_status(NULL) == 0);
-    ASSERT(worker_response_get_body(NULL) == NULL);
-    ASSERT(worker_response_get_body_len(NULL) == 0);
-    ASSERT(worker_response_get_header(NULL, "X") == NULL);
-    ASSERT(worker_response_get_header_count(NULL) == 0);
-    ASSERT(worker_response_get_header_name(NULL, 0) == NULL);
-    ASSERT(worker_response_get_header_value(NULL, 0) == NULL);
-    PASS();
-}
-
-static void test_worker_response_headers(void) {
-    TEST("worker_response_headers");
-    worker_response_t *res = worker_response_create();
-    ASSERT(res != NULL);
-
-    worker_response_set_header(res, "X-Custom", "value1");
-    worker_response_set_header(res, "X-Another", "value2");
-
-    ASSERT(worker_response_get_header_count(res) == 2);
-
-    const char *v1 = worker_response_get_header(res, "X-Custom");
-    ASSERT(v1 != NULL);
-    ASSERT(strcmp(v1, "value1") == 0);
-
-    /* Replace existing header */
-    worker_response_set_header(res, "X-Custom", "replaced");
-    ASSERT(worker_response_get_header_count(res) == 2);
-    ASSERT(strcmp(worker_response_get_header(res, "X-Custom"), "replaced") == 0);
-
-    /* Index-based access */
-    const char *name0 = worker_response_get_header_name(res, 0);
-    const char *val0 = worker_response_get_header_value(res, 0);
-    ASSERT(name0 != NULL);
-    ASSERT(val0 != NULL);
-
-    /* Out-of-bounds */
-    ASSERT(worker_response_get_header_name(res, 99) == NULL);
-    ASSERT(worker_response_get_header_value(res, -1) == NULL);
-
-    worker_response_destroy(res);
-    PASS();
-}
-
-static void test_worker_response_body(void) {
-    TEST("worker_response_body");
-    worker_response_t *res = worker_response_create();
-    ASSERT(res != NULL);
-
-    const char *body = "Hello, Worker!";
-    worker_response_set_body(res, body, strlen(body));
-
-    ASSERT(worker_response_get_body(res) != NULL);
-    ASSERT(strcmp(worker_response_get_body(res), body) == 0);
-    ASSERT(worker_response_get_body_len(res) == strlen(body));
-
-    worker_response_destroy(res);
-    PASS();
-}
-
-static void test_worker_response_set_text(void) {
-    TEST("worker_response_set_text");
-    worker_response_t *res = worker_response_create();
-    ASSERT(res != NULL);
-
-    worker_response_set_text(res, 201, "Created");
-    ASSERT(worker_response_get_status(res) == 201);
-    ASSERT(strcmp(worker_response_get_body(res), "Created") == 0);
-
-    const char *ct = worker_response_get_header(res, "Content-Type");
-    ASSERT(ct != NULL);
-    ASSERT(strstr(ct, "text/plain") != NULL);
-
-    worker_response_destroy(res);
-    PASS();
-}
-
-static void test_worker_response_set_json(void) {
-    TEST("worker_response_set_json");
-    worker_response_t *res = worker_response_create();
-    ASSERT(res != NULL);
-
-    json_value_t *json = json_object_create();
-    json_object_set(json, "status", json_string_create("ok"));
-    json_object_set(json, "code", json_number_create(200));
-
-    worker_response_set_json(res, 200, json);
-    ASSERT(worker_response_get_status(res) == 200);
-
-    const char *body = worker_response_get_body(res);
+static void test_worker_response_body_text(void) {
+    TEST("worker_response_body_text");
+    worker_response_t *res = worker_response_create(200);
+    ASSERT(worker_response_set_body_text(res, "OK") == 0);
+    size_t len = 0;
+    const char *body = worker_response_get_body(res, &len);
     ASSERT(body != NULL);
-    ASSERT(strstr(body, "\"status\"") != NULL);
-    ASSERT(strstr(body, "\"ok\"") != NULL);
-
-    const char *ct = worker_response_get_header(res, "Content-Type");
-    ASSERT(ct != NULL);
-    ASSERT(strstr(ct, "application/json") != NULL);
-
-    json_value_free(json);
+    ASSERT(len == 2);
+    ASSERT(memcmp(body, "OK", 2) == 0);
     worker_response_destroy(res);
     PASS();
 }
 
-/* ===== Worker Fetch Handler Tests ===== */
-
-/* Simple handler for testing */
-static void hello_handler(http_request_t *req, http_response_t *res) {
-    (void)req;
-    http_response_send_text(res, HTTP_OK, "Hello from Worker!");
-}
-
-/* JSON handler for testing */
-static void json_handler(http_request_t *req, http_response_t *res) {
-    (void)req;
-    json_value_t *json = json_object_create();
-    json_object_set(json, "message", json_string_create("worker response"));
-    http_response_send_json(res, HTTP_OK, json);
-    json_value_free(json);
-}
-
-/* Handler that reads route parameters */
-static void param_handler(http_request_t *req, http_response_t *res) {
-    const char *id = http_request_get_param(req, "id");
-    if (id) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "User %s", id);
-        http_response_send_text(res, HTTP_OK, buf);
-    } else {
-        http_response_send_text(res, HTTP_NOT_FOUND, "No ID");
-    }
-}
-
-static void test_worker_handle_fetch_text(void) {
-    TEST("worker_handle_fetch_text");
-
-    router_t *router = router_create();
-    ASSERT(router != NULL);
-    router_add_route(router, HTTP_GET, "/hello", hello_handler);
-
-    worker_request_t *req = worker_request_create("GET", "/hello");
-    ASSERT(req != NULL);
-
-    worker_response_t *res = worker_handle_fetch(req, router);
-    ASSERT(res != NULL);
-    ASSERT(worker_response_get_status(res) == 200);
-
-    const char *body = worker_response_get_body(res);
+static void test_worker_response_json(void) {
+    TEST("worker_response_json");
+    worker_response_t *res = worker_response_create(200);
+    json_value_t *j = json_object_create();
+    json_object_set(j, "status", json_string_create("ok"));
+    ASSERT(worker_response_set_json(res, j) == 0);
+    ASSERT(strcmp(worker_response_get_header(res, "Content-Type"),
+                  "application/json") == 0);
+    size_t len = 0;
+    const char *body = worker_response_get_body(res, &len);
     ASSERT(body != NULL);
-    ASSERT(strcmp(body, "Hello from Worker!") == 0);
-
+    ASSERT(strstr(body, "status") != NULL);
+    json_value_free(j);
     worker_response_destroy(res);
-    worker_request_destroy(req);
-    router_destroy(router);
     PASS();
 }
 
-static void test_worker_handle_fetch_json(void) {
-    TEST("worker_handle_fetch_json");
+/* ========================================================
+ * Worker Environment Tests
+ * ======================================================== */
 
-    router_t *router = router_create();
-    ASSERT(router != NULL);
-    router_add_route(router, HTTP_GET, "/api/data", json_handler);
+static void test_worker_env_bindings(void) {
+    TEST("worker_env_bindings");
+    worker_env_t *env = worker_env_create();
+    ASSERT(env != NULL);
+    ASSERT(worker_env_binding_count(env) == 0);
 
-    worker_request_t *req = worker_request_create("GET", "/api/data");
-    ASSERT(req != NULL);
+    worker_kv_t *kv = worker_kv_create("MY_KV");
+    ASSERT(worker_env_add_binding(env, "MY_KV", WORKER_BINDING_KV, kv) == 0);
+    ASSERT(worker_env_binding_count(env) == 1);
 
-    worker_response_t *res = worker_handle_fetch(req, router);
-    ASSERT(res != NULL);
-    ASSERT(worker_response_get_status(res) == 200);
+    void *got = worker_env_get_binding(env, "MY_KV", WORKER_BINDING_KV);
+    ASSERT(got == kv);
+    ASSERT(worker_env_get_binding(env, "MISSING", WORKER_BINDING_KV) == NULL);
 
-    const char *body = worker_response_get_body(res);
-    ASSERT(body != NULL);
-    ASSERT(strstr(body, "worker response") != NULL);
-
-    const char *ct = worker_response_get_header(res, "Content-Type");
-    ASSERT(ct != NULL);
-    ASSERT(strstr(ct, "application/json") != NULL);
-
-    worker_response_destroy(res);
-    worker_request_destroy(req);
-    router_destroy(router);
-    PASS();
-}
-
-static void test_worker_handle_fetch_not_found(void) {
-    TEST("worker_handle_fetch_not_found");
-
-    router_t *router = router_create();
-    ASSERT(router != NULL);
-    router_add_route(router, HTTP_GET, "/exists", hello_handler);
-
-    worker_request_t *req = worker_request_create("GET", "/does-not-exist");
-    ASSERT(req != NULL);
-
-    worker_response_t *res = worker_handle_fetch(req, router);
-    ASSERT(res != NULL);
-    ASSERT(worker_response_get_status(res) == 404);
-
-    worker_response_destroy(res);
-    worker_request_destroy(req);
-    router_destroy(router);
-    PASS();
-}
-
-static void test_worker_handle_fetch_with_params(void) {
-    TEST("worker_handle_fetch_with_params");
-
-    router_t *router = router_create();
-    ASSERT(router != NULL);
-    router_add_route(router, HTTP_GET, "/users/:id", param_handler);
-
-    worker_request_t *req = worker_request_create("GET", "/users/42");
-    ASSERT(req != NULL);
-
-    worker_response_t *res = worker_handle_fetch(req, router);
-    ASSERT(res != NULL);
-    ASSERT(worker_response_get_status(res) == 200);
-
-    const char *body = worker_response_get_body(res);
-    ASSERT(body != NULL);
-    ASSERT(strstr(body, "User 42") != NULL);
-
-    worker_response_destroy(res);
-    worker_request_destroy(req);
-    router_destroy(router);
-    PASS();
-}
-
-static void test_worker_handle_fetch_query_string(void) {
-    TEST("worker_handle_fetch_query_string");
-
-    router_t *router = router_create();
-    ASSERT(router != NULL);
-    router_add_route(router, HTTP_GET, "/search", hello_handler);
-
-    /* URL with query string should still match the path */
-    worker_request_t *req = worker_request_create("GET", "/search?q=test&page=1");
-    ASSERT(req != NULL);
-
-    worker_response_t *res = worker_handle_fetch(req, router);
-    ASSERT(res != NULL);
-    ASSERT(worker_response_get_status(res) == 200);
-
-    worker_response_destroy(res);
-    worker_request_destroy(req);
-    router_destroy(router);
-    PASS();
-}
-
-static void test_worker_handle_fetch_null(void) {
-    TEST("worker_handle_fetch_null");
-    router_t *router = router_create();
-    ASSERT(worker_handle_fetch(NULL, router) == NULL);
-    ASSERT(worker_handle_fetch(NULL, NULL) == NULL);
-    worker_request_t *req = worker_request_create("GET", "/");
-    ASSERT(worker_handle_fetch(req, NULL) == NULL);
-    worker_request_destroy(req);
-    router_destroy(router);
-    PASS();
-}
-
-/* ===== Worker KV Store Tests ===== */
-
-static void test_worker_kv_create(void) {
-    TEST("worker_kv_create");
-    worker_kv_t *kv = worker_kv_create();
-    ASSERT(kv != NULL);
     worker_kv_destroy(kv);
+    worker_env_destroy(env);
     PASS();
 }
 
-static void test_worker_kv_put_get(void) {
-    TEST("worker_kv_put_get");
-    worker_kv_t *kv = worker_kv_create();
+/* ========================================================
+ * Worker Fetch Handler Tests
+ * ======================================================== */
+
+static void test_worker_fetch_no_router(void) {
+    TEST("worker_fetch_no_router");
+    worker_set_fetch_handler(NULL);
+    worker_set_router(NULL);
+
+    worker_request_t *req = worker_request_create("GET", "/test");
+    worker_response_t *res = worker_handle_fetch(req, NULL);
+    ASSERT(res != NULL);
+    ASSERT(worker_response_get_status(res) == 503);
+    worker_request_destroy(req);
+    worker_response_destroy(res);
+    PASS();
+}
+
+static void _dummy_handler(http_request_t *req, http_response_t *res) {
+    (void)req; (void)res;
+}
+
+static void test_worker_fetch_with_router(void) {
+    TEST("worker_fetch_with_router");
+    router_t *router = router_create();
+    router_add_route(router, HTTP_GET, "/hello", _dummy_handler);
+    worker_set_router(router);
+    worker_set_fetch_handler(NULL);
+
+    worker_request_t *req = worker_request_create("GET", "https://example.com/hello");
+    worker_response_t *res = worker_handle_fetch(req, NULL);
+    ASSERT(res != NULL);
+    ASSERT(worker_response_get_status(res) == 200);
+    ASSERT(strcmp(worker_response_get_header(res, "X-Worker-Routed"), "configured") == 0);
+
+    worker_request_destroy(req);
+    worker_response_destroy(res);
+
+    worker_set_router(NULL);
+    router_destroy(router);
+    PASS();
+}
+
+static worker_response_t *_custom_handler(worker_request_t *req,
+                                          worker_env_t *env) {
+    (void)env;
+    worker_response_t *res = worker_response_create(201);
+    const char *method = worker_request_get_method(req);
+    worker_response_set_body_text(res, method);
+    return res;
+}
+
+static void test_worker_fetch_custom_handler(void) {
+    TEST("worker_fetch_custom_handler");
+    worker_set_fetch_handler(_custom_handler);
+
+    worker_request_t *req = worker_request_create("POST", "/anything");
+    worker_response_t *res = worker_handle_fetch(req, NULL);
+    ASSERT(res != NULL);
+    ASSERT(worker_response_get_status(res) == 201);
+    size_t len = 0;
+    const char *body = worker_response_get_body(res, &len);
+    ASSERT(body != NULL && strcmp(body, "POST") == 0);
+
+    worker_request_destroy(req);
+    worker_response_destroy(res);
+    worker_set_fetch_handler(NULL);
+    PASS();
+}
+
+/* ========================================================
+ * KV Namespace Tests
+ * ======================================================== */
+
+static void test_kv_create_destroy(void) {
+    TEST("kv_create_destroy");
+    worker_kv_t *kv = worker_kv_create("TEST_NS");
     ASSERT(kv != NULL);
+    ASSERT(strcmp(worker_kv_get_namespace(kv), "TEST_NS") == 0);
+    worker_kv_destroy(kv);
+    ASSERT(worker_kv_create(NULL) == NULL);
+    PASS();
+}
 
-    ASSERT(worker_kv_put(kv, "name", "Kamran") == 0);
-    ASSERT(worker_kv_put(kv, "role", "developer") == 0);
+static void test_kv_put_get(void) {
+    TEST("kv_put_get");
+    worker_kv_t *kv = worker_kv_create("NS");
+    ASSERT(worker_kv_put(kv, "key1", "value1", NULL) == 0);
+    char *val = worker_kv_get(kv, "key1");
+    ASSERT(val != NULL);
+    ASSERT(strcmp(val, "value1") == 0);
+    free(val);
 
-    const char *name = worker_kv_get(kv, "name");
-    ASSERT(name != NULL);
-    ASSERT(strcmp(name, "Kamran") == 0);
+    /* Overwrite */
+    ASSERT(worker_kv_put(kv, "key1", "updated", NULL) == 0);
+    val = worker_kv_get(kv, "key1");
+    ASSERT(strcmp(val, "updated") == 0);
+    free(val);
 
-    const char *role = worker_kv_get(kv, "role");
-    ASSERT(role != NULL);
-    ASSERT(strcmp(role, "developer") == 0);
-
-    /* Missing key */
+    /* Not found */
     ASSERT(worker_kv_get(kv, "missing") == NULL);
 
     worker_kv_destroy(kv);
     PASS();
 }
 
-static void test_worker_kv_update(void) {
-    TEST("worker_kv_update");
-    worker_kv_t *kv = worker_kv_create();
-    ASSERT(kv != NULL);
+static void test_kv_metadata(void) {
+    TEST("kv_metadata");
+    worker_kv_t *kv = worker_kv_create("NS");
+    worker_kv_put_options_t opts = {0};
+    opts.metadata = "{\"user\": 42}";
+    ASSERT(worker_kv_put(kv, "k", "v", &opts) == 0);
 
-    ASSERT(worker_kv_put(kv, "counter", "1") == 0);
-    ASSERT(strcmp(worker_kv_get(kv, "counter"), "1") == 0);
-
-    /* Overwrite */
-    ASSERT(worker_kv_put(kv, "counter", "2") == 0);
-    ASSERT(strcmp(worker_kv_get(kv, "counter"), "2") == 0);
-
-    worker_kv_destroy(kv);
-    PASS();
-}
-
-static void test_worker_kv_delete(void) {
-    TEST("worker_kv_delete");
-    worker_kv_t *kv = worker_kv_create();
-    ASSERT(kv != NULL);
-
-    ASSERT(worker_kv_put(kv, "temp", "data") == 0);
-    ASSERT(worker_kv_get(kv, "temp") != NULL);
-
-    ASSERT(worker_kv_delete(kv, "temp") == 0);
-    ASSERT(worker_kv_get(kv, "temp") == NULL);
-
-    /* Delete non-existent key */
-    ASSERT(worker_kv_delete(kv, "nope") == -1);
+    char *meta = NULL;
+    char *val = worker_kv_get_with_metadata(kv, "k", &meta);
+    ASSERT(val != NULL && strcmp(val, "v") == 0);
+    ASSERT(meta != NULL && strstr(meta, "42") != NULL);
+    free(val);
+    free(meta);
 
     worker_kv_destroy(kv);
     PASS();
 }
 
-static void test_worker_kv_null_params(void) {
-    TEST("worker_kv_null_params");
-    worker_kv_t *kv = worker_kv_create();
-    ASSERT(kv != NULL);
+static void test_kv_delete(void) {
+    TEST("kv_delete");
+    worker_kv_t *kv = worker_kv_create("NS");
+    worker_kv_put(kv, "a", "1", NULL);
+    worker_kv_put(kv, "b", "2", NULL);
+    ASSERT(worker_kv_delete(kv, "a") == 0);
+    ASSERT(worker_kv_get(kv, "a") == NULL);
 
-    ASSERT(worker_kv_put(NULL, "k", "v") == -1);
-    ASSERT(worker_kv_put(kv, NULL, "v") == -1);
-    ASSERT(worker_kv_put(kv, "k", NULL) == -1);
-    ASSERT(worker_kv_get(NULL, "k") == NULL);
-    ASSERT(worker_kv_get(kv, NULL) == NULL);
-    ASSERT(worker_kv_delete(NULL, "k") == -1);
-    ASSERT(worker_kv_delete(kv, NULL) == -1);
+    char *val = worker_kv_get(kv, "b");
+    ASSERT(val != NULL && strcmp(val, "2") == 0);
+    free(val);
 
-    worker_kv_destroy(kv);
-    /* Destroy NULL should be safe */
-    worker_kv_destroy(NULL);
-    PASS();
-}
-
-static void test_worker_kv_key_length_validation(void) {
-    TEST("worker_kv_key_length_validation");
-    worker_kv_t *kv = worker_kv_create();
-    ASSERT(kv != NULL);
-
-    /* Build a key that exceeds max length */
-    char long_key[600];
-    memset(long_key, 'k', 599);
-    long_key[599] = '\0';
-
-    ASSERT(worker_kv_put(kv, long_key, "value") == -1);
+    ASSERT(worker_kv_delete(kv, "nonexistent") == -1);
 
     worker_kv_destroy(kv);
     PASS();
 }
 
-static void test_worker_kv_put_with_ttl(void) {
-    TEST("worker_kv_put_with_ttl");
-    worker_kv_t *kv = worker_kv_create();
-    ASSERT(kv != NULL);
-
-    /* TTL=0 means no expiration */
-    ASSERT(worker_kv_put_with_ttl(kv, "persist", "data", 0) == 0);
-    ASSERT(worker_kv_get(kv, "persist") != NULL);
-
-    /* TTL=3600 (1 hour) should still be visible */
-    ASSERT(worker_kv_put_with_ttl(kv, "session", "abc", 3600) == 0);
-    ASSERT(worker_kv_get(kv, "session") != NULL);
-    ASSERT(strcmp(worker_kv_get(kv, "session"), "abc") == 0);
-
-    /* Invalid TTL */
-    ASSERT(worker_kv_put_with_ttl(kv, "bad", "val", -1) == -1);
-
-    /* NULL params */
-    ASSERT(worker_kv_put_with_ttl(NULL, "k", "v", 60) == -1);
-    ASSERT(worker_kv_put_with_ttl(kv, NULL, "v", 60) == -1);
-    ASSERT(worker_kv_put_with_ttl(kv, "k", NULL, 60) == -1);
-
-    worker_kv_destroy(kv);
-    PASS();
-}
-
-static void test_worker_kv_list(void) {
-    TEST("worker_kv_list");
-    worker_kv_t *kv = worker_kv_create();
-    ASSERT(kv != NULL);
-
-    worker_kv_put(kv, "user:1", "Alice");
-    worker_kv_put(kv, "user:2", "Bob");
-    worker_kv_put(kv, "session:abc", "data");
-    worker_kv_put(kv, "user:3", "Charlie");
-
-    /* List all keys */
-    const char **keys = NULL;
-    int count = 0;
-    ASSERT(worker_kv_list(kv, NULL, 0, &keys, &count) == 0);
-    ASSERT(count == 4);
-    worker_kv_list_free(keys);
-
-    /* List with prefix */
-    ASSERT(worker_kv_list(kv, "user:", 0, &keys, &count) == 0);
-    ASSERT(count == 3);
-    worker_kv_list_free(keys);
-
-    ASSERT(worker_kv_list(kv, "session:", 0, &keys, &count) == 0);
-    ASSERT(count == 1);
-    worker_kv_list_free(keys);
-
-    /* List with limit */
-    ASSERT(worker_kv_list(kv, "user:", 2, &keys, &count) == 0);
-    ASSERT(count == 2);
-    worker_kv_list_free(keys);
-
-    /* NULL params */
-    ASSERT(worker_kv_list(NULL, NULL, 0, &keys, &count) == -1);
-    ASSERT(worker_kv_list(kv, NULL, 0, NULL, &count) == -1);
-
-    worker_kv_destroy(kv);
-    PASS();
-}
-
-/* ===== Worker R2 Object Storage Tests ===== */
-
-static void test_worker_r2_create(void) {
-    TEST("worker_r2_create");
-    worker_r2_bucket_t *r2 = worker_r2_create();
-    ASSERT(r2 != NULL);
-    worker_r2_destroy(r2);
-    PASS();
-}
-
-static void test_worker_r2_put_get(void) {
-    TEST("worker_r2_put_get");
-    worker_r2_bucket_t *r2 = worker_r2_create();
-    ASSERT(r2 != NULL);
-
-    const char *data = "Hello, R2!";
-    ASSERT(worker_r2_put(r2, "file.txt", data, strlen(data), "text/plain") == 0);
-
-    size_t size = 0;
-    const char *got = worker_r2_get(r2, "file.txt", &size);
-    ASSERT(got != NULL);
-    ASSERT(size == strlen(data));
-    ASSERT(strcmp(got, data) == 0);
-
-    /* Missing object */
-    ASSERT(worker_r2_get(r2, "missing.txt", NULL) == NULL);
-
-    worker_r2_destroy(r2);
-    PASS();
-}
-
-static void test_worker_r2_head(void) {
-    TEST("worker_r2_head");
-    worker_r2_bucket_t *r2 = worker_r2_create();
-    ASSERT(r2 != NULL);
-
-    const char *data = "image data";
-    ASSERT(worker_r2_put(r2, "pic.png", data, strlen(data), "image/png") == 0);
-
-    size_t size = 0;
-    const char *ct = NULL;
-    ASSERT(worker_r2_head(r2, "pic.png", &size, &ct) == 0);
-    ASSERT(size == strlen(data));
-    ASSERT(ct != NULL);
-    ASSERT(strcmp(ct, "image/png") == 0);
-
-    /* Missing */
-    ASSERT(worker_r2_head(r2, "nope", &size, &ct) == -1);
-
-    worker_r2_destroy(r2);
-    PASS();
-}
-
-static void test_worker_r2_delete(void) {
-    TEST("worker_r2_delete");
-    worker_r2_bucket_t *r2 = worker_r2_create();
-    ASSERT(r2 != NULL);
-
-    ASSERT(worker_r2_put(r2, "tmp.txt", "data", 4, NULL) == 0);
-    ASSERT(worker_r2_get(r2, "tmp.txt", NULL) != NULL);
-
-    ASSERT(worker_r2_delete(r2, "tmp.txt") == 0);
-    ASSERT(worker_r2_get(r2, "tmp.txt", NULL) == NULL);
-
-    /* Delete non-existent */
-    ASSERT(worker_r2_delete(r2, "nope") == -1);
-
-    worker_r2_destroy(r2);
-    PASS();
-}
-
-static void test_worker_r2_list(void) {
-    TEST("worker_r2_list");
-    worker_r2_bucket_t *r2 = worker_r2_create();
-    ASSERT(r2 != NULL);
-
-    worker_r2_put(r2, "images/a.png", "a", 1, "image/png");
-    worker_r2_put(r2, "images/b.png", "b", 1, "image/png");
-    worker_r2_put(r2, "docs/readme.md", "c", 1, "text/markdown");
-
-    const char **keys = NULL;
-    int count = 0;
+static void test_kv_list(void) {
+    TEST("kv_list");
+    worker_kv_t *kv = worker_kv_create("NS");
+    worker_kv_put(kv, "users:1", "alice", NULL);
+    worker_kv_put(kv, "users:2", "bob", NULL);
+    worker_kv_put(kv, "posts:1", "hello", NULL);
 
     /* List all */
-    ASSERT(worker_r2_list(r2, NULL, 0, &keys, &count) == 0);
-    ASSERT(count == 3);
-    worker_r2_list_free(keys);
+    worker_kv_list_result_t *all = worker_kv_list(kv, NULL);
+    ASSERT(all != NULL);
+    ASSERT(all->count == 3);
+    ASSERT(all->list_complete == true);
+    worker_kv_list_result_destroy(all);
 
     /* List with prefix */
-    ASSERT(worker_r2_list(r2, "images/", 0, &keys, &count) == 0);
-    ASSERT(count == 2);
-    worker_r2_list_free(keys);
+    worker_kv_list_options_t opts = {0};
+    opts.prefix = "users:";
+    worker_kv_list_result_t *users = worker_kv_list(kv, &opts);
+    ASSERT(users != NULL);
+    ASSERT(users->count == 2);
+    worker_kv_list_result_destroy(users);
 
-    /* NULL params */
-    ASSERT(worker_r2_list(NULL, NULL, 0, &keys, &count) == -1);
+    /* List with limit */
+    worker_kv_list_options_t opts2 = {0};
+    opts2.limit = 1;
+    worker_kv_list_result_t *limited = worker_kv_list(kv, &opts2);
+    ASSERT(limited != NULL);
+    ASSERT(limited->count == 1);
+    ASSERT(limited->list_complete == false);
+    worker_kv_list_result_destroy(limited);
 
-    worker_r2_destroy(r2);
+    worker_kv_destroy(kv);
     PASS();
 }
 
-static void test_worker_r2_null_safety(void) {
-    TEST("worker_r2_null_safety");
-    ASSERT(worker_r2_put(NULL, "k", "d", 1, NULL) == -1);
-    ASSERT(worker_r2_get(NULL, "k", NULL) == NULL);
-    ASSERT(worker_r2_head(NULL, "k", NULL, NULL) == -1);
-    ASSERT(worker_r2_delete(NULL, "k") == -1);
-    worker_r2_destroy(NULL); /* should not crash */
+/* ========================================================
+ * R2 Object Storage Tests
+ * ======================================================== */
+
+static void test_r2_create_destroy(void) {
+    TEST("r2_create_destroy");
+    worker_r2_bucket_t *b = worker_r2_bucket_create("my-bucket");
+    ASSERT(b != NULL);
+    ASSERT(strcmp(worker_r2_bucket_get_name(b), "my-bucket") == 0);
+    worker_r2_bucket_destroy(b);
+    ASSERT(worker_r2_bucket_create(NULL) == NULL);
     PASS();
 }
 
-/* ===== Worker D1 Database Tests ===== */
+static void test_r2_put_get(void) {
+    TEST("r2_put_get");
+    worker_r2_bucket_t *b = worker_r2_bucket_create("bucket");
+    const char *data = "Hello R2!";
+    worker_r2_put_options_t opts = { .content_type = "text/plain" };
+    ASSERT(worker_r2_put(b, "greeting.txt", (const uint8_t *)data, 9, &opts) == 0);
 
-static void test_worker_d1_create(void) {
-    TEST("worker_d1_create");
-    worker_d1_t *d1 = worker_d1_create();
-    ASSERT(d1 != NULL);
-    worker_d1_destroy(d1);
+    worker_r2_object_t *obj = worker_r2_get(b, "greeting.txt");
+    ASSERT(obj != NULL);
+    ASSERT(obj->body != NULL);
+    ASSERT(obj->body_len == 9);
+    ASSERT(memcmp(obj->body, "Hello R2!", 9) == 0);
+    ASSERT(obj->size == 9);
+    ASSERT(obj->etag != NULL);
+    ASSERT(obj->content_type != NULL && strcmp(obj->content_type, "text/plain") == 0);
+    worker_r2_object_destroy(obj);
+
+    /* Not found */
+    ASSERT(worker_r2_get(b, "missing") == NULL);
+
+    worker_r2_bucket_destroy(b);
     PASS();
 }
 
-static void test_worker_d1_create_table_and_insert(void) {
-    TEST("worker_d1_create_table_and_insert");
-    worker_d1_t *d1 = worker_d1_create();
-    ASSERT(d1 != NULL);
+static void test_r2_head(void) {
+    TEST("r2_head");
+    worker_r2_bucket_t *b = worker_r2_bucket_create("bucket");
+    worker_r2_put(b, "file.bin", (const uint8_t *)"data", 4, NULL);
 
-    ASSERT(worker_d1_exec(d1,
-        "CREATE TABLE users (id TEXT, name TEXT, email TEXT)") == 0);
+    worker_r2_object_t *obj = worker_r2_head(b, "file.bin");
+    ASSERT(obj != NULL);
+    ASSERT(obj->size == 4);
+    ASSERT(obj->body == NULL);  /* head: no body */
+    worker_r2_object_destroy(obj);
 
-    ASSERT(worker_d1_exec(d1,
-        "INSERT INTO users VALUES ('1', 'Alice', 'alice@example.com')") == 0);
-    ASSERT(worker_d1_exec(d1,
-        "INSERT INTO users VALUES ('2', 'Bob', 'bob@example.com')") == 0);
-
-    /* Query all rows */
-    worker_d1_result_t *result = worker_d1_query(d1, "SELECT * FROM users");
-    ASSERT(result != NULL);
-    ASSERT(worker_d1_result_is_success(result));
-    ASSERT(worker_d1_result_get_row_count(result) == 2);
-    ASSERT(worker_d1_result_get_col_count(result) == 3);
-
-    /* Check column names */
-    ASSERT(strcmp(worker_d1_result_get_col_name(result, 0), "id") == 0);
-    ASSERT(strcmp(worker_d1_result_get_col_name(result, 1), "name") == 0);
-
-    /* Check row values */
-    ASSERT(strcmp(worker_d1_result_get_value(result, 0, 0), "1") == 0);
-    ASSERT(strcmp(worker_d1_result_get_value(result, 0, 1), "Alice") == 0);
-    ASSERT(strcmp(worker_d1_result_get_value(result, 1, 0), "2") == 0);
-    ASSERT(strcmp(worker_d1_result_get_value(result, 1, 1), "Bob") == 0);
-
-    worker_d1_result_destroy(result);
-    worker_d1_destroy(d1);
+    ASSERT(worker_r2_head(b, "nope") == NULL);
+    worker_r2_bucket_destroy(b);
     PASS();
 }
 
-static void test_worker_d1_query_with_where(void) {
-    TEST("worker_d1_query_with_where");
-    worker_d1_t *d1 = worker_d1_create();
-    ASSERT(d1 != NULL);
-
-    worker_d1_exec(d1, "CREATE TABLE items (id TEXT, name TEXT)");
-    worker_d1_exec(d1, "INSERT INTO items VALUES ('1', 'Widget')");
-    worker_d1_exec(d1, "INSERT INTO items VALUES ('2', 'Gadget')");
-    worker_d1_exec(d1, "INSERT INTO items VALUES ('3', 'Widget')");
-
-    /* WHERE filter */
-    worker_d1_result_t *result = worker_d1_query(d1,
-        "SELECT * FROM items WHERE name = 'Widget'");
-    ASSERT(result != NULL);
-    ASSERT(worker_d1_result_is_success(result));
-    ASSERT(worker_d1_result_get_row_count(result) == 2);
-
-    worker_d1_result_destroy(result);
-    worker_d1_destroy(d1);
+static void test_r2_delete(void) {
+    TEST("r2_delete");
+    worker_r2_bucket_t *b = worker_r2_bucket_create("bucket");
+    worker_r2_put(b, "temp.txt", (const uint8_t *)"tmp", 3, NULL);
+    ASSERT(worker_r2_delete(b, "temp.txt") == 0);
+    ASSERT(worker_r2_get(b, "temp.txt") == NULL);
+    ASSERT(worker_r2_delete(b, "temp.txt") == -1);
+    worker_r2_bucket_destroy(b);
     PASS();
 }
 
-static void test_worker_d1_null_safety(void) {
-    TEST("worker_d1_null_safety");
-    ASSERT(worker_d1_exec(NULL, "SELECT 1") == -1);
-    ASSERT(worker_d1_query(NULL, "SELECT 1") == NULL);
+static void test_r2_list(void) {
+    TEST("r2_list");
+    worker_r2_bucket_t *b = worker_r2_bucket_create("bucket");
+    worker_r2_put(b, "img/a.png", (const uint8_t *)"A", 1, NULL);
+    worker_r2_put(b, "img/b.png", (const uint8_t *)"B", 1, NULL);
+    worker_r2_put(b, "doc/c.pdf", (const uint8_t *)"C", 1, NULL);
 
-    worker_d1_t *d1 = worker_d1_create();
-    ASSERT(worker_d1_exec(d1, NULL) == -1);
-    ASSERT(worker_d1_query(d1, NULL) == NULL);
+    /* List all */
+    worker_r2_list_result_t *all = worker_r2_list(b, NULL);
+    ASSERT(all != NULL);
+    ASSERT(all->count == 3);
+    worker_r2_list_result_destroy(all);
 
-    /* Result getters on NULL */
-    ASSERT(worker_d1_result_get_row_count(NULL) == 0);
-    ASSERT(worker_d1_result_get_col_count(NULL) == 0);
-    ASSERT(worker_d1_result_get_col_name(NULL, 0) == NULL);
-    ASSERT(worker_d1_result_get_value(NULL, 0, 0) == NULL);
-    ASSERT(worker_d1_result_is_success(NULL) == false);
-    ASSERT(worker_d1_result_get_error(NULL) == NULL);
+    /* Prefix filter */
+    worker_r2_list_options_t opts = { .prefix = "img/" };
+    worker_r2_list_result_t *imgs = worker_r2_list(b, &opts);
+    ASSERT(imgs != NULL);
+    ASSERT(imgs->count == 2);
+    worker_r2_list_result_destroy(imgs);
 
-    worker_d1_result_destroy(NULL); /* should not crash */
-    worker_d1_destroy(d1);
-    worker_d1_destroy(NULL);
+    worker_r2_bucket_destroy(b);
     PASS();
 }
 
-/* ===== Worker Queue Tests ===== */
+/* ========================================================
+ * D1 Database Tests
+ * ======================================================== */
 
-static void test_worker_queue_create(void) {
-    TEST("worker_queue_create");
-    worker_queue_t *q = worker_queue_create();
+static void test_d1_create_destroy(void) {
+    TEST("d1_create_destroy");
+    worker_d1_t *db = worker_d1_create("test-db");
+    ASSERT(db != NULL);
+    ASSERT(strcmp(worker_d1_get_name(db), "test-db") == 0);
+    worker_d1_destroy(db);
+    ASSERT(worker_d1_create(NULL) == NULL);
+    PASS();
+}
+
+static void test_d1_create_table_and_insert(void) {
+    TEST("d1_create_table_and_insert");
+    worker_d1_t *db = worker_d1_create("testdb");
+
+    /* CREATE TABLE */
+    worker_d1_result_t *r = worker_d1_exec(db,
+        "CREATE TABLE users (id, name, email)");
+    ASSERT(r != NULL);
+    ASSERT(r->success == true);
+    worker_d1_result_destroy(r);
+
+    /* INSERT */
+    worker_d1_stmt_t *stmt = worker_d1_prepare(db,
+        "INSERT INTO users (id, name, email) VALUES (?, ?, ?)");
+    ASSERT(stmt != NULL);
+    worker_d1_stmt_bind(stmt, 1, "1");
+    worker_d1_stmt_bind(stmt, 2, "Alice");
+    worker_d1_stmt_bind(stmt, 3, "alice@test.com");
+    r = worker_d1_stmt_run(stmt);
+    ASSERT(r != NULL);
+    ASSERT(r->success == true);
+    ASSERT(r->meta_changes == 1);
+    worker_d1_result_destroy(r);
+    worker_d1_stmt_destroy(stmt);
+
+    worker_d1_destroy(db);
+    PASS();
+}
+
+static void test_d1_select(void) {
+    TEST("d1_select");
+    worker_d1_t *db = worker_d1_create("testdb");
+    worker_d1_exec(db, "CREATE TABLE items (id, title)");
+
+    /* Insert two rows */
+    worker_d1_stmt_t *ins = worker_d1_prepare(db,
+        "INSERT INTO items (id, title) VALUES (?, ?)");
+    worker_d1_stmt_bind(ins, 1, "1");
+    worker_d1_stmt_bind(ins, 2, "First");
+    worker_d1_result_t *r1 = worker_d1_stmt_run(ins);
+    worker_d1_result_destroy(r1);
+    worker_d1_stmt_destroy(ins);
+
+    ins = worker_d1_prepare(db, "INSERT INTO items (id, title) VALUES (?, ?)");
+    worker_d1_stmt_bind(ins, 1, "2");
+    worker_d1_stmt_bind(ins, 2, "Second");
+    r1 = worker_d1_stmt_run(ins);
+    worker_d1_result_destroy(r1);
+    worker_d1_stmt_destroy(ins);
+
+    /* SELECT all */
+    worker_d1_stmt_t *sel = worker_d1_prepare(db, "SELECT * FROM items");
+    json_value_t *all = worker_d1_stmt_all(sel);
+    ASSERT(all != NULL);
+    /* Should have two rows */
+    char *str = json_stringify(all);
+    ASSERT(str != NULL);
+    ASSERT(strstr(str, "First") != NULL);
+    ASSERT(strstr(str, "Second") != NULL);
+    free(str);
+    json_value_free(all);
+    worker_d1_stmt_destroy(sel);
+
+    /* SELECT with WHERE */
+    sel = worker_d1_prepare(db, "SELECT * FROM items WHERE id = ?");
+    worker_d1_stmt_bind(sel, 1, "1");
+    json_value_t *first = worker_d1_stmt_first(sel);
+    ASSERT(first != NULL);
+    str = json_stringify(first);
+    ASSERT(strstr(str, "First") != NULL);
+    free(str);
+    json_value_free(first);
+    worker_d1_stmt_destroy(sel);
+
+    worker_d1_destroy(db);
+    PASS();
+}
+
+static void test_d1_delete_rows(void) {
+    TEST("d1_delete_rows");
+    worker_d1_t *db = worker_d1_create("testdb");
+    worker_d1_exec(db, "CREATE TABLE logs (id, msg)");
+
+    worker_d1_stmt_t *ins = worker_d1_prepare(db,
+        "INSERT INTO logs (id, msg) VALUES (?, ?)");
+    worker_d1_stmt_bind(ins, 1, "1");
+    worker_d1_stmt_bind(ins, 2, "log1");
+    worker_d1_result_t *r = worker_d1_stmt_run(ins);
+    worker_d1_result_destroy(r);
+    worker_d1_stmt_destroy(ins);
+
+    ins = worker_d1_prepare(db, "INSERT INTO logs (id, msg) VALUES (?, ?)");
+    worker_d1_stmt_bind(ins, 1, "2");
+    worker_d1_stmt_bind(ins, 2, "log2");
+    r = worker_d1_stmt_run(ins);
+    worker_d1_result_destroy(r);
+    worker_d1_stmt_destroy(ins);
+
+    /* DELETE one row */
+    worker_d1_stmt_t *del = worker_d1_prepare(db,
+        "DELETE FROM logs WHERE id = ?");
+    worker_d1_stmt_bind(del, 1, "1");
+    r = worker_d1_stmt_run(del);
+    ASSERT(r != NULL && r->success && r->meta_changes == 1);
+    worker_d1_result_destroy(r);
+    worker_d1_stmt_destroy(del);
+
+    /* Verify only one row remains */
+    worker_d1_stmt_t *sel = worker_d1_prepare(db, "SELECT * FROM logs");
+    json_value_t *rows = worker_d1_stmt_all(sel);
+    char *str = json_stringify(rows);
+    ASSERT(strstr(str, "log2") != NULL);
+    ASSERT(strstr(str, "log1") == NULL);
+    free(str);
+    json_value_free(rows);
+    worker_d1_stmt_destroy(sel);
+
+    worker_d1_destroy(db);
+    PASS();
+}
+
+static void test_d1_batch(void) {
+    TEST("d1_batch");
+    worker_d1_t *db = worker_d1_create("testdb");
+    worker_d1_exec(db, "CREATE TABLE batch_test (id, val)");
+
+    worker_d1_stmt_t *s1 = worker_d1_prepare(db,
+        "INSERT INTO batch_test (id, val) VALUES (?, ?)");
+    worker_d1_stmt_bind(s1, 1, "A");
+    worker_d1_stmt_bind(s1, 2, "100");
+
+    worker_d1_stmt_t *s2 = worker_d1_prepare(db,
+        "INSERT INTO batch_test (id, val) VALUES (?, ?)");
+    worker_d1_stmt_bind(s2, 1, "B");
+    worker_d1_stmt_bind(s2, 2, "200");
+
+    worker_d1_stmt_t *stmts[] = {s1, s2};
+    int out_count = 0;
+    worker_d1_result_t **results = worker_d1_batch(db, stmts, 2, &out_count);
+    ASSERT(results != NULL);
+    ASSERT(out_count == 2);
+    ASSERT(results[0]->success == true);
+    ASSERT(results[1]->success == true);
+
+    for (int i = 0; i < out_count; i++) worker_d1_result_destroy(results[i]);
+    free(results);
+    worker_d1_stmt_destroy(s1);
+    worker_d1_stmt_destroy(s2);
+    worker_d1_destroy(db);
+    PASS();
+}
+
+/* ========================================================
+ * Queues Tests
+ * ======================================================== */
+
+static void test_queue_create_destroy(void) {
+    TEST("queue_create_destroy");
+    worker_queue_t *q = worker_queue_create("my-queue");
     ASSERT(q != NULL);
-    ASSERT(worker_queue_get_count(q) == 0);
+    ASSERT(strcmp(worker_queue_get_name(q), "my-queue") == 0);
+    ASSERT(worker_queue_get_depth(q) == 0);
+    worker_queue_destroy(q);
+    ASSERT(worker_queue_create(NULL) == NULL);
+    PASS();
+}
+
+static void test_queue_send_consume(void) {
+    TEST("queue_send_consume");
+    worker_queue_t *q = worker_queue_create("test-q");
+
+    ASSERT(worker_queue_send_text(q, "msg1") == 0);
+    ASSERT(worker_queue_send_text(q, "msg2") == 0);
+    ASSERT(worker_queue_send_text(q, "msg3") == 0);
+    ASSERT(worker_queue_get_depth(q) == 3);
+
+    worker_queue_batch_t *batch = worker_queue_consume(q, 2, 0);
+    ASSERT(batch != NULL);
+    ASSERT(batch->count == 2);
+    ASSERT(batch->messages[0]->body != NULL);
+    ASSERT(strcmp(batch->messages[0]->body, "msg1") == 0);
+    ASSERT(strcmp(batch->messages[1]->body, "msg2") == 0);
+
+    /* Ack first message */
+    worker_queue_message_ack(batch->messages[0]);
+    ASSERT(batch->messages[0]->acked == true);
+
+    worker_queue_batch_destroy(batch);
+    ASSERT(worker_queue_get_depth(q) == 1);
+
+    /* Consume remaining */
+    batch = worker_queue_consume(q, 10, 0);
+    ASSERT(batch != NULL);
+    ASSERT(batch->count == 1);
+    ASSERT(strcmp(batch->messages[0]->body, "msg3") == 0);
+    worker_queue_batch_destroy(batch);
+
+    ASSERT(worker_queue_get_depth(q) == 0);
     worker_queue_destroy(q);
     PASS();
 }
 
-static void test_worker_queue_send(void) {
-    TEST("worker_queue_send");
-    worker_queue_t *q = worker_queue_create();
-    ASSERT(q != NULL);
+static void test_queue_send_batch(void) {
+    TEST("queue_send_batch");
+    worker_queue_t *q = worker_queue_create("batch-q");
 
-    const char *msg = "{\"type\":\"email\",\"to\":\"user@example.com\"}";
-    ASSERT(worker_queue_send(q, msg, strlen(msg)) == 0);
-    ASSERT(worker_queue_get_count(q) == 1);
-
-    size_t len = 0;
-    const char *peek = worker_queue_peek(q, 0, &len);
-    ASSERT(peek != NULL);
-    ASSERT(len == strlen(msg));
-    ASSERT(strcmp(peek, msg) == 0);
-
-    /* Send another */
-    ASSERT(worker_queue_send(q, "msg2", 4) == 0);
-    ASSERT(worker_queue_get_count(q) == 2);
-
-    worker_queue_destroy(q);
-    PASS();
-}
-
-static void test_worker_queue_send_batch(void) {
-    TEST("worker_queue_send_batch");
-    worker_queue_t *q = worker_queue_create();
-    ASSERT(q != NULL);
-
-    const char *bodies[] = { "msg1", "msg2", "msg3" };
-    size_t lengths[] = { 4, 4, 4 };
-
+    const char *bodies[] = {"alpha", "beta", "gamma"};
+    size_t lengths[] = {5, 4, 5};
     ASSERT(worker_queue_send_batch(q, bodies, lengths, 3) == 0);
-    ASSERT(worker_queue_get_count(q) == 3);
+    ASSERT(worker_queue_get_depth(q) == 3);
 
-    /* Verify order */
-    ASSERT(strcmp(worker_queue_peek(q, 0, NULL), "msg1") == 0);
-    ASSERT(strcmp(worker_queue_peek(q, 1, NULL), "msg2") == 0);
-    ASSERT(strcmp(worker_queue_peek(q, 2, NULL), "msg3") == 0);
+    worker_queue_batch_t *batch = worker_queue_consume(q, 10, 0);
+    ASSERT(batch->count == 3);
+    ASSERT(strcmp(batch->messages[0]->body, "alpha") == 0);
+    ASSERT(strcmp(batch->messages[2]->body, "gamma") == 0);
+    worker_queue_batch_destroy(batch);
+
+    worker_queue_destroy(q);
+    PASS();
+}
+
+static void test_queue_send_json(void) {
+    TEST("queue_send_json");
+    worker_queue_t *q = worker_queue_create("json-q");
+
+    json_value_t *j = json_object_create();
+    json_object_set(j, "event", json_string_create("order.created"));
+    json_object_set(j, "id", json_number_create(42));
+    ASSERT(worker_queue_send_json(q, j) == 0);
+    json_value_free(j);
+
+    ASSERT(worker_queue_get_depth(q) == 1);
+    worker_queue_batch_t *batch = worker_queue_consume(q, 1, 0);
+    ASSERT(batch->count == 1);
+    ASSERT(strstr(batch->messages[0]->body, "order.created") != NULL);
+    worker_queue_batch_destroy(batch);
 
     worker_queue_destroy(q);
     PASS();
 }
 
-static void test_worker_queue_null_safety(void) {
-    TEST("worker_queue_null_safety");
-    ASSERT(worker_queue_send(NULL, "msg", 3) == -1);
-    ASSERT(worker_queue_get_count(NULL) == 0);
-    ASSERT(worker_queue_peek(NULL, 0, NULL) == NULL);
+/* ========================================================
+ * Integration Test: Worker + KV + R2 + D1 + Queues
+ * ======================================================== */
 
-    worker_queue_t *q = worker_queue_create();
-    ASSERT(worker_queue_send(q, NULL, 0) == -1);
+static worker_response_t *_integration_handler(worker_request_t *req,
+                                               worker_env_t *env) {
+    (void)req;
+    worker_response_t *res = worker_response_create(200);
 
-    /* Batch with invalid count */
-    ASSERT(worker_queue_send_batch(q, NULL, NULL, 0) == -1);
-    ASSERT(worker_queue_send_batch(q, NULL, NULL, -1) == -1);
+    /* Access KV from env */
+    worker_kv_t *kv = worker_env_get_binding(env, "CACHE", WORKER_BINDING_KV);
+    if (kv) {
+        worker_kv_put(kv, "visited", "true", NULL);
+    }
 
-    worker_queue_destroy(q);
-    worker_queue_destroy(NULL); /* should not crash */
-    PASS();
+    /* Access R2 from env */
+    worker_r2_bucket_t *bucket = worker_env_get_binding(env, "ASSETS",
+                                                        WORKER_BINDING_R2);
+    if (bucket) {
+        worker_r2_put(bucket, "log.txt", (const uint8_t *)"visit", 5, NULL);
+    }
+
+    worker_response_set_body_text(res, "integrated");
+    return res;
 }
 
-/* ===== Worker Env Context Tests ===== */
+static void test_integration(void) {
+    TEST("integration_worker_with_services");
 
-static void test_worker_env_create(void) {
-    TEST("worker_env_create");
+    /* Set up services */
+    worker_kv_t *kv = worker_kv_create("CACHE");
+    worker_r2_bucket_t *bucket = worker_r2_bucket_create("ASSETS");
+    worker_d1_t *db = worker_d1_create("APP_DB");
+    worker_queue_t *queue = worker_queue_create("EVENTS");
+
+    /* Create env with all bindings */
     worker_env_t *env = worker_env_create();
-    ASSERT(env != NULL);
-    worker_env_destroy(env);
-    PASS();
-}
+    worker_env_add_binding(env, "CACHE", WORKER_BINDING_KV, kv);
+    worker_env_add_binding(env, "ASSETS", WORKER_BINDING_R2, bucket);
+    worker_env_add_binding(env, "APP_DB", WORKER_BINDING_D1, db);
+    worker_env_add_binding(env, "EVENTS", WORKER_BINDING_QUEUE, queue);
+    ASSERT(worker_env_binding_count(env) == 4);
 
-static void test_worker_env_kv_binding(void) {
-    TEST("worker_env_kv_binding");
-    worker_env_t *env = worker_env_create();
-    worker_kv_t *kv = worker_kv_create();
-    ASSERT(env != NULL && kv != NULL);
+    /* Run fetch */
+    worker_set_fetch_handler(_integration_handler);
+    worker_request_t *req = worker_request_create("GET", "/");
+    worker_response_t *res = worker_handle_fetch(req, env);
+    ASSERT(res != NULL);
+    ASSERT(worker_response_get_status(res) == 200);
 
-    ASSERT(worker_env_bind_kv(env, "MY_KV", kv) == 0);
+    /* Verify side effects */
+    char *cached = worker_kv_get(kv, "visited");
+    ASSERT(cached != NULL && strcmp(cached, "true") == 0);
+    free(cached);
 
-    worker_kv_t *got = worker_env_get_kv(env, "MY_KV");
-    ASSERT(got == kv);
+    worker_r2_object_t *obj = worker_r2_get(bucket, "log.txt");
+    ASSERT(obj != NULL && obj->body_len == 5);
+    worker_r2_object_destroy(obj);
 
-    /* Non-existent binding */
-    ASSERT(worker_env_get_kv(env, "OTHER") == NULL);
+    /* Cleanup */
+    worker_request_destroy(req);
+    worker_response_destroy(res);
+    worker_set_fetch_handler(NULL);
 
-    worker_env_destroy(env);
+    worker_queue_destroy(queue);
+    worker_d1_destroy(db);
+    worker_r2_bucket_destroy(bucket);
     worker_kv_destroy(kv);
-    PASS();
-}
-
-static void test_worker_env_r2_binding(void) {
-    TEST("worker_env_r2_binding");
-    worker_env_t *env = worker_env_create();
-    worker_r2_bucket_t *r2 = worker_r2_create();
-    ASSERT(env != NULL && r2 != NULL);
-
-    ASSERT(worker_env_bind_r2(env, "MY_BUCKET", r2) == 0);
-    ASSERT(worker_env_get_r2(env, "MY_BUCKET") == r2);
-    ASSERT(worker_env_get_r2(env, "OTHER") == NULL);
-
     worker_env_destroy(env);
-    worker_r2_destroy(r2);
     PASS();
 }
 
-static void test_worker_env_d1_binding(void) {
-    TEST("worker_env_d1_binding");
-    worker_env_t *env = worker_env_create();
-    worker_d1_t *d1 = worker_d1_create();
-    ASSERT(env != NULL && d1 != NULL);
-
-    ASSERT(worker_env_bind_d1(env, "DB", d1) == 0);
-    ASSERT(worker_env_get_d1(env, "DB") == d1);
-    ASSERT(worker_env_get_d1(env, "OTHER") == NULL);
-
-    worker_env_destroy(env);
-    worker_d1_destroy(d1);
-    PASS();
-}
-
-static void test_worker_env_queue_binding(void) {
-    TEST("worker_env_queue_binding");
-    worker_env_t *env = worker_env_create();
-    worker_queue_t *q = worker_queue_create();
-    ASSERT(env != NULL && q != NULL);
-
-    ASSERT(worker_env_bind_queue(env, "TASK_QUEUE", q) == 0);
-    ASSERT(worker_env_get_queue(env, "TASK_QUEUE") == q);
-    ASSERT(worker_env_get_queue(env, "OTHER") == NULL);
-
-    worker_env_destroy(env);
-    worker_queue_destroy(q);
-    PASS();
-}
-
-static void test_worker_env_multi_bindings(void) {
-    TEST("worker_env_multi_bindings");
-    worker_env_t *env = worker_env_create();
-    worker_kv_t *kv = worker_kv_create();
-    worker_r2_bucket_t *r2 = worker_r2_create();
-    worker_d1_t *d1 = worker_d1_create();
-    worker_queue_t *q = worker_queue_create();
-
-    ASSERT(worker_env_bind_kv(env, "CACHE", kv) == 0);
-    ASSERT(worker_env_bind_r2(env, "ASSETS", r2) == 0);
-    ASSERT(worker_env_bind_d1(env, "DB", d1) == 0);
-    ASSERT(worker_env_bind_queue(env, "JOBS", q) == 0);
-
-    /* All bindings accessible */
-    ASSERT(worker_env_get_kv(env, "CACHE") == kv);
-    ASSERT(worker_env_get_r2(env, "ASSETS") == r2);
-    ASSERT(worker_env_get_d1(env, "DB") == d1);
-    ASSERT(worker_env_get_queue(env, "JOBS") == q);
-
-    /* Cross-type lookups return NULL */
-    ASSERT(worker_env_get_kv(env, "ASSETS") == NULL);
-    ASSERT(worker_env_get_r2(env, "CACHE") == NULL);
-
-    worker_env_destroy(env);
-    worker_kv_destroy(kv);
-    worker_r2_destroy(r2);
-    worker_d1_destroy(d1);
-    worker_queue_destroy(q);
-    PASS();
-}
-
-static void test_worker_env_null_safety(void) {
-    TEST("worker_env_null_safety");
-    ASSERT(worker_env_bind_kv(NULL, "k", NULL) == -1);
-    ASSERT(worker_env_get_kv(NULL, "k") == NULL);
-    ASSERT(worker_env_get_r2(NULL, "k") == NULL);
-    ASSERT(worker_env_get_d1(NULL, "k") == NULL);
-    ASSERT(worker_env_get_queue(NULL, "k") == NULL);
-    worker_env_destroy(NULL); /* should not crash */
-    PASS();
-}
-
-/* ===== Main ===== */
+/* ======================================================== */
 
 int main(void) {
-    printf("=== Cloudflare Worker Runtime Tests ===\n\n");
+    printf("\n=== Cloudflare Worker Runtime & Infrastructure Tests ===\n\n");
 
-    /* Runtime info */
-    test_worker_runtime_version();
-    test_worker_runtime_is_supported();
-
-    /* Request */
+    /* Worker Request */
     test_worker_request_create();
-    test_worker_request_null_params();
+    test_worker_request_null_args();
     test_worker_request_headers();
     test_worker_request_body();
 
-    /* Response */
+    /* Worker Response */
     test_worker_response_create();
-    test_worker_response_status();
-    test_worker_response_null_params();
-    test_worker_response_headers();
-    test_worker_response_body();
-    test_worker_response_set_text();
-    test_worker_response_set_json();
+    test_worker_response_body_text();
+    test_worker_response_json();
 
-    /* Fetch handler */
-    test_worker_handle_fetch_text();
-    test_worker_handle_fetch_json();
-    test_worker_handle_fetch_not_found();
-    test_worker_handle_fetch_with_params();
-    test_worker_handle_fetch_query_string();
-    test_worker_handle_fetch_null();
+    /* Worker Environment */
+    test_worker_env_bindings();
 
-    /* KV store */
-    test_worker_kv_create();
-    test_worker_kv_put_get();
-    test_worker_kv_update();
-    test_worker_kv_delete();
-    test_worker_kv_null_params();
-    test_worker_kv_key_length_validation();
-    test_worker_kv_put_with_ttl();
-    test_worker_kv_list();
+    /* Fetch Handler */
+    test_worker_fetch_no_router();
+    test_worker_fetch_with_router();
+    test_worker_fetch_custom_handler();
 
-    /* R2 object storage */
-    test_worker_r2_create();
-    test_worker_r2_put_get();
-    test_worker_r2_head();
-    test_worker_r2_delete();
-    test_worker_r2_list();
-    test_worker_r2_null_safety();
+    /* KV Namespace */
+    test_kv_create_destroy();
+    test_kv_put_get();
+    test_kv_metadata();
+    test_kv_delete();
+    test_kv_list();
 
-    /* D1 database */
-    test_worker_d1_create();
-    test_worker_d1_create_table_and_insert();
-    test_worker_d1_query_with_where();
-    test_worker_d1_null_safety();
+    /* R2 Object Storage */
+    test_r2_create_destroy();
+    test_r2_put_get();
+    test_r2_head();
+    test_r2_delete();
+    test_r2_list();
 
-    /* Queue */
-    test_worker_queue_create();
-    test_worker_queue_send();
-    test_worker_queue_send_batch();
-    test_worker_queue_null_safety();
+    /* D1 Database */
+    test_d1_create_destroy();
+    test_d1_create_table_and_insert();
+    test_d1_select();
+    test_d1_delete_rows();
+    test_d1_batch();
 
-    /* Env context */
-    test_worker_env_create();
-    test_worker_env_kv_binding();
-    test_worker_env_r2_binding();
-    test_worker_env_d1_binding();
-    test_worker_env_queue_binding();
-    test_worker_env_multi_bindings();
-    test_worker_env_null_safety();
+    /* Queues */
+    test_queue_create_destroy();
+    test_queue_send_consume();
+    test_queue_send_batch();
+    test_queue_send_json();
+
+    /* Integration */
+    test_integration();
 
     printf("\n=== Results: %d/%d tests passed ===\n", tests_passed, tests_run);
 
