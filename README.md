@@ -710,6 +710,275 @@ wasm_template_context_destroy(ctx);
 
 See `examples/wasm_example.c` for a complete demonstration.
 
+### Cloudflare Workers
+
+The library provides first-class support for running inside
+[Cloudflare Workers](https://developers.cloudflare.com/workers/) via WASM.
+The Worker runtime layer (`worker_*` API) bridges the Workers fetch-event
+model to the library's router and response helpers, and provides in-memory
+emulations of Cloudflare's infrastructure bindings (KV, R2, D1, Queues).
+
+#### Worker API Overview
+
+| Function | Purpose |
+|----------|---------|
+| `worker_request_create(method, url)` | Create a request from fetch event data |
+| `worker_request_set_header/body()` | Populate request headers and body |
+| `worker_handle_fetch(req, env)` | Route request through configured handler/router |
+| `worker_response_get_status/body/header()` | Read response fields |
+| `worker_response_set_body_text/set_json()` | Convenience response builders |
+| `worker_env_create/add_binding()` | Environment with named service bindings |
+
+#### Cloudflare Infrastructure Bindings
+
+| Binding | C Type | Cloudflare API | Functions |
+|---------|--------|----------------|-----------|
+| **KV** | `worker_kv_t` | `env.KV.get/put/delete/list` | `worker_kv_create/put/get/delete/list/destroy` |
+| **R2** | `worker_r2_bucket_t` | `env.BUCKET.get/put/delete/list/head` | `worker_r2_bucket_create/put/get/delete/list/head/destroy` |
+| **D1** | `worker_d1_t` | `env.DB.prepare().bind().run/all/first` | `worker_d1_create/prepare/exec/batch/destroy` |
+| **Queues** | `worker_queue_t` | `env.QUEUE.send/sendBatch` | `worker_queue_create/send/send_batch/consume/destroy` |
+| **env** | `worker_env_t` | `fetch(request, env, ctx)` | `worker_env_create/add_binding/get_binding/destroy` |
+
+#### Quick Start
+
+**1. Write your Worker in C:**
+
+```c
+#include "kamran.k"
+
+static router_t *g_router = NULL;
+
+static void handle_hello(http_request_t *req, http_response_t *res) {
+    (void)req;
+    json_value_t *json = json_object_create();
+    json_object_set(json, "message", json_string_create("Hello from Worker!"));
+    http_response_send_json(res, HTTP_OK, json);
+    json_value_free(json);
+}
+
+/* Called once on Worker startup */
+WASM_EXPORT void worker_init(void) {
+    g_router = router_create();
+    router_add_route(g_router, HTTP_GET, "/api/hello", handle_hello);
+    worker_set_router(g_router);
+}
+
+/* Called for every fetch event */
+WASM_EXPORT worker_response_t *worker_fetch(const char *method, const char *url) {
+    worker_request_t *req = worker_request_create(method, url);
+    worker_response_t *res = worker_handle_fetch(req, NULL);
+    worker_request_destroy(req);
+    return res;
+}
+
+WASM_EXPORT void worker_cleanup(void) {
+    router_destroy(g_router);
+}
+```
+
+**2. Compile to WASM with Emscripten:**
+
+```bash
+mkdir build-wasm && cd build-wasm
+emcmake cmake ..
+emmake make
+
+emcc -o worker.wasm.js your_worker.c -I../include -L. -lweblib \
+     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,allocateUTF8,UTF8ToString \
+     -sEXPORTED_FUNCTIONS=_worker_init,_worker_fetch,_worker_cleanup,_worker_response_get_status,_worker_response_get_body,_worker_response_destroy,_malloc,_free \
+     -sWASM=1 -sMODULARIZE=1 -sEXPORT_NAME=createModule
+```
+
+**3. Wire up the JavaScript glue** (see `examples/worker.js`):
+
+```js
+import createModule from "./worker.wasm.js";
+let wasm = null;
+
+async function ensureInit() {
+    if (wasm) return;
+    wasm = await createModule();
+    wasm._worker_init();
+}
+
+export default {
+    async fetch(request, env, ctx) {
+        await ensureInit();
+        const url = new URL(request.url);
+        const methodPtr = wasm.allocateUTF8(request.method);
+        const pathPtr   = wasm.allocateUTF8(url.pathname + url.search);
+
+        const resPtr = wasm._worker_fetch(methodPtr, pathPtr);
+        wasm._free(methodPtr);
+        wasm._free(pathPtr);
+
+        const status = wasm._worker_response_get_status(resPtr);
+        const bodyPtr = wasm._worker_response_get_body(resPtr);
+        const body = bodyPtr ? wasm.UTF8ToString(bodyPtr) : "";
+        wasm._worker_response_destroy(resPtr);
+        return new Response(body, { status });
+    },
+};
+```
+
+#### Worker KV Store
+
+Models [Cloudflare Workers KV](https://developers.cloudflare.com/kv/) with
+TTL support, metadata, and cursor-based listing:
+
+```c
+worker_kv_t *kv = worker_kv_create("MY_KV");
+
+/* Put with optional TTL */
+worker_kv_put_options_t opts = { .expiration_ttl = 3600 };
+worker_kv_put(kv, "session", "abc123", &opts);
+
+/* Get (returns owned string — caller must free) */
+char *val = worker_kv_get(kv, "session");
+printf("session = %s\n", val);
+free(val);
+
+/* List keys with prefix */
+worker_kv_list_options_t list_opts = { .prefix = "session:", .limit = 100 };
+worker_kv_list_result_t *result = worker_kv_list(kv, &list_opts);
+for (int i = 0; i < result->count; i++) {
+    printf("  key: %s\n", result->keys[i]);
+}
+worker_kv_list_result_destroy(result);
+
+worker_kv_delete(kv, "session");
+worker_kv_destroy(kv);
+```
+
+#### Worker R2 Object Storage
+
+Models [Cloudflare R2](https://developers.cloudflare.com/r2/) with
+put, get, head, delete, and list:
+
+```c
+worker_r2_bucket_t *bucket = worker_r2_bucket_create("MY_BUCKET");
+
+/* Store an object */
+worker_r2_put_options_t opts = { .content_type = "image/png" };
+worker_r2_put(bucket, "images/logo.png", data, size, &opts);
+
+/* Retrieve an object */
+worker_r2_object_t *obj = worker_r2_get(bucket, "images/logo.png");
+if (obj) {
+    printf("size=%zu type=%s\n", obj->size, obj->content_type);
+    worker_r2_object_destroy(obj);
+}
+
+/* Head (metadata only, no body) */
+worker_r2_object_t *meta = worker_r2_head(bucket, "images/logo.png");
+printf("etag=%s\n", meta->etag);
+worker_r2_object_destroy(meta);
+
+worker_r2_delete(bucket, "images/logo.png");
+worker_r2_bucket_destroy(bucket);
+```
+
+#### Worker D1 Database
+
+Models [Cloudflare D1](https://developers.cloudflare.com/d1/) with
+prepared statements, parameter binding, and batch execution:
+
+```c
+worker_d1_t *db = worker_d1_create("MY_DB");
+
+/* DDL via exec */
+worker_d1_result_t *r = worker_d1_exec(db, "CREATE TABLE users (id TEXT, name TEXT)");
+worker_d1_result_destroy(r);
+
+/* Prepared statement with binding */
+worker_d1_stmt_t *stmt = worker_d1_prepare(db, "INSERT INTO users VALUES (?, ?)");
+worker_d1_stmt_bind(stmt, 1, "1");
+worker_d1_stmt_bind(stmt, 2, "Alice");
+worker_d1_result_t *res = worker_d1_stmt_run(stmt);
+worker_d1_result_destroy(res);
+worker_d1_stmt_destroy(stmt);
+
+/* Query all rows */
+worker_d1_stmt_t *q = worker_d1_prepare(db, "SELECT * FROM users");
+json_value_t *rows = worker_d1_stmt_all(q);
+char *json_str = json_stringify(rows);
+printf("rows: %s\n", json_str);
+free(json_str);
+json_value_free(rows);
+worker_d1_stmt_destroy(q);
+
+worker_d1_destroy(db);
+```
+
+#### Worker Queues
+
+Models [Cloudflare Queues](https://developers.cloudflare.com/queues/)
+with send, batch send, and consume:
+
+```c
+worker_queue_t *q = worker_queue_create("MY_QUEUE");
+
+/* Send a single message */
+worker_queue_send(q, "{\"type\":\"email\"}", 16);
+worker_queue_send_text(q, "plain text message");
+
+/* Send JSON */
+json_value_t *json = json_object_create();
+json_object_set(json, "task", json_string_create("notify"));
+worker_queue_send_json(q, json);
+json_value_free(json);
+
+/* Send a batch */
+const char *bodies[] = { "msg1", "msg2", "msg3" };
+size_t lengths[] = { 4, 4, 4 };
+worker_queue_send_batch(q, bodies, lengths, 3);
+
+/* Consume messages */
+worker_queue_batch_t *batch = worker_queue_consume(q, 10, 0);
+for (int i = 0; i < batch->count; i++) {
+    printf("msg: %s\n", batch->messages[i]->body);
+    worker_queue_message_ack(batch->messages[i]);
+}
+worker_queue_batch_destroy(batch);
+
+worker_queue_destroy(q);
+```
+
+#### Worker Environment Context
+
+The `worker_env_t` models Cloudflare's `env` object with named bindings
+for KV, R2, D1, and Queues — matching the `wrangler.toml` binding pattern:
+
+```c
+/* Create resources */
+worker_kv_t *kv = worker_kv_create("CACHE");
+worker_r2_bucket_t *r2 = worker_r2_bucket_create("ASSETS");
+worker_d1_t *db = worker_d1_create("DB");
+worker_queue_t *q = worker_queue_create("JOBS");
+
+/* Create env and bind (matches wrangler.toml binding names) */
+worker_env_t *env = worker_env_create();
+worker_env_add_binding(env, "CACHE", WORKER_BINDING_KV, kv);
+worker_env_add_binding(env, "ASSETS", WORKER_BINDING_R2, r2);
+worker_env_add_binding(env, "DB", WORKER_BINDING_D1, db);
+worker_env_add_binding(env, "JOBS", WORKER_BINDING_QUEUE, q);
+
+/* Access bindings by name and type */
+worker_kv_t *cache = worker_env_get_binding(env, "CACHE", WORKER_BINDING_KV);
+worker_d1_t *database = worker_env_get_binding(env, "DB", WORKER_BINDING_D1);
+
+/* Cleanup */
+worker_env_destroy(env);   /* does NOT free bound resources */
+worker_kv_destroy(kv);
+worker_r2_bucket_destroy(r2);
+worker_d1_destroy(db);
+worker_queue_destroy(q);
+```
+
+See `examples/worker_example.c` for a complete native-testable Worker example,
+`examples/worker.js` for the Cloudflare Workers JavaScript glue, and
+`docs/WORKER_API.md` for the full API reference.
+
 ## Testing
 
 ### Using Docker (Recommended)
