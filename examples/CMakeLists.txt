@@ -25,6 +25,10 @@ if(NOT EMSCRIPTEN)
     install(TARGETS simple_server async_server websocket_echo_server async_websocket_echo_server rest_api_server DESTINATION bin)
 endif()
 
+# Worker example (runs on both native and WASM builds)
+add_executable(worker_example worker_example.c)
+target_link_libraries(worker_example weblib ${PLATFORM_LIBS})
+
 # WASM example (runs on both native and WASM builds)
 add_executable(wasm_example wasm_example.c)
 target_link_libraries(wasm_example weblib ${PLATFORM_LIBS})
