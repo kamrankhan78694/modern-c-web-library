@@ -1,5 +1,8 @@
 # Production Release Dockerfile for Modern C Web Library
 # Multi-stage build for optimized runtime image
+#
+# NOTE: The image version in the LABEL directives below must be kept in sync
+# with the canonical version defined in CMakeLists.txt and include/kamran.k.
 
 # Stage 1: Builder
 FROM gcc:11 AS builder

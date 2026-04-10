@@ -12,11 +12,15 @@
  * version set in CMakeLists.txt (passed via -DCMAKE_VERSION_{MAJOR,MINOR,PATCH}).
  */
 #ifdef CMAKE_VERSION_MAJOR
-_Static_assert(WEBLIB_VERSION_MAJOR == CMAKE_VERSION_MAJOR &&
-               WEBLIB_VERSION_MINOR == CMAKE_VERSION_MINOR &&
-               WEBLIB_VERSION_PATCH == CMAKE_VERSION_PATCH,
-               "Version mismatch: update WEBLIB_VERSION_* in kamran.k to match "
-               "the project(VERSION ...) in CMakeLists.txt");
+_Static_assert(WEBLIB_VERSION_MAJOR == CMAKE_VERSION_MAJOR,
+               "MAJOR version mismatch: update WEBLIB_VERSION_MAJOR in kamran.k "
+               "to match the project(VERSION ...) in CMakeLists.txt");
+_Static_assert(WEBLIB_VERSION_MINOR == CMAKE_VERSION_MINOR,
+               "MINOR version mismatch: update WEBLIB_VERSION_MINOR in kamran.k "
+               "to match the project(VERSION ...) in CMakeLists.txt");
+_Static_assert(WEBLIB_VERSION_PATCH == CMAKE_VERSION_PATCH,
+               "PATCH version mismatch: update WEBLIB_VERSION_PATCH in kamran.k "
+               "to match the project(VERSION ...) in CMakeLists.txt");
 #endif
 
 const char *weblib_kamran_signature(void) {
