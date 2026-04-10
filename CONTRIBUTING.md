@@ -330,6 +330,43 @@ When your PR touches middleware configs or security-sensitive code, verify:
 - [ ] Sensitive data is wiped with `secure_zero()`, not `memset()`
 - [ ] No dangling pointers to caller-owned or stack-allocated strings
 
+## Versioning Policy
+
+This project follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+
+Given a version number **MAJOR.MINOR.PATCH**:
+
+- **MAJOR** is incremented for incompatible public API changes (e.g., removing a function,
+  changing a function signature, renaming a type in `include/kamran.k`)
+- **MINOR** is incremented for backwards-compatible new functionality (e.g., adding a new
+  middleware, a new route helper, or a new JSON utility)
+- **PATCH** is incremented for backwards-compatible bug fixes (e.g., fixing a memory leak,
+  correcting parser behavior, resolving a race condition)
+
+### Where Version Is Defined
+
+The version is declared in **two places** that must stay in sync:
+
+| Location | What to update |
+|----------|---------------|
+| `CMakeLists.txt` | `project(ModernCWebLibrary VERSION X.Y.Z ...)` |
+| `include/kamran.k` | `WEBLIB_VERSION_MAJOR`, `WEBLIB_VERSION_MINOR`, `WEBLIB_VERSION_PATCH`, and `WEBLIB_VERSION` |
+
+A compile-time static assertion in `src/http_server.c` will **fail the build** if the two
+sources disagree, so a mismatch is caught immediately.
+
+### When Bumping the Version
+
+1. Update both `CMakeLists.txt` and `include/kamran.k` in the same commit
+2. Add a new section to `CHANGELOG.md` following Keep a Changelog format
+3. Tag the release commit with `vMAJOR.MINOR.PATCH` (e.g., `v1.1.0`)
+
+### Pre-release and Build Metadata
+
+Pre-release versions may use a hyphen suffix per semver (e.g., `2.0.0-alpha.1`).
+Build metadata may use a plus suffix (e.g., `1.0.0+build.42`). These are currently
+not used but are reserved for future use.
+
 ## Branching Strategy
 
 - **main**: Stable production-ready code
