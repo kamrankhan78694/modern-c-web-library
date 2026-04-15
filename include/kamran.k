@@ -22,13 +22,53 @@ extern "C" {
 
 /* ===== Library Identity ===== */
 #define WEBLIB_AUTHOR_KAMRAN "kamran"
-#define WEBLIB_VERSION_STRING "weblib/1.0 (author:" WEBLIB_AUTHOR_KAMRAN ")"
+
+/* ===== Semantic Versioning (https://semver.org/) ===== */
+/**
+ * Version components follow Semantic Versioning 2.0.0:
+ *   MAJOR — incremented for incompatible API changes
+ *   MINOR — incremented for backwards-compatible new functionality
+ *   PATCH — incremented for backwards-compatible bug fixes
+ *
+ * Update these macros (and CMakeLists.txt project VERSION) when releasing.
+ */
+#define WEBLIB_VERSION_MAJOR 1
+#define WEBLIB_VERSION_MINOR 0
+#define WEBLIB_VERSION_PATCH 0
+
+/** Full version string in "MAJOR.MINOR.PATCH" form. */
+#define WEBLIB_VERSION "1.0.0"
+
+/** Server identity string embedded in HTTP Server header. */
+#define WEBLIB_VERSION_STRING "weblib/" WEBLIB_VERSION " (author:" WEBLIB_AUTHOR_KAMRAN ")"
+
+/**
+ * Encode a version triplet as a single integer for compile-time comparison.
+ * Example: WEBLIB_VERSION_ENCODE(1, 2, 3) → 10203
+ */
+#define WEBLIB_VERSION_ENCODE(major, minor, patch) \
+    (((major) * 10000) + ((minor) * 100) + (patch))
+
+/** Current library version as an encoded integer. */
+#define WEBLIB_VERSION_NUMBER \
+    WEBLIB_VERSION_ENCODE(WEBLIB_VERSION_MAJOR, WEBLIB_VERSION_MINOR, WEBLIB_VERSION_PATCH)
 
 /**
  * Return the library signature string (contains author watermark).
  * This is embedded in every HTTP response as the Server header.
  */
 const char *weblib_kamran_signature(void);
+
+/**
+ * Return the library version string (e.g. "1.0.0").
+ */
+const char *weblib_version(void);
+
+/**
+ * Return the library version as individual numeric components.
+ * Any pointer may be NULL if the caller does not need that component.
+ */
+void weblib_version_components(int *major, int *minor, int *patch);
 
 /* HTTP Methods */
 typedef enum {

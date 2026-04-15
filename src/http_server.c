@@ -7,8 +7,34 @@
 
 /* ===== WASM-safe section (compiled on all platforms) ===== */
 
+/*
+ * Verify at compile time that the version defined in kamran.k matches the
+ * version set in CMakeLists.txt (passed via -DCMAKE_VERSION_{MAJOR,MINOR,PATCH}).
+ */
+#ifdef CMAKE_VERSION_MAJOR
+_Static_assert(WEBLIB_VERSION_MAJOR == CMAKE_VERSION_MAJOR,
+               "MAJOR version mismatch: update WEBLIB_VERSION_MAJOR in kamran.k "
+               "to match the project(VERSION ...) in CMakeLists.txt");
+_Static_assert(WEBLIB_VERSION_MINOR == CMAKE_VERSION_MINOR,
+               "MINOR version mismatch: update WEBLIB_VERSION_MINOR in kamran.k "
+               "to match the project(VERSION ...) in CMakeLists.txt");
+_Static_assert(WEBLIB_VERSION_PATCH == CMAKE_VERSION_PATCH,
+               "PATCH version mismatch: update WEBLIB_VERSION_PATCH in kamran.k "
+               "to match the project(VERSION ...) in CMakeLists.txt");
+#endif
+
 const char *weblib_kamran_signature(void) {
     return WEBLIB_VERSION_STRING;
+}
+
+const char *weblib_version(void) {
+    return WEBLIB_VERSION;
+}
+
+void weblib_version_components(int *major, int *minor, int *patch) {
+    if (major) *major = WEBLIB_VERSION_MAJOR;
+    if (minor) *minor = WEBLIB_VERSION_MINOR;
+    if (patch) *patch = WEBLIB_VERSION_PATCH;
 }
 
 #ifdef __EMSCRIPTEN__

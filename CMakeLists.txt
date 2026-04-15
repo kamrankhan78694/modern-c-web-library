@@ -86,6 +86,14 @@ target_include_directories(weblib
 )
 target_link_libraries(weblib ${PLATFORM_LIBS})
 
+# Pass CMake project version to C code so a static assertion can verify that
+# the version in the header (kamran.k) matches the one in CMakeLists.txt.
+target_compile_definitions(weblib PRIVATE
+    CMAKE_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    CMAKE_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    CMAKE_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+)
+
 if(NOT EMSCRIPTEN)
     # Create shared library (not supported for WASM)
     add_library(weblib_shared SHARED ${WEBLIB_SOURCES})
@@ -95,6 +103,11 @@ if(NOT EMSCRIPTEN)
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
     target_link_libraries(weblib_shared ${PLATFORM_LIBS})
+    target_compile_definitions(weblib_shared PRIVATE
+        CMAKE_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+        CMAKE_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+        CMAKE_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+    )
 endif()
 
 # Build examples

@@ -34,7 +34,7 @@
  * wasm_weblib_has_capability() below.
  */
 static const char *WASM_CAPABILITY_STRING =
-    "weblib-wasm/1.0 (json,router,template,validation,cookie,body_parser,compression)";
+    "weblib-wasm/" WEBLIB_VERSION " (json,router,template,validation,cookie,body_parser,compression)";
 
 WASM_EXPORT
 const char *wasm_weblib_version(void) {
