@@ -107,7 +107,7 @@ static void sha1_transform(sha1_ctx_t *ctx, const uint8_t data[]) {
     uint32_t a, b, c, d, e, i, j, t, m[80];
     
     for (i = 0, j = 0; i < 16; ++i, j += 4)
-        m[i] = (data[j] << 24) + (data[j + 1] << 16) + (data[j + 2] << 8) + (data[j + 3]);
+        m[i] = ((uint32_t)data[j] << 24) + ((uint32_t)data[j + 1] << 16) + ((uint32_t)data[j + 2] << 8) + (uint32_t)data[j + 3];
     for (; i < 80; ++i)
         m[i] = SHA1_ROTLEFT(m[i - 3] ^ m[i - 8] ^ m[i - 14] ^ m[i - 16], 1);
     
@@ -334,9 +334,11 @@ void websocket_connection_destroy(websocket_connection_t *conn) {
     free(conn);
 }
 
-/* Parse WebSocket frame header */
+/* Parse WebSocket frame header.
+ * Returns header size (>0) on success, 0 when more data is needed,
+ * or -1 on a protocol violation that must close the connection. */
 static int ws_parse_frame_header(const uint8_t *data, size_t len, ws_frame_t *frame) {
-    if (len < 2) return -1;
+    if (len < 2) return 0; /* Need more data */
     
     frame->fin = (data[0] & 0x80) != 0;
     frame->rsv1 = (data[0] & 0x40) != 0;
@@ -350,18 +352,18 @@ static int ws_parse_frame_header(const uint8_t *data, size_t len, ws_frame_t *fr
     size_t header_size = 2;
     
     if (payload_len == 126) {
-        if (len < 4) return -1;
+        if (len < 4) return 0; /* Need more data */
         frame->payload_length = ((uint64_t)data[2] << 8) | data[3];
         header_size = 4;
     } else if (payload_len == 127) {
-        if (len < 10) return -1;
+        if (len < 10) return 0; /* Need more data */
         frame->payload_length = 0;
         for (int i = 0; i < 8; i++) {
             frame->payload_length = (frame->payload_length << 8) | data[2 + i];
         }
         /* RFC 6455 §5.2: most significant bit MUST be 0 */
         if (frame->payload_length & ((uint64_t)1 << 63)) {
-            return -1;
+            return -1; /* Protocol error */
         }
         header_size = 10;
     } else {
@@ -370,21 +372,21 @@ static int ws_parse_frame_header(const uint8_t *data, size_t len, ws_frame_t *fr
     
     /* Reject control frames with payload > 125 (RFC 6455 §5.5) */
     if (frame->opcode >= 0x8 && frame->payload_length > 125) {
-        return -1;
+        return -1; /* Protocol error */
     }
     
     /* Reject control frames that are fragmented (RFC 6455 §5.5) */
     if (frame->opcode >= 0x8 && !frame->fin) {
-        return -1;
+        return -1; /* Protocol error */
     }
     
     /* Reject frames with RSV bits set (no extensions negotiated) */
     if (frame->rsv1 || frame->rsv2 || frame->rsv3) {
-        return -1;
+        return -1; /* Protocol error */
     }
     
     if (frame->masked) {
-        if (len < header_size + 4) return -1;
+        if (len < header_size + 4) return 0; /* Need more data */
         memcpy(frame->masking_key, data + header_size, 4);
         header_size += 4;
     }
@@ -403,8 +405,12 @@ static void ws_unmask_payload(uint8_t *payload, size_t len, const uint8_t mask[4
 static int ws_send_all(int fd, const void *buf, size_t len) {
     const uint8_t *p = (const uint8_t *)buf;
     size_t remaining = len;
+    int flags = 0;
+#ifdef MSG_NOSIGNAL
+    flags |= MSG_NOSIGNAL;
+#endif
     while (remaining > 0) {
-        ssize_t sent = send(fd, p, remaining, 0);
+        ssize_t sent = send(fd, p, remaining, flags);
         if (sent < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -616,9 +622,14 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
         ws_frame_t frame = {0};
         int header_size = ws_parse_frame_header(conn->buffer, conn->buffer_len, &frame);
         
-        if (header_size < 0) {
+        if (header_size == 0) {
             /* Need more data */
             break;
+        }
+        if (header_size < 0) {
+            /* Protocol violation — close with 1002 */
+            websocket_close(conn, 1002, "Protocol error: invalid frame");
+            return -1;
         }
         
         /* Check for overflow: header_size + payload_length */
