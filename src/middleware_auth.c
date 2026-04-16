@@ -443,6 +443,11 @@ static void hmac_sha256(const uint8_t *key, size_t key_len,
     sha256_update(&ctx, k_pad, SHA256_BLOCK_SIZE);
     sha256_update(&ctx, output, SHA256_DIGEST_SIZE);
     sha256_final(&ctx, output);
+
+    /* Wipe sensitive key material from stack */
+    secure_zero(k_pad, sizeof(k_pad));
+    secure_zero(tk, sizeof(tk));
+    secure_zero(&ctx, sizeof(ctx));
 }
 
 /* ===== Basic Authentication Middleware ===== */
@@ -544,11 +549,18 @@ static bool basic_auth_handler(http_request_t *req, http_response_t *res, void *
     }
 
     /* Authentication successful */
+    secure_zero(username, sizeof(username));
+    secure_zero(password, sizeof(password));
     return true;
 
 unauthorized:
-    /* Set WWW-Authenticate header */
-    if (config->realm) {
+    /* Wipe credentials from stack */
+    secure_zero(username, sizeof(username));
+    secure_zero(password, sizeof(password));
+
+    /* Set WWW-Authenticate header — sanitize realm to prevent header injection */
+    if (config->realm && strchr(config->realm, '"') == NULL &&
+        strchr(config->realm, '\\') == NULL) {
         snprintf(www_auth, sizeof(www_auth), "Basic realm=\"%s\"", config->realm);
     } else {
         snprintf(www_auth, sizeof(www_auth), "Basic realm=\"Restricted\"");
@@ -717,16 +729,17 @@ static bool parse_jwt_token(const char *token,
     int decoded_len;
     char signing_input[4096];
     size_t signing_input_len;
+    bool result = false;
 
     /* Find separators */
     dot1 = strchr(token, '.');
     if (!dot1) {
-        return false;
+        goto cleanup;
     }
     
     dot2 = strchr(dot1 + 1, '.');
     if (!dot2) {
-        return false;
+        goto cleanup;
     }
 
     header_len = dot1 - token;
@@ -736,19 +749,19 @@ static bool parse_jwt_token(const char *token,
     /* Decode header */
     decoded_len = base64url_decode(token, header_len, header_decoded, sizeof(header_decoded) - 1);
     if (decoded_len < 0) {
-        return false;
+        goto cleanup;
     }
     header_decoded[decoded_len] = '\0';
 
     /* Verify algorithm is HS256 */
     if (!strstr((char *)header_decoded, "\"HS256\"")) {
-        return false; /* Only HS256 supported */
+        goto cleanup; /* Only HS256 supported */
     }
 
     /* Decode payload */
     decoded_len = base64url_decode(dot1 + 1, payload_len, payload_decoded, sizeof(payload_decoded) - 1);
     if (decoded_len < 0) {
-        return false;
+        goto cleanup;
     }
     payload_decoded[decoded_len] = '\0';
 
@@ -763,13 +776,13 @@ static bool parse_jwt_token(const char *token,
     /* Decode signature */
     decoded_len = base64url_decode(dot2 + 1, signature_len, signature_decoded, sizeof(signature_decoded));
     if (decoded_len != SHA256_DIGEST_SIZE) {
-        return false;
+        goto cleanup;
     }
 
     /* Prepare signing input (header.payload) */
     signing_input_len = dot2 - token;
     if (signing_input_len >= sizeof(signing_input)) {
-        return false;
+        goto cleanup;
     }
     memcpy(signing_input, token, signing_input_len);
     signing_input[signing_input_len] = '\0';
@@ -779,12 +792,27 @@ static bool parse_jwt_token(const char *token,
 
     /* Constant-time comparison to prevent timing attacks */
     if (!secure_compare(signature_decoded, computed_signature, SHA256_DIGEST_SIZE)) {
-        return false;
+        goto cleanup;
     }
 
-    /* Validate expiration claim if present */
+    /* Validate expiration claim if present.
+     * Parse properly: find "exp" key as a JSON key (preceded by quote),
+     * not just any occurrence of "exp" in a string value. */
     {
-        const char *exp_str = strstr((const char *)payload_decoded, "\"exp\"");
+        const char *search = (const char *)payload_decoded;
+        const char *exp_str = NULL;
+        while ((search = strstr(search, "\"exp\"")) != NULL) {
+            /* Verify this is a key: check that the character before the opening
+             * quote is either '{', ',' or whitespace (not inside a string value) */
+            if (search == (const char *)payload_decoded || 
+                search[-1] == '{' || search[-1] == ',' || 
+                search[-1] == ' ' || search[-1] == '\t' ||
+                search[-1] == '\n' || search[-1] == '\r') {
+                exp_str = search;
+                break;
+            }
+            search += 5;
+        }
         if (exp_str) {
             /* Skip to the value: past "exp" and any whitespace/colon */
             exp_str += 5; /* skip "exp"" */
@@ -796,13 +824,22 @@ static bool parse_jwt_token(const char *token,
             if (endptr != exp_str && exp_val > 0) {
                 time_t now = time(NULL);
                 if ((time_t)exp_val < now) {
-                    return false; /* Token expired */
+                    goto cleanup; /* Token expired */
                 }
             }
         }
     }
 
-    return true;
+    result = true;
+
+cleanup:
+    /* Wipe sensitive key material from stack */
+    secure_zero(header_decoded, sizeof(header_decoded));
+    secure_zero(payload_decoded, sizeof(payload_decoded));
+    secure_zero(signature_decoded, sizeof(signature_decoded));
+    secure_zero(computed_signature, sizeof(computed_signature));
+    secure_zero(signing_input, sizeof(signing_input));
+    return result;
 }
 
 /**

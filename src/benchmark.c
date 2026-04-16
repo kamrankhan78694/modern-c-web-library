@@ -84,6 +84,15 @@ static int _benchmark_one_request(uint16_t port, const char *path,
         "\r\n",
         path, (unsigned)port);
 
+    /* Clamp to actual buffer size to prevent over-read */
+    if (req_len < 0) {
+        close(fd);
+        return -1;
+    }
+    if ((size_t)req_len > sizeof(req_buf)) {
+        req_len = (int)sizeof(req_buf);
+    }
+
     uint64_t t0 = benchmark_timestamp_us();
 
     /* Send request */

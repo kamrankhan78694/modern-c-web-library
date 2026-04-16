@@ -54,8 +54,25 @@ static void generate_session_id(char *buffer, size_t length) {
     }
 
     if (secure_random_bytes(random_bytes, length) == 0) {
-        for (size_t i = 0; i < length; i++) {
-            buffer[i] = charset[random_bytes[i] % charset_len];
+        /* Rejection sampling to avoid modular bias.
+         * 256 / 62 = 4 remainder 8; threshold = 256 - 8 = 248 */
+        unsigned char threshold = (unsigned char)(256 - (256 % charset_len));
+        for (size_t i = 0; i < length; ) {
+            if (random_bytes[i] < threshold) {
+                buffer[i] = charset[random_bytes[i] % charset_len];
+                i++;
+            } else {
+                /* Re-sample this byte */
+                unsigned char replacement;
+                if (secure_random_bytes(&replacement, 1) != 0) {
+                    /* Fallback: accept the biased value */
+                    buffer[i] = charset[random_bytes[i] % charset_len];
+                    i++;
+                } else {
+                    random_bytes[i] = replacement;
+                    /* loop will retry */
+                }
+            }
         }
     } else {
         /* Fallback: use rand_r() with thread-local seed for thread safety */

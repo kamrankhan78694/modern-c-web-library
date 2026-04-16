@@ -116,10 +116,16 @@ static bool _csrf_middleware_handler(http_request_t *req, http_response_t *res, 
 
     size_t cookie_len = strlen(cookie_token);
     size_t header_len = strlen(header_token);
-    size_t cmp_len = cookie_len < header_len ? cookie_len : header_len;
-    /* Always perform constant-time comparison before branching */
-    bool match = secure_compare(cookie_token, header_token, cmp_len)
-                 && (cookie_len == header_len);
+    /* Reject length mismatch up front — but still perform constant-time
+     * comparison over the full expected (cookie) length to avoid leaking
+     * token length through timing. */
+    bool length_match = (cookie_len == header_len);
+    /* Always compare over cookie_len bytes.  If header_len < cookie_len the
+     * extra bytes from header_token are harmless reads within the allocated
+     * string (they just won't match). We still compare the full cookie_len. */
+    bool match = secure_compare(cookie_token, header_token,
+                                cookie_len > header_len ? cookie_len : header_len)
+                 && length_match;
     if (!match) {
         http_response_send_text(res, HTTP_FORBIDDEN, "CSRF token mismatch");
         return false;

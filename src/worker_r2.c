@@ -95,10 +95,20 @@ static worker_r2_object_t *_r2_object_from_entry(const r2_entry_t *e,
     if (!obj) return NULL;
 
     obj->key = strdup(e->key);
+    if (!obj->key) {
+        free(obj);
+        return NULL;
+    }
     obj->size = e->size;
     obj->etag = e->etag ? strdup(e->etag) : NULL;
     obj->content_type = e->content_type ? strdup(e->content_type) : NULL;
     obj->uploaded = e->uploaded;
+
+    /* Check strdup failures for non-NULL sources */
+    if ((e->etag && !obj->etag) || (e->content_type && !obj->content_type)) {
+        worker_r2_object_destroy(obj);
+        return NULL;
+    }
 
     if (include_body && e->body && e->size > 0) {
         obj->body = malloc(e->size);

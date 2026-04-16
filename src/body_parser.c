@@ -44,6 +44,9 @@ static char *_parse_multipart_headers(const uint8_t *data, size_t size,
 static char *_extract_quoted_value(const char *str, const char *param);
 static void _trim_whitespace(char *str);
 
+/* Body parser type tag for safe casting from req->user_data */
+#define BODY_PARSER_MAGIC 0x424F4459  /* "BODY" */
+
 /*
  * Get or create body parser data attached to request
  */
@@ -52,10 +55,14 @@ static body_parser_data_t *_get_or_create_parser_data(http_request_t *req) {
         return NULL;
     }
 
-    /* Check if already exists in user_data */
+    /* Check if already exists in user_data — verify magic tag */
     if (req->user_data) {
         body_parser_data_t *data = (body_parser_data_t *)req->user_data;
-        return data;
+        if (data->magic == BODY_PARSER_MAGIC) {
+            return data;
+        }
+        /* user_data was set by another middleware — don't clobber it */
+        return NULL;
     }
 
     /* Create new parser data */
@@ -64,6 +71,7 @@ static body_parser_data_t *_get_or_create_parser_data(http_request_t *req) {
         return NULL;
     }
 
+    data->magic = BODY_PARSER_MAGIC;
     data->fields = NULL;
     data->files = NULL;
     data->parsed = false;

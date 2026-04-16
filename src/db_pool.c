@@ -116,13 +116,15 @@ static bool validate_connection(db_pool_t *pool, db_connection_t *conn) {
     return true;
 }
 
-/* Create default configuration */
+/* Create default configuration.
+ * Note: connection_string is stored directly (not duplicated). The caller
+ * must ensure the string remains valid for the lifetime of this config. */
 db_pool_config_t db_pool_config_default(db_type_t db_type, const char *connection_string) {
     db_pool_config_t config;
     memset(&config, 0, sizeof(db_pool_config_t));
     
     config.db_type = db_type;
-    config.connection_string = connection_string ? strdup(connection_string) : NULL;
+    config.connection_string = connection_string;
     config.min_connections = 2;
     config.max_connections = 10;
     config.max_idle_time = 300;

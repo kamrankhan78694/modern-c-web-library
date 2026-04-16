@@ -145,6 +145,10 @@ int event_loop_add_fd(event_loop_t *loop, int fd, int events, event_callback_t c
     
     /* Expand handlers array if needed */
     if (loop->handler_count >= loop->handler_capacity) {
+        if (loop->handler_capacity > INT_MAX / 2) {
+            fprintf(stderr, "Handler capacity overflow\n");
+            return -1;
+        }
         int new_capacity = loop->handler_capacity * 2;
         event_handler_t *new_handlers = (event_handler_t *)realloc(loop->handlers, 
                                                                     new_capacity * sizeof(event_handler_t));
@@ -199,6 +203,10 @@ int event_loop_add_fd(event_loop_t *loop, int fd, int events, event_callback_t c
 #elif defined(USE_POLL)
     /* Expand poll_fds if needed */
     if (loop->poll_count >= loop->poll_capacity) {
+        if (loop->poll_capacity > INT_MAX / 2) {
+            loop->handler_count--;
+            return -1;
+        }
         int new_capacity = loop->poll_capacity * 2;
         struct pollfd *new_fds = (struct pollfd *)realloc(loop->poll_fds,
                                                           new_capacity * sizeof(struct pollfd));
@@ -414,8 +422,9 @@ int event_loop_run(event_loop_t *loop) {
             return -1;
         }
         
-        /* Process events */
-        for (int i = 0; i < loop->poll_count && nfds > 0; i++) {
+        /* Process events — iterate in reverse so that swap-with-last
+         * compaction from event_loop_remove_fd() doesn't skip entries */
+        for (int i = loop->poll_count - 1; i >= 0 && nfds > 0; i--) {
             if (loop->poll_fds[i].revents == 0) continue;
             
             nfds--;

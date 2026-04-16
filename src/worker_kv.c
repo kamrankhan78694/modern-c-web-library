@@ -234,10 +234,13 @@ worker_kv_list_result_t *worker_kv_list(worker_kv_t *kv,
 
     time_t now = time(NULL);
     int found = 0;
-    int skipped = 0;
     bool has_more = false;
+    /* Use raw index-based cursor for consistency across paginated calls.
+     * cursor_start is the raw array index to resume from. */
+    int start_index = (cursor_start >= 0 && cursor_start < kv->count) ? cursor_start : 0;
+    int resume_index = 0;
 
-    for (int i = 0; i < kv->count; i++) {
+    for (int i = start_index; i < kv->count; i++) {
         /* Skip expired */
         if (_kv_is_expired(&kv->entries[i], now)) continue;
 
@@ -245,11 +248,10 @@ worker_kv_list_result_t *worker_kv_list(worker_kv_t *kv,
         if (prefix && strncmp(kv->entries[i].key, prefix,
                               strlen(prefix)) != 0) continue;
 
-        if (skipped < cursor_start) { skipped++; continue; }
-
         if (found < limit) {
             result->keys[found] = strdup(kv->entries[i].key);
             found++;
+            resume_index = i + 1;
         } else {
             has_more = true;
             break;
@@ -258,7 +260,7 @@ worker_kv_list_result_t *worker_kv_list(worker_kv_t *kv,
 
     result->count = found;
     result->list_complete = !has_more;
-    result->cursor = has_more ? (cursor_start + found) : 0;
+    result->cursor = has_more ? resume_index : 0;
 
     return result;
 }

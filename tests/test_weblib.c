@@ -1533,8 +1533,8 @@ void test_db_pool_create_destroy(void) {
 
     db_pool_destroy(pool);
 
-    /* Free the config connection string that was strdup'd */
-    free(config.connection_string);
+    /* db_pool_config_default no longer strdup's the connection string;
+     * db_pool_create makes its own copy, so nothing to free here. */
 
     /* Destroy NULL should not crash */
     db_pool_destroy(NULL);
@@ -1568,7 +1568,7 @@ void test_db_pool_acquire_release(void) {
     ASSERT(stats.total_released >= 1);
 
     db_pool_destroy(pool);
-    free(config.connection_string);
+    /* connection_string no longer strdup'd by db_pool_config_default */
 
     PASS();
 }
