@@ -1652,7 +1652,7 @@ static int parse_chunk_size(http_parser_t *parser) {
     unsigned long chunk_size = strtoul(line, &endptr, 16);
     /* Reject trailing garbage after hex digits (allow optional chunk-ext starting with ';') */
     if (endptr == line || errno == ERANGE || chunk_size > MAX_BODY_BYTES ||
-        (*endptr != '\0' && *endptr != ';' && *endptr != ' ')) {
+        (*endptr != '\0' && *endptr != ';')) {
         free(line);
         parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid chunk size");
         return -1;

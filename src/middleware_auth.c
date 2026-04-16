@@ -558,9 +558,12 @@ unauthorized:
     secure_zero(username, sizeof(username));
     secure_zero(password, sizeof(password));
 
-    /* Set WWW-Authenticate header — sanitize realm to prevent header injection */
+    /* Set WWW-Authenticate header — sanitize realm to prevent header injection.
+     * Reject quotes, backslashes, and control characters (CR/LF). */
     if (config->realm && strchr(config->realm, '"') == NULL &&
-        strchr(config->realm, '\\') == NULL) {
+        strchr(config->realm, '\\') == NULL &&
+        strchr(config->realm, '\r') == NULL &&
+        strchr(config->realm, '\n') == NULL) {
         snprintf(www_auth, sizeof(www_auth), "Basic realm=\"%s\"", config->realm);
     } else {
         snprintf(www_auth, sizeof(www_auth), "Basic realm=\"Restricted\"");

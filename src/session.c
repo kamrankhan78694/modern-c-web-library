@@ -65,13 +65,12 @@ static void generate_session_id(char *buffer, size_t length) {
                 /* Re-sample this byte */
                 unsigned char replacement;
                 if (secure_random_bytes(&replacement, 1) != 0) {
-                    /* Fallback: accept the biased value */
-                    buffer[i] = charset[random_bytes[i] % charset_len];
-                    i++;
-                } else {
-                    random_bytes[i] = replacement;
-                    /* loop will retry */
+                    /* RNG failure — abort session ID generation entirely */
+                    memset(buffer, 0, length + 1);
+                    return;
                 }
+                random_bytes[i] = replacement;
+                /* loop will retry */
             }
         }
     } else {

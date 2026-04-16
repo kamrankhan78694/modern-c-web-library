@@ -237,7 +237,7 @@ worker_kv_list_result_t *worker_kv_list(worker_kv_t *kv,
     bool has_more = false;
     /* Use raw index-based cursor for consistency across paginated calls.
      * cursor_start is the raw array index to resume from. */
-    int start_index = (cursor_start >= 0 && cursor_start < kv->count) ? cursor_start : 0;
+    int start_index = (cursor_start >= 0 && cursor_start <= kv->count) ? cursor_start : 0;
     int resume_index = 0;
 
     for (int i = start_index; i < kv->count; i++) {
