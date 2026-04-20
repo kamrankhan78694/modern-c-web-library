@@ -8,6 +8,7 @@
 
 static http_server_t *g_server = NULL;
 static volatile bool server_running = true;
+/* Keep the demo client inline so this example stays self-contained and easy to run. */
 static const char index_html[] =
     "<!DOCTYPE html>\n"
     "<html>\n"
