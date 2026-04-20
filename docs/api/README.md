@@ -322,6 +322,7 @@ db_pool_t *pool = db_pool_create(&config);
 
 db_connection_t *conn = db_pool_acquire(pool);
 if (conn != NULL) {
+    db_connection_execute(conn, "SELECT 1");
     db_pool_release(pool, conn);
 }
 
