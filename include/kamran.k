@@ -1869,7 +1869,8 @@ int secure_random_bytes(void *buf, size_t len);
  *   cfg.content_security_policy = "default-src 'self'; script-src 'self'";
  *   middleware_fn_t sec = security_headers_middleware_create(&cfg);
  *   router_use_middleware(router, sec);
- *   security_headers_middleware_destroy();  Call this once during shutdown.
+ *   // Call this once during shutdown.
+ *   security_headers_middleware_destroy();
  */
 
 /** Configuration for the security headers middleware. */
