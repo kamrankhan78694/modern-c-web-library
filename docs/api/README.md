@@ -322,8 +322,6 @@ db_pool_t *pool = db_pool_create(&config);
 
 db_connection_t *conn = db_pool_acquire(pool);
 if (conn != NULL) {
-    void *handle = db_connection_get_handle(conn);
-    (void)handle;
     db_pool_release(pool, conn);
 }
 

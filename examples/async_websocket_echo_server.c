@@ -56,8 +56,7 @@ static void handle_ws(http_request_t *req, http_response_t *res) {
     req->user_data = &callbacks;
 }
 
-static void handle_index(http_request_t *req, http_response_t *res) {
-    (void)req;
+static const char *index_html(void) {
     static const char html[] =
         "<!DOCTYPE html>\n"
         "<html>\n"
@@ -149,8 +148,13 @@ static void handle_index(http_request_t *req, http_response_t *res) {
         "    </script>\n"
         "</body>\n"
         "</html>\n";
+    return html;
+}
+
+static void handle_index(http_request_t *req, http_response_t *res) {
+    (void)req;
     http_response_set_header(res, "Content-Type", "text/html");
-    http_response_send_text(res, HTTP_OK, html);
+    http_response_send_text(res, HTTP_OK, index_html());
 }
 
 int main(int argc, char *argv[]) {
