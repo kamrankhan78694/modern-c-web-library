@@ -148,6 +148,7 @@ static void handle_ws(http_request_t *req, http_response_t *res) {
     req->user_data = &callbacks;
 }
 
+/* Serve the inline demo page declared at the top of this file. */
 static void handle_index(http_request_t *req, http_response_t *res) {
     (void)req;
     http_response_set_header(res, "Content-Type", "text/html");

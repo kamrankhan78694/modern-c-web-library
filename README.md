@@ -324,8 +324,12 @@ int main(void) {
 void handle_user(http_request_t *req, http_response_t *res) {
     const char *user_id = http_request_get_param(req, "id");
     json_value_t *json = json_object_create();
-    json_object_set(json, "user_id", json_string_create(user_id ? user_id : "unknown"));
-    json_object_set(json, "status", json_string_create("loaded"));
+    json_value_t *user_id_value = json_string_create(user_id ? user_id : "unknown");
+    json_value_t *status_value = json_string_create("loaded");
+
+    /* json_object_set() takes ownership of the child values. */
+    json_object_set(json, "user_id", user_id_value);
+    json_object_set(json, "status", status_value);
     http_response_send_json(res, HTTP_OK, json);
     json_value_free(json);
 }

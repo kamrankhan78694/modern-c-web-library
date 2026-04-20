@@ -214,7 +214,9 @@ void handle_profile(http_request_t *req, http_response_t *res) {
     }
     const char *user_id = session_get_data(sess, "user_id");
     json_value_t *json = json_object_create();
-    json_object_set(json, "user_id", json_string_create(user_id ? user_id : "unknown"));
+    json_value_t *user_id_value = json_string_create(user_id ? user_id : "unknown");
+    /* json_object_set() takes ownership of user_id_value. */
+    json_object_set(json, "user_id", user_id_value);
     http_response_send_json(res, HTTP_OK, json);
     json_value_free(json);
 }
