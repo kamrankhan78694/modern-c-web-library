@@ -213,7 +213,10 @@ void handle_profile(http_request_t *req, http_response_t *res) {
         return;
     }
     const char *user_id = session_get_data(sess, "user_id");
-    // ...
+    json_value_t *json = json_object_create();
+    json_object_set(json, "user_id", json_string_create(user_id ? user_id : "unknown"));
+    http_response_send_json(res, HTTP_OK, json);
+    json_value_free(json);
 }
 ```
 
@@ -264,8 +267,9 @@ basic_auth_config_t config = {
 };
 
 middleware_fn_t mw = basic_auth_middleware_create(&config);
-router_use_middleware(router, mw);
-// ...
+if (mw != NULL) {
+    router_use_middleware(router, mw);
+}
 basic_auth_middleware_destroy();
 ```
 
@@ -280,8 +284,9 @@ apikey_auth_config_t config = {
 };
 
 middleware_fn_t mw = apikey_auth_middleware_create(&config);
-router_use_middleware(router, mw);
-// ...
+if (mw != NULL) {
+    router_use_middleware(router, mw);
+}
 apikey_auth_middleware_destroy();
 ```
 
@@ -294,8 +299,9 @@ jwt_auth_config_t config = {
 };
 
 middleware_fn_t mw = jwt_auth_middleware_create(&config);
-router_use_middleware(router, mw);
-// ...
+if (mw != NULL) {
+    router_use_middleware(router, mw);
+}
 jwt_auth_middleware_destroy();
 ```
 
@@ -315,9 +321,11 @@ config.max_connections = 10;
 db_pool_t *pool = db_pool_create(&config);
 
 db_connection_t *conn = db_pool_acquire(pool);
-void *handle = db_connection_get_handle(conn);
-// ... use handle ...
-db_pool_release(pool, conn);
+if (conn != NULL) {
+    void *handle = db_connection_get_handle(conn);
+    (void)handle;
+    db_pool_release(pool, conn);
+}
 
 db_pool_destroy(pool);
 ```

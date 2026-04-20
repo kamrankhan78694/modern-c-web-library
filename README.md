@@ -323,7 +323,11 @@ int main(void) {
 ```c
 void handle_user(http_request_t *req, http_response_t *res) {
     const char *user_id = http_request_get_param(req, "id");
-    // ... handle user request
+    json_value_t *json = json_object_create();
+    json_object_set(json, "user_id", json_string_create(user_id ? user_id : "unknown"));
+    json_object_set(json, "status", json_string_create("loaded"));
+    http_response_send_json(res, HTTP_OK, json);
+    json_value_free(json);
 }
 
 router_add_route(router, HTTP_GET, "/users/:id", handle_user);

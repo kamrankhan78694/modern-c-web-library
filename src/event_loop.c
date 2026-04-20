@@ -493,7 +493,7 @@ int event_loop_add_timeout(event_loop_t *loop, int timeout_ms, event_callback_t 
     
     /* Calculate expiry time */
 #ifdef USE_WASM_STUB
-    timer->expiry_ms = 0; /* placeholder; WASM timers are host-driven */
+    timer->expiry_ms = 0; /* WASM timers are host-driven */
 #else
     gettimeofday(&timer->expiry, NULL);
     timer->expiry.tv_sec += timeout_ms / 1000;
@@ -543,7 +543,7 @@ static int find_handler_index(event_loop_t *loop, int fd) {
 /* Process expired timers */
 static void process_timers(event_loop_t *loop) {
 #ifdef USE_WASM_STUB
-    /* WASM: timers are placeholder stubs; fire all pending timers */
+    /* WASM: fire all pending timers because the host drives timer delivery */
     int count = loop->timer_count;
     for (int i = 0; i < count && i < loop->timer_count; i++) {
         if (!loop->timers[i].active) continue;

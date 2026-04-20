@@ -242,9 +242,13 @@ void sighandler(int sig) {
 
 int main(void) {
     g_server = http_server_create();
+    router_t *router = router_create();
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
-    /* ... setup and listen ... */
+    http_server_set_router(g_server, router);
+    http_server_listen(g_server, 8080);
+    router_destroy(router);
+    http_server_destroy(g_server);
 }
 ```
 
