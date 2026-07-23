@@ -295,15 +295,32 @@ static worker_d1_result_t *_d1_exec_insert(worker_d1_t *db, const char *sql,
         }
     }
 
+    /* With an explicit column list, the number of bound parameters must match
+     * the number of named columns, and each must be bound: extra binds would be
+     * silently dropped and missing binds would leave empty cells -- both hide
+     * bugs. (Positional inserts keep the lenient behaviour.) */
+    if (named_count >= 0) {
+        if (param_count != named_count) {
+            worker_d1_result_t *r = calloc(1, sizeof(worker_d1_result_t));
+            if (r) { r->success = false; }
+            return r;
+        }
+        for (int i = 0; i < named_count; i++) {
+            if (!params[i]) {
+                worker_d1_result_t *r = calloc(1, sizeof(worker_d1_result_t));
+                if (r) { r->success = false; }
+                return r;
+            }
+        }
+    }
+
     d1_row_data_t *row = &t->rows[t->row_count];
     memset(row, 0, sizeof(d1_row_data_t));
 
     if (named_count >= 0) {
-        /* Bind each parameter to its named column. */
-        for (int i = 0; i < param_count && i < named_count; i++) {
-            if (params[i]) {
-                strncpy(row->cells[col_map[i]], params[i], D1_MAX_CELL_LEN - 1);
-            }
+        /* Bind each parameter to its named column (validated 1:1 above). */
+        for (int i = 0; i < named_count; i++) {
+            strncpy(row->cells[col_map[i]], params[i], D1_MAX_CELL_LEN - 1);
         }
     } else {
         /* No column list: positional binding to physical columns. */

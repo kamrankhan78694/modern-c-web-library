@@ -613,7 +613,8 @@ static void test_d1_sql_safety(void) {
     worker_d1_stmt_bind(del, 1, "x");
     worker_d1_result_t *dr = worker_d1_stmt_run(del);
     ASSERT(dr != NULL);
-    ASSERT(dr->success == false || dr->meta_changes == 0);
+    ASSERT(dr->success == false);        /* refused */
+    ASSERT(dr->meta_changes == 0);       /* nothing deleted */
     worker_d1_result_destroy(dr);
     worker_d1_stmt_destroy(del);
 
@@ -627,17 +628,23 @@ static void test_d1_sql_safety(void) {
     json_value_free(rows);
     worker_d1_stmt_destroy(sel);
 
-    /* SELECT with an unknown WHERE column must fail, not return every row. */
+    /* SELECT with an unknown WHERE column must fail (no results), not return
+     * every row. The failed query yields no result array, so stmt_all == NULL. */
     worker_d1_stmt_t *bsel = worker_d1_prepare(db, "SELECT * FROM t WHERE nosuchcol = ?");
     worker_d1_stmt_bind(bsel, 1, "x");
     json_value_t *brows = worker_d1_stmt_all(bsel);
-    if (brows != NULL) {
-        char *bjs = json_stringify(brows);
-        ASSERT(bjs == NULL || strstr(bjs, "aye") == NULL);
-        free(bjs);
-        json_value_free(brows);
-    }
+    ASSERT(brows == NULL);
     worker_d1_stmt_destroy(bsel);
+
+    /* INSERT with a column list must reject a param-count mismatch (2 named
+     * columns, 1 bound param) rather than silently leaving a cell empty. */
+    worker_d1_stmt_t *mm = worker_d1_prepare(db, "INSERT INTO t (a, b) VALUES (?)");
+    worker_d1_stmt_bind(mm, 1, "only");
+    worker_d1_result_t *mr = worker_d1_stmt_run(mm);
+    ASSERT(mr != NULL);
+    ASSERT(mr->success == false);
+    worker_d1_result_destroy(mr);
+    worker_d1_stmt_destroy(mm);
 
     worker_d1_destroy(db);
     PASS();
