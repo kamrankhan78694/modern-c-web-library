@@ -4,6 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>   /* isfinite (builtin macro; no libm link) */
+#include <locale.h> /* localeconv (normalize decimal separator to '.') */
 
 /* Internal structures */
 typedef struct json_object_entry {
@@ -764,6 +765,19 @@ static bool stringify_string(const char *str, char **output, size_t *capacity, s
     return true;
 }
 
+/* JSON always uses '.' as the decimal separator, but snprintf("%g") emits the
+ * program's active LC_NUMERIC separator (e.g. ',' under de_DE), which would be
+ * invalid JSON. Normalize it in place (a 1:1 char swap, so length is unchanged)
+ * so output is valid regardless of the host locale. Only the %g path can
+ * produce a separator; integer/"null"/"-0" output has none. */
+static void json_normalize_decimal(char *s) {
+    char sep = localeconv()->decimal_point[0];
+    if (sep != '\0' && sep != '.') {
+        char *p = strchr(s, sep);
+        if (p) *p = '.';
+    }
+}
+
 /* Serialize a JSON number (double) losslessly into buf.
  *   - Integral values within a double's exact-integer range (|x| < 2^53) print
  *     with no decimal point or exponent (e.g. 1234567890, not 1.23457e+09).
@@ -797,12 +811,15 @@ static int json_format_number(double num, char *buf, size_t bufsz) {
     for (int prec = 15; prec <= 17; prec++) {
         int n = snprintf(buf, bufsz, "%.*g", prec, num);
         if (n < 0 || (size_t)n >= bufsz) return -1;
-        if (strtod(buf, NULL) == num) {
+        if (strtod(buf, NULL) == num) {   /* strtod honors the same LC_NUMERIC */
+            json_normalize_decimal(buf);  /* -> '.' so output is valid JSON */
             return n;
         }
     }
     int n = snprintf(buf, bufsz, "%.17g", num);   /* fallback: full precision */
-    return (n < 0 || (size_t)n >= bufsz) ? -1 : n;
+    if (n < 0 || (size_t)n >= bufsz) return -1;
+    json_normalize_decimal(buf);
+    return n;
 }
 
 static bool stringify_value(json_value_t *value, char **output, size_t *capacity, size_t *length) {

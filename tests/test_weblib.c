@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <locale.h>
 
 /* Test counter */
 static int tests_run = 0;
@@ -291,6 +292,19 @@ void test_json_number_precision(void) {
     s = json_stringify(nanv);
     ASSERT(s != NULL && strcmp(s, "null") == 0);
     free(s); json_value_free(nanv);
+
+    /* Locale independence: even under a comma-decimal LC_NUMERIC, serialized
+     * output must use '.' (valid JSON). Skipped if no such locale is installed. */
+    if (setlocale(LC_NUMERIC, "de_DE.UTF-8") || setlocale(LC_NUMERIC, "de_DE") ||
+        setlocale(LC_NUMERIC, "nl_NL.UTF-8") || setlocale(LC_NUMERIC, "fr_FR.UTF-8")) {
+        json_value_t *frac = json_number_create(3.14159265358979);
+        s = json_stringify(frac);
+        ASSERT(s != NULL);
+        ASSERT(strchr(s, ',') == NULL);          /* not the locale comma */
+        ASSERT(strstr(s, "3.14159") != NULL);    /* JSON '.' decimal */
+        free(s); json_value_free(frac);
+        setlocale(LC_NUMERIC, "C");              /* restore for later tests */
+    }
 
     PASS();
 }
