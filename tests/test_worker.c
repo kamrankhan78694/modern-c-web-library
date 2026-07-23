@@ -578,6 +578,119 @@ static void test_d1_batch(void) {
     PASS();
 }
 
+/* Security regression: INSERT must map values to NAMED columns (not physical
+ * order), and a WHERE clause with an unknown column must NOT become a
+ * DELETE-all / SELECT-all. */
+static void test_d1_sql_safety(void) {
+    TEST("d1_sql_safety (named-column INSERT, unknown-WHERE guard)");
+    worker_d1_t *db = worker_d1_create("safedb");
+    ASSERT(db != NULL);
+    worker_d1_result_destroy(worker_d1_exec(db, "CREATE TABLE t (a, b)"));
+
+    /* Column list is REORDERED (b, a): values must land in the named columns. */
+    worker_d1_stmt_t *ins = worker_d1_prepare(db, "INSERT INTO t (b, a) VALUES (?, ?)");
+    ASSERT(ins != NULL);
+    worker_d1_stmt_bind(ins, 1, "bee");   /* -> column b */
+    worker_d1_stmt_bind(ins, 2, "aye");   /* -> column a */
+    worker_d1_result_t *ir = worker_d1_stmt_run(ins);
+    ASSERT(ir != NULL && ir->success);
+    worker_d1_result_destroy(ir);
+    worker_d1_stmt_destroy(ins);
+
+    worker_d1_stmt_t *sel = worker_d1_prepare(db, "SELECT * FROM t");
+    json_value_t *rows = worker_d1_stmt_all(sel);
+    ASSERT(rows != NULL);
+    char *js = json_stringify(rows);
+    ASSERT(js != NULL);
+    ASSERT(strstr(js, "\"a\":\"aye\"") != NULL);   /* mapped to named col a */
+    ASSERT(strstr(js, "\"b\":\"bee\"") != NULL);   /* mapped to named col b */
+    free(js);
+    json_value_free(rows);
+    worker_d1_stmt_destroy(sel);
+
+    /* DELETE with an unknown WHERE column must be refused, not delete-all. */
+    worker_d1_stmt_t *del = worker_d1_prepare(db, "DELETE FROM t WHERE nosuchcol = ?");
+    worker_d1_stmt_bind(del, 1, "x");
+    worker_d1_result_t *dr = worker_d1_stmt_run(del);
+    ASSERT(dr != NULL);
+    ASSERT(dr->success == false);        /* refused */
+    ASSERT(dr->meta_changes == 0);       /* nothing deleted */
+    worker_d1_result_destroy(dr);
+    worker_d1_stmt_destroy(del);
+
+    /* The row must still be present (was NOT wiped). */
+    sel = worker_d1_prepare(db, "SELECT * FROM t");
+    rows = worker_d1_stmt_all(sel);
+    ASSERT(rows != NULL);
+    js = json_stringify(rows);
+    ASSERT(js != NULL && strstr(js, "aye") != NULL);
+    free(js);
+    json_value_free(rows);
+    worker_d1_stmt_destroy(sel);
+
+    /* SELECT with an unknown WHERE column must fail (no results), not return
+     * every row. The failed query yields no result array, so stmt_all == NULL. */
+    worker_d1_stmt_t *bsel = worker_d1_prepare(db, "SELECT * FROM t WHERE nosuchcol = ?");
+    worker_d1_stmt_bind(bsel, 1, "x");
+    json_value_t *brows = worker_d1_stmt_all(bsel);
+    ASSERT(brows == NULL);
+    worker_d1_stmt_destroy(bsel);
+
+    /* INSERT with a column list must reject a param-count mismatch (2 named
+     * columns, 1 bound param) rather than silently leaving a cell empty. */
+    worker_d1_stmt_t *mm = worker_d1_prepare(db, "INSERT INTO t (a, b) VALUES (?)");
+    worker_d1_stmt_bind(mm, 1, "only");
+    worker_d1_result_t *mr = worker_d1_stmt_run(mm);
+    ASSERT(mr != NULL);
+    ASSERT(mr->success == false);
+    worker_d1_result_destroy(mr);
+    worker_d1_stmt_destroy(mm);
+
+    /* Regression guard: a table whose NAME contains "where" (e.g. "elsewhere")
+     * must not be misread as having a WHERE clause and refused. */
+    worker_d1_result_destroy(worker_d1_exec(db, "CREATE TABLE elsewhere (x)"));
+    worker_d1_stmt_t *ew = worker_d1_prepare(db, "INSERT INTO elsewhere (x) VALUES (?)");
+    worker_d1_stmt_bind(ew, 1, "here");
+    worker_d1_result_destroy(worker_d1_stmt_run(ew));
+    worker_d1_stmt_destroy(ew);
+    worker_d1_stmt_t *ews = worker_d1_prepare(db, "SELECT * FROM elsewhere");
+    json_value_t *ewr = worker_d1_stmt_all(ews);
+    ASSERT(ewr != NULL);                          /* would be NULL if misdetected */
+    char *ewjs = json_stringify(ewr);
+    ASSERT(ewjs != NULL && strstr(ewjs, "here") != NULL);
+    free(ewjs); json_value_free(ewr); worker_d1_stmt_destroy(ews);
+
+    /* Positional INSERT (no column list) still binds by physical column order. */
+    worker_d1_result_destroy(worker_d1_exec(db, "CREATE TABLE pos (m, n)"));
+    worker_d1_stmt_t *pi = worker_d1_prepare(db, "INSERT INTO pos VALUES (?, ?)");
+    worker_d1_stmt_bind(pi, 1, "MM");
+    worker_d1_stmt_bind(pi, 2, "NN");
+    worker_d1_result_destroy(worker_d1_stmt_run(pi));
+    worker_d1_stmt_destroy(pi);
+    worker_d1_stmt_t *ps = worker_d1_prepare(db, "SELECT * FROM pos");
+    json_value_t *pr = worker_d1_stmt_all(ps);
+    char *pjs = json_stringify(pr);
+    ASSERT(pjs != NULL && strstr(pjs, "\"m\":\"MM\"") != NULL &&
+           strstr(pjs, "\"n\":\"NN\"") != NULL);
+    free(pjs); json_value_free(pr); worker_d1_stmt_destroy(ps);
+
+    /* DELETE with NO WHERE clause deletes all (intended). */
+    worker_d1_result_t *da = worker_d1_exec(db, "DELETE FROM elsewhere");
+    ASSERT(da != NULL && da->success && da->meta_changes == 1);
+    worker_d1_result_destroy(da);
+    worker_d1_stmt_t *es2 = worker_d1_prepare(db, "SELECT * FROM elsewhere");
+    json_value_t *er2 = worker_d1_stmt_all(es2);
+    if (er2) {
+        char *e2 = json_stringify(er2);
+        ASSERT(e2 == NULL || strstr(e2, "here") == NULL);   /* emptied */
+        free(e2); json_value_free(er2);
+    }
+    worker_d1_stmt_destroy(es2);
+
+    worker_d1_destroy(db);
+    PASS();
+}
+
 /* ========================================================
  * Queues Tests
  * ======================================================== */
@@ -783,6 +896,7 @@ int main(void) {
     test_d1_select();
     test_d1_delete_rows();
     test_d1_batch();
+    test_d1_sql_safety();
 
     /* Queues */
     test_queue_create_destroy();
