@@ -57,6 +57,9 @@ static int generate_session_id(char *buffer, size_t length) {
     }
 
     if (secure_random_bytes(random_bytes, length) != 0) {
+        /* May hold partial CSPRNG output on failure: wipe it, leave no ID. */
+        secure_zero(random_bytes, sizeof(random_bytes));
+        buffer[0] = '\0';
         return -1;
     }
 
