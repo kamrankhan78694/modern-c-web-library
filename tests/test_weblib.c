@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 
 /* Test counter */
 static int tests_run = 0;
@@ -1569,6 +1570,116 @@ void test_db_pool_acquire_release(void) {
 
     db_pool_destroy(pool);
     /* connection_string no longer strdup'd by db_pool_config_default */
+
+    PASS();
+}
+
+/* Regression: db_pool_destroy() must be safe to call while connections are
+ * still checked out AND while other threads are blocked inside db_pool_acquire().
+ * The pool's atomic refcount defers teardown until the last reference (an
+ * in-flight call or a checked-out connection) is dropped, so none of the
+ * following can use-after-free:
+ *   - a waiter re-locking a destroyed mutex after being woken by shutdown;
+ *   - db_pool_release() running after destroy() (release-after-free).
+ * This test keeps the pool referenced throughout (holders + waiters), so it is
+ * itself UAF-free by construction, yet it drives destroy() straight through the
+ * dangerous window.  Reverting the refcount makes the post-destroy
+ * db_pool_release() calls below touch freed memory -- caught deterministically
+ * by the CI Valgrind memcheck (--leak-check=full --error-exitcode=1), and by
+ * ASan/TSan locally. */
+#define DBPOOL_HOLDERS 2
+#define DBPOOL_WAITERS 4
+static db_pool_t *g_race_pool = NULL;
+static atomic_int g_waiters_ready;
+
+static void *db_pool_waiter_thread(void *arg) {
+    (void)arg;
+    atomic_fetch_add(&g_waiters_ready, 1);
+    /* Pool is exhausted by the holders, so this blocks until destroy() shuts it
+     * down, then returns NULL. A reference is held for the whole wait. */
+    db_connection_t *c = db_pool_acquire(g_race_pool);
+    if (c) {
+        db_pool_release(g_race_pool, c);
+    }
+    return NULL;
+}
+
+void test_db_pool_destroy_race(void) {
+    TEST("db_pool (destroy with checked-out + blocked acquirers)");
+
+    db_pool_config_t config = db_pool_config_default(DB_TYPE_GENERIC, "generic://localhost");
+    config.min_connections = 0;
+    config.max_connections = DBPOOL_HOLDERS;   /* exhausted by the holders below */
+    config.connection_timeout = 10;            /* long, so waiters stay parked */
+    config.validate_on_acquire = false;
+
+    g_race_pool = db_pool_create(&config);
+    ASSERT(g_race_pool != NULL);
+
+    /* Check out every connection so the waiter threads must block in acquire(). */
+    db_connection_t *held[DBPOOL_HOLDERS];
+    for (int i = 0; i < DBPOOL_HOLDERS; i++) {
+        held[i] = db_pool_acquire(g_race_pool);
+        ASSERT(held[i] != NULL);
+    }
+
+    atomic_store(&g_waiters_ready, 0);
+    pthread_t waiters[DBPOOL_WAITERS];
+    for (int i = 0; i < DBPOOL_WAITERS; i++) {
+        ASSERT(pthread_create(&waiters[i], NULL, db_pool_waiter_thread, NULL) == 0);
+    }
+
+    /* Event-driven: wait until every waiter has entered acquire(). */
+    while (atomic_load(&g_waiters_ready) < DBPOOL_WAITERS) {
+        usleep(100);
+    }
+    usleep(20 * 1000);  /* brief: let waiters reach cond_wait so we hit that path */
+
+    /* Destroy while DBPOOL_HOLDERS connections are checked out AND
+     * DBPOOL_WAITERS threads are blocked in acquire(). */
+    db_pool_destroy(g_race_pool);
+
+    /* Waiters wake, observe shutdown, return NULL, and drop their references. */
+    for (int i = 0; i < DBPOOL_WAITERS; i++) {
+        pthread_join(waiters[i], NULL);
+    }
+
+    /* Release the still-checked-out connections after destroy(); the final
+     * release performs the deferred teardown. Safe because each held connection
+     * kept a reference alive until this point. */
+    for (int i = 0; i < DBPOOL_HOLDERS; i++) {
+        ASSERT(db_pool_release(g_race_pool, held[i]) == 0);
+    }
+
+    g_race_pool = NULL;
+    PASS();
+}
+
+/* Regression: an accidental double db_pool_release() must be a safe no-op, not
+ * a refcount underflow that frees the whole pool. Deterministic (no threads),
+ * so the pre-fix behaviour faults under Valgrind memcheck / ASan here. */
+void test_db_pool_double_release(void) {
+    TEST("db_pool (double release is a safe no-op)");
+
+    db_pool_config_t config = db_pool_config_default(DB_TYPE_GENERIC, "generic://localhost");
+    config.min_connections = 0;
+    config.max_connections = 2;
+    config.validate_on_acquire = false;
+
+    db_pool_t *pool = db_pool_create(&config);
+    ASSERT(pool != NULL);
+
+    db_connection_t *c = db_pool_acquire(pool);
+    ASSERT(c != NULL);
+    ASSERT(db_pool_release(pool, c) == 0);    /* first release: succeeds */
+    ASSERT(db_pool_release(pool, c) == -1);   /* second: rejected, no ref dropped */
+
+    /* The pool must still be intact: a refcount underflow would already have
+     * freed it, turning the calls below into a use-after-free. */
+    db_connection_t *c2 = db_pool_acquire(pool);
+    ASSERT(c2 != NULL);
+    ASSERT(db_pool_release(pool, c2) == 0);
+    db_pool_destroy(pool);
 
     PASS();
 }
@@ -4205,6 +4316,8 @@ int main(void) {
     /* Phase 6: Database connection pool tests */
     test_db_pool_create_destroy();
     test_db_pool_acquire_release();
+    test_db_pool_destroy_race();
+    test_db_pool_double_release();
 
     /* Phase 6.5: Bug fix regression tests */
     test_json_escape_decode();

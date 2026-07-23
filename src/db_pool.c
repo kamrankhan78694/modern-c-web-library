@@ -1,6 +1,7 @@
 #include "db_pool.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 #ifdef __EMSCRIPTEN__
 #include "wasm_compat.h"
 #else
@@ -8,15 +9,43 @@
 #include <unistd.h>
 #endif
 
-/* Internal pool structure */
+/*
+ * Internal pool structure.
+ *
+ * Lifetime is governed by an atomic reference count, not by db_pool_destroy()
+ * tearing everything down synchronously:
+ *
+ *   - db_pool_create() establishes the creator's reference (count = 1).
+ *   - db_pool_acquire() takes a reference BEFORE it touches pool->mutex.  On
+ *     success that reference is transferred to the checked-out connection and
+ *     released by the matching db_pool_release(); on failure it is dropped.
+ *   - db_pool_release()/get_stats()/close_idle() likewise hold a reference for
+ *     the duration of the call.
+ *   - db_pool_destroy() sets the shutdown flag, closes only the *idle*
+ *     connections, and drops the creator's reference.
+ *
+ * Whichever caller drops the final reference performs the teardown.  Because a
+ * reference is always held before pool->mutex is touched -- and for as long as
+ * a connection stays checked out -- the mutex/cond are never destroyed and the
+ * memory is never freed while another thread is inside the pool, blocked on its
+ * lock, or still holding one of its connections.  This closes the
+ * destroy-vs-acquire and release-after-destroy use-after-free windows.
+ *
+ * Contract: the handle passed to any function must be currently valid; this
+ * does not protect a caller that uses a handle it has already let be freed
+ * (e.g. releasing the same connection twice, or calling a pool function after
+ * the last reference it was responsible for has been dropped).
+ */
 struct db_pool {
     db_pool_config_t config;
+    char *owned_connection_string;  /* Pool-owned copy of config.connection_string */
     db_connection_t **connections;
     size_t capacity;
     size_t size;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     bool shutdown;
+    atomic_uint refcount;           /* creator + in-flight calls + checked-out connections */
     db_pool_stats_t stats;
 };
 
@@ -38,30 +67,43 @@ static int generic_ping(void *db_handle) {
     return 0;
 }
 
+/* Drop a lifetime reference; the thread that drops the last one tears the pool
+ * down.  Deliberately takes no lock -- pool->mutex may be the very thing being
+ * destroyed, so the atomic refcount is the sole synchronisation here. */
+static void _db_pool_unref(db_pool_t *pool) {
+    if (atomic_fetch_sub_explicit(&pool->refcount, 1u, memory_order_acq_rel) == 1u) {
+        pthread_cond_destroy(&pool->cond);
+        pthread_mutex_destroy(&pool->mutex);
+        free(pool->connections);
+        free(pool->owned_connection_string);
+        free(pool);
+    }
+}
+
 /* Create a new connection */
 static db_connection_t *create_connection(db_pool_t *pool) {
     db_connection_t *conn = (db_connection_t *)calloc(1, sizeof(db_connection_t));
     if (!conn) {
         return NULL;
     }
-    
-    db_connect_fn_t connect_fn = pool->config.connect_fn ? 
+
+    db_connect_fn_t connect_fn = pool->config.connect_fn ?
                                   pool->config.connect_fn : generic_connect;
-    
+
     conn->db_handle = connect_fn(pool->config.connection_string);
     if (!conn->db_handle) {
         free(conn);
         pool->stats.total_errors++;
         return NULL;
     }
-    
+
     conn->state = DB_CONN_IDLE;
     conn->created_at = time(NULL);
     conn->last_used = conn->created_at;
     conn->error_count = 0;
-    
+
     pool->stats.total_created++;
-    
+
     return conn;
 }
 
@@ -70,14 +112,14 @@ static void close_connection(db_pool_t *pool, db_connection_t *conn) {
     if (!conn) {
         return;
     }
-    
+
     if (conn->db_handle) {
         db_disconnect_fn_t disconnect_fn = pool->config.disconnect_fn ?
                                             pool->config.disconnect_fn : generic_disconnect;
         disconnect_fn(conn->db_handle);
         conn->db_handle = NULL;
     }
-    
+
     conn->state = DB_CONN_CLOSED;
     pool->stats.total_closed++;
     free(conn);
@@ -88,23 +130,23 @@ static bool validate_connection(db_pool_t *pool, db_connection_t *conn) {
     if (!conn || !conn->db_handle || conn->state == DB_CONN_CLOSED) {
         return false;
     }
-    
+
     if (pool->config.max_lifetime > 0) {
         time_t now = time(NULL);
         if (now - conn->created_at > (time_t)pool->config.max_lifetime) {
             return false;
         }
     }
-    
+
     if (pool->config.max_idle_time > 0) {
         time_t now = time(NULL);
         if (now - conn->last_used > (time_t)pool->config.max_idle_time) {
             return false;
         }
     }
-    
+
     if (pool->config.validate_on_acquire) {
-        db_ping_fn_t ping_fn = pool->config.ping_fn ? 
+        db_ping_fn_t ping_fn = pool->config.ping_fn ?
                                pool->config.ping_fn : generic_ping;
         if (ping_fn(conn->db_handle) != 0) {
             conn->error_count++;
@@ -112,17 +154,18 @@ static bool validate_connection(db_pool_t *pool, db_connection_t *conn) {
             return false;
         }
     }
-    
+
     return true;
 }
 
 /* Create default configuration.
- * Note: connection_string is stored directly (not duplicated). The caller
- * must ensure the string remains valid for the lifetime of this config. */
+ * Note: connection_string is borrowed here (not duplicated); db_pool_create()
+ * makes its own owned copy, so the caller's buffer need only be valid until
+ * db_pool_create() returns. */
 db_pool_config_t db_pool_config_default(db_type_t db_type, const char *connection_string) {
     db_pool_config_t config;
     memset(&config, 0, sizeof(db_pool_config_t));
-    
+
     config.db_type = db_type;
     config.connection_string = connection_string;
     config.min_connections = 2;
@@ -131,12 +174,12 @@ db_pool_config_t db_pool_config_default(db_type_t db_type, const char *connectio
     config.connection_timeout = 30;
     config.max_lifetime = 3600;
     config.validate_on_acquire = true;
-    
+
     config.connect_fn = NULL;
     config.disconnect_fn = NULL;
     config.ping_fn = NULL;
     config.execute_fn = NULL;
-    
+
     return config;
 }
 
@@ -145,50 +188,53 @@ db_pool_t *db_pool_create(const db_pool_config_t *config) {
     if (!config || !config->connection_string) {
         return NULL;
     }
-    
+
     if (config->min_connections > config->max_connections) {
         return NULL;
     }
-    
+
     db_pool_t *pool = (db_pool_t *)calloc(1, sizeof(db_pool_t));
     if (!pool) {
         return NULL;
     }
-    
+
     pool->config = *config;
-    pool->config.connection_string = strdup(config->connection_string);
-    if (!pool->config.connection_string) {
+    /* The pool owns its own copy so the caller's buffer need not outlive the pool. */
+    pool->owned_connection_string = strdup(config->connection_string);
+    if (!pool->owned_connection_string) {
         free(pool);
         return NULL;
     }
-    
+    pool->config.connection_string = pool->owned_connection_string;
+
     pool->capacity = config->max_connections;
     pool->connections = (db_connection_t **)calloc(pool->capacity, sizeof(db_connection_t *));
     if (!pool->connections) {
-        free(pool->config.connection_string);
+        free(pool->owned_connection_string);
         free(pool);
         return NULL;
     }
-    
+
     if (pthread_mutex_init(&pool->mutex, NULL) != 0) {
         free(pool->connections);
-        free(pool->config.connection_string);
+        free(pool->owned_connection_string);
         free(pool);
         return NULL;
     }
-    
+
     if (pthread_cond_init(&pool->cond, NULL) != 0) {
         pthread_mutex_destroy(&pool->mutex);
         free(pool->connections);
-        free(pool->config.connection_string);
+        free(pool->owned_connection_string);
         free(pool);
         return NULL;
     }
-    
+
     pool->size = 0;
     pool->shutdown = false;
+    atomic_init(&pool->refcount, 1u);   /* creator's reference */
     memset(&pool->stats, 0, sizeof(db_pool_stats_t));
-    
+
     pthread_mutex_lock(&pool->mutex);
     for (size_t i = 0; i < config->min_connections; i++) {
         db_connection_t *conn = create_connection(pool);
@@ -197,7 +243,7 @@ db_pool_t *db_pool_create(const db_pool_config_t *config) {
         }
     }
     pthread_mutex_unlock(&pool->mutex);
-    
+
     return pool;
 }
 
@@ -206,22 +252,30 @@ db_connection_t *db_pool_acquire(db_pool_t *pool) {
     if (!pool) {
         return NULL;
     }
-    
+
+    /* Take a reference up front, BEFORE locking.  On success it is transferred
+     * to the checked-out connection and released by db_pool_release(); on
+     * failure it is dropped below.  Holding it before the lock means even a
+     * thread merely blocked on pthread_mutex_lock() keeps the pool alive, so a
+     * concurrent db_pool_destroy() cannot free it out from under us. */
+    atomic_fetch_add_explicit(&pool->refcount, 1u, memory_order_acq_rel);
+
     pthread_mutex_lock(&pool->mutex);
-    
+
     if (pool->shutdown) {
         pthread_mutex_unlock(&pool->mutex);
+        _db_pool_unref(pool);
         return NULL;
     }
-    
+
     time_t start_time = time(NULL);
     db_connection_t *conn = NULL;
-    
+
     while (!conn && !pool->shutdown) {
         for (size_t i = 0; i < pool->size; i++) {
             if (pool->connections[i]->state == DB_CONN_IDLE) {
                 conn = pool->connections[i];
-                
+
                 if (validate_connection(pool, conn)) {
                     conn->state = DB_CONN_IN_USE;
                     conn->last_used = time(NULL);
@@ -235,7 +289,7 @@ db_connection_t *db_pool_acquire(db_pool_t *pool) {
                 }
             }
         }
-        
+
         if (!conn && pool->size < pool->capacity) {
             conn = create_connection(pool);
             if (conn) {
@@ -245,24 +299,30 @@ db_connection_t *db_pool_acquire(db_pool_t *pool) {
                 pool->stats.total_acquired++;
             }
         }
-        
+
         if (!conn) {
             time_t now = time(NULL);
-            if (pool->config.connection_timeout > 0 && 
+            if (pool->config.connection_timeout > 0 &&
                 (now - start_time) >= (time_t)pool->config.connection_timeout) {
                 break;
             }
-            
+
             pool->stats.wait_count++;
-            
+
             struct timespec ts;
             ts.tv_sec = now + 1;
             ts.tv_nsec = 0;
             pthread_cond_timedwait(&pool->cond, &pool->mutex, &ts);
         }
     }
-    
+
     pthread_mutex_unlock(&pool->mutex);
+
+    if (!conn) {
+        /* Nothing checked out: release the reference we took on entry. */
+        _db_pool_unref(pool);
+    }
+    /* On success the reference stays with the connection until db_pool_release(). */
     return conn;
 }
 
@@ -271,30 +331,48 @@ int db_pool_release(db_pool_t *pool, db_connection_t *conn) {
     if (!pool || !conn) {
         return -1;
     }
-    
+
+    /* No reference is taken here: the checked-out connection already holds the
+     * one acquire() transferred to it, which keeps the pool alive for us. */
     pthread_mutex_lock(&pool->mutex);
-    
-    bool found = false;
+
+    int rc = -1;
     for (size_t i = 0; i < pool->size; i++) {
         if (pool->connections[i] == conn) {
-            found = true;
+            /* Only a currently checked-out (IN_USE) connection carries a
+             * reference to drop.  Guarding on the state makes an accidental
+             * double-release a harmless no-op (rc stays -1) rather than a
+             * refcount underflow that would free the entire pool out from under
+             * a still-valid owner.  A legitimate checkout is always IN_USE here
+             * (set by acquire()); an idle connection is still live, so reading
+             * its state is safe and the pointer compare never dereferences a
+             * freed connection. */
+            if (conn->state != DB_CONN_IN_USE) {
+                break;  /* already released / not checked out: no unref */
+            }
+            if (pool->shutdown) {
+                /* Pool is being torn down: discard rather than return to idle. */
+                close_connection(pool, conn);
+                pool->connections[i] = pool->connections[--pool->size];
+            } else {
+                conn->state = DB_CONN_IDLE;
+                conn->last_used = time(NULL);
+                pool->stats.total_released++;
+                /* One connection became available: wake a single waiter. */
+                pthread_cond_signal(&pool->cond);
+            }
+            rc = 0;
             break;
         }
     }
-    
-    if (!found) {
-        pthread_mutex_unlock(&pool->mutex);
-        return -1;
-    }
-    
-    conn->state = DB_CONN_IDLE;
-    conn->last_used = time(NULL);
-    pool->stats.total_released++;
-    
-    pthread_cond_signal(&pool->cond);
-    
+
     pthread_mutex_unlock(&pool->mutex);
-    return 0;
+
+    if (rc == 0) {
+        /* Drop the reference the connection carried (may free the pool). */
+        _db_pool_unref(pool);
+    }
+    return rc;
 }
 
 /* Get pool statistics */
@@ -302,12 +380,12 @@ int db_pool_get_stats(db_pool_t *pool, db_pool_stats_t *stats) {
     if (!pool || !stats) {
         return -1;
     }
-    
+
+    atomic_fetch_add_explicit(&pool->refcount, 1u, memory_order_acq_rel);
     pthread_mutex_lock(&pool->mutex);
-    
+
     size_t active = 0;
     size_t idle = 0;
-    
     for (size_t i = 0; i < pool->size; i++) {
         if (pool->connections[i]->state == DB_CONN_IN_USE) {
             active++;
@@ -315,13 +393,14 @@ int db_pool_get_stats(db_pool_t *pool, db_pool_stats_t *stats) {
             idle++;
         }
     }
-    
+
     *stats = pool->stats;
     stats->total_connections = pool->size;
     stats->active_connections = active;
     stats->idle_connections = idle;
-    
+
     pthread_mutex_unlock(&pool->mutex);
+    _db_pool_unref(pool);
     return 0;
 }
 
@@ -330,19 +409,19 @@ int db_pool_close_idle(db_pool_t *pool) {
     if (!pool) {
         return -1;
     }
-    
+
+    atomic_fetch_add_explicit(&pool->refcount, 1u, memory_order_acq_rel);
     pthread_mutex_lock(&pool->mutex);
-    
+
     int closed = 0;
     size_t i = 0;
-    
     while (i < pool->size) {
         if (pool->connections[i]->state == DB_CONN_IDLE) {
             if (pool->size <= pool->config.min_connections) {
                 i++;
                 continue;
             }
-            
+
             close_connection(pool, pool->connections[i]);
             pool->connections[i] = pool->connections[--pool->size];
             closed++;
@@ -350,8 +429,9 @@ int db_pool_close_idle(db_pool_t *pool) {
             i++;
         }
     }
-    
+
     pthread_mutex_unlock(&pool->mutex);
+    _db_pool_unref(pool);
     return closed;
 }
 
@@ -360,49 +440,33 @@ void db_pool_destroy(db_pool_t *pool) {
     if (!pool) {
         return;
     }
-    
+
     pthread_mutex_lock(&pool->mutex);
     pool->shutdown = true;
+    /* Wake acquirers parked in the wait so they observe shutdown and leave,
+     * dropping their references. */
     pthread_cond_broadcast(&pool->cond);
-    
-    /* Wait for in-use connections to be released before destroying */
-    {
-        bool has_in_use = true;
-        int wait_rounds = 0;
-        while (has_in_use && wait_rounds < 50) {
-            has_in_use = false;
-            for (size_t i = 0; i < pool->size; i++) {
-                if (pool->connections[i]->state == DB_CONN_IN_USE) {
-                    has_in_use = true;
-                    break;
-                }
-            }
-            if (has_in_use) {
-                struct timespec ts;
-                clock_gettime(CLOCK_REALTIME, &ts);
-                ts.tv_nsec += 100000000; /* 100ms */
-                if (ts.tv_nsec >= 1000000000) {
-                    ts.tv_sec++;
-                    ts.tv_nsec -= 1000000000;
-                }
-                pthread_cond_timedwait(&pool->cond, &pool->mutex, &ts);
-                wait_rounds++;
-            }
+
+    /* Close idle connections now.  Connections still checked out are owned by
+     * their callers and are closed by db_pool_release(); keep them in the array
+     * so release() can still find them. */
+    size_t w = 0;
+    for (size_t i = 0; i < pool->size; i++) {
+        if (pool->connections[i]->state == DB_CONN_IN_USE) {
+            pool->connections[w++] = pool->connections[i];
+        } else {
+            close_connection(pool, pool->connections[i]);
         }
     }
-    
-    for (size_t i = 0; i < pool->size; i++) {
-        close_connection(pool, pool->connections[i]);
-    }
-    
-    pool->size = 0;
+    pool->size = w;
+
     pthread_mutex_unlock(&pool->mutex);
-    
-    pthread_cond_destroy(&pool->cond);
-    pthread_mutex_destroy(&pool->mutex);
-    free(pool->connections);
-    free(pool->config.connection_string);
-    free(pool);
+
+    /* Drop the creator's reference.  Teardown is performed by whoever drops the
+     * final reference -- an in-flight call or the last checked-out connection's
+     * db_pool_release() -- so the pool is never freed while still in use.  If no
+     * other references remain, teardown happens right here. */
+    _db_pool_unref(pool);
 }
 
 /* Execute query on a connection */
@@ -410,7 +474,7 @@ int db_connection_execute(db_connection_t *conn, const char *query) {
     if (!conn || !conn->db_handle || !query) {
         return -1;
     }
-    
+
     (void)query;
     return 0;
 }
@@ -428,6 +492,6 @@ bool db_connection_is_valid(db_connection_t *conn) {
     if (!conn || !conn->db_handle) {
         return false;
     }
-    
+
     return conn->state != DB_CONN_CLOSED && conn->state != DB_CONN_ERROR;
 }
