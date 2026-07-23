@@ -339,6 +339,17 @@ int db_pool_release(db_pool_t *pool, db_connection_t *conn) {
     int rc = -1;
     for (size_t i = 0; i < pool->size; i++) {
         if (pool->connections[i] == conn) {
+            /* Only a currently checked-out (IN_USE) connection carries a
+             * reference to drop.  Guarding on the state makes an accidental
+             * double-release a harmless no-op (rc stays -1) rather than a
+             * refcount underflow that would free the entire pool out from under
+             * a still-valid owner.  A legitimate checkout is always IN_USE here
+             * (set by acquire()); an idle connection is still live, so reading
+             * its state is safe and the pointer compare never dereferences a
+             * freed connection. */
+            if (conn->state != DB_CONN_IN_USE) {
+                break;  /* already released / not checked out: no unref */
+            }
             if (pool->shutdown) {
                 /* Pool is being torn down: discard rather than return to idle. */
                 close_connection(pool, conn);

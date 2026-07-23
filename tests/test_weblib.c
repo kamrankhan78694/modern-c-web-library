@@ -1583,8 +1583,10 @@ void test_db_pool_acquire_release(void) {
  *   - db_pool_release() running after destroy() (release-after-free).
  * This test keeps the pool referenced throughout (holders + waiters), so it is
  * itself UAF-free by construction, yet it drives destroy() straight through the
- * dangerous window -- reverting the refcount makes it fault under
- * -fsanitize=address,thread. */
+ * dangerous window.  Reverting the refcount makes the post-destroy
+ * db_pool_release() calls below touch freed memory -- caught deterministically
+ * by the CI Valgrind memcheck (--leak-check=full --error-exitcode=1), and by
+ * ASan/TSan locally. */
 #define DBPOOL_HOLDERS 2
 #define DBPOOL_WAITERS 4
 static db_pool_t *g_race_pool = NULL;
@@ -1650,6 +1652,35 @@ void test_db_pool_destroy_race(void) {
     }
 
     g_race_pool = NULL;
+    PASS();
+}
+
+/* Regression: an accidental double db_pool_release() must be a safe no-op, not
+ * a refcount underflow that frees the whole pool. Deterministic (no threads),
+ * so the pre-fix behaviour faults under Valgrind memcheck / ASan here. */
+void test_db_pool_double_release(void) {
+    TEST("db_pool (double release is a safe no-op)");
+
+    db_pool_config_t config = db_pool_config_default(DB_TYPE_GENERIC, "generic://localhost");
+    config.min_connections = 0;
+    config.max_connections = 2;
+    config.validate_on_acquire = false;
+
+    db_pool_t *pool = db_pool_create(&config);
+    ASSERT(pool != NULL);
+
+    db_connection_t *c = db_pool_acquire(pool);
+    ASSERT(c != NULL);
+    ASSERT(db_pool_release(pool, c) == 0);    /* first release: succeeds */
+    ASSERT(db_pool_release(pool, c) == -1);   /* second: rejected, no ref dropped */
+
+    /* The pool must still be intact: a refcount underflow would already have
+     * freed it, turning the calls below into a use-after-free. */
+    db_connection_t *c2 = db_pool_acquire(pool);
+    ASSERT(c2 != NULL);
+    ASSERT(db_pool_release(pool, c2) == 0);
+    db_pool_destroy(pool);
+
     PASS();
 }
 
@@ -4286,6 +4317,7 @@ int main(void) {
     test_db_pool_create_destroy();
     test_db_pool_acquire_release();
     test_db_pool_destroy_race();
+    test_db_pool_double_release();
 
     /* Phase 6.5: Bug fix regression tests */
     test_json_escape_decode();

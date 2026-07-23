@@ -123,7 +123,13 @@ int db_pool_get_stats(db_pool_t *pool, db_pool_stats_t *stats);
 int db_pool_close_idle(db_pool_t *pool);
 
 /**
- * Destroy the connection pool and close all connections
+ * Destroy the connection pool and close all connections.
+ *
+ * Safe to call while other threads are still inside pool operations or hold
+ * checked-out connections: teardown is deferred until the last outstanding
+ * reference (in-flight call or checked-out connection) is dropped, so the pool
+ * is never freed while still in use.  Consequently, a connection that is never
+ * released keeps the pool alive (a leak) -- release every acquired connection.
  * @param pool Pool instance
  */
 void db_pool_destroy(db_pool_t *pool);
