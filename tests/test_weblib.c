@@ -4361,6 +4361,42 @@ void test_websocket_fragment_oom(void) {
     PASS();
 }
 
+/* Security regression: a frame claiming an enormous payload (the 64-bit length
+ * field allows terabytes) must be rejected on the header alone, before the
+ * receive buffer is grown -- preventing a memory-exhaustion DoS. */
+static int g_ws_oversize_msg = 0;
+static void ws_oversize_cb(websocket_connection_t *c, ws_message_type_t t,
+                           const void *d, size_t n) {
+    (void)c; (void)t; (void)d; (void)n; g_ws_oversize_msg = 1;
+}
+
+void test_websocket_oversized_frame(void) {
+    TEST("websocket oversized frame rejected (DoS guard)");
+
+    websocket_connection_t *conn = websocket_connection_create(999);
+    ASSERT(conn != NULL);
+    ASSERT(websocket_is_open(conn));
+    g_ws_oversize_msg = 0;
+    websocket_set_message_callback(conn, ws_oversize_cb);
+
+    /* Masked binary frame claiming a 64 GiB payload (>> the 16 MiB cap). Only
+     * the 14-byte header is supplied; it must be rejected without waiting for or
+     * allocating the payload. */
+    uint8_t frame[14] = {
+        0x82,                                        /* FIN + binary opcode   */
+        0xFF,                                        /* MASK + 64-bit length   */
+        0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, /* 0x1000000000 = 64 GiB */
+        0x11, 0x22, 0x33, 0x44                       /* masking key            */
+    };
+    int r = websocket_process_data(conn, frame, sizeof(frame));
+    ASSERT(r == -1);                    /* rejected, not accumulated */
+    ASSERT(!websocket_is_open(conn));   /* closed (RFC 6455 1009 Message Too Big) */
+    ASSERT(g_ws_oversize_msg == 0);     /* on_message never invoked */
+
+    websocket_connection_destroy(conn);
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -4598,6 +4634,7 @@ int main(void) {
     test_parser_cl_before_te_smuggling();
     test_header_injection_rejected();
     test_websocket_fragment_oom();
+    test_websocket_oversized_frame();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);
