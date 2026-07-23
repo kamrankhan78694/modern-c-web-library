@@ -4379,9 +4379,9 @@ void test_websocket_oversized_frame(void) {
     g_ws_oversize_msg = 0;
     websocket_set_message_callback(conn, ws_oversize_cb);
 
-    /* Masked binary frame claiming a 64 GiB payload (>> the 16 MiB cap). Only
-     * the 14-byte header is supplied; it must be rejected without waiting for or
-     * allocating the payload. */
+    /* Masked binary frame claiming a 64 GiB payload (far above any reasonable
+     * WS_MAX_MESSAGE_SIZE). Only the 14-byte header is supplied; it must be
+     * rejected without waiting for or allocating the payload. */
     uint8_t frame[14] = {
         0x82,                                        /* FIN + binary opcode   */
         0xFF,                                        /* MASK + 64-bit length   */

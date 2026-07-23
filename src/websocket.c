@@ -31,8 +31,11 @@ static const char *_strcasestr(const char *haystack, const char *needle) {
  * message.  A frame's length field is 64-bit, so without this cap a client can
  * claim a multi-terabyte payload and drive the receive/fragment buffers to
  * exhaust memory.  Oversized messages are rejected with RFC 6455 close 1009
- * (Message Too Big). Compile-time bound (default 16 MiB). */
+ * (Message Too Big). Compile-time bound (default 16 MiB); override with
+ * -DWS_MAX_MESSAGE_SIZE=... at build time. */
+#ifndef WS_MAX_MESSAGE_SIZE
 #define WS_MAX_MESSAGE_SIZE (16u * 1024u * 1024u)
+#endif
 
 /* WebSocket opcodes */
 typedef enum {
@@ -638,15 +641,14 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
             return -1;
         }
         
-        /* Check for overflow: header_size + payload_length */
-        if (frame.payload_length > SIZE_MAX - (size_t)header_size) {
-            return -1;
-        }
-
-        /* Enforce a maximum single-frame payload BEFORE accumulating it: the
-         * 64-bit length field otherwise lets a client claim a multi-terabyte
-         * frame and exhaust memory. RFC 6455 §7.4.1 close 1009 = Message Too Big. */
-        if (frame.payload_length > WS_MAX_MESSAGE_SIZE) {
+        /* Reject an oversized frame on the header alone, BEFORE accumulating the
+         * payload: the 64-bit length field otherwise lets a client claim a
+         * multi-terabyte frame and exhaust memory. The second clause also keeps
+         * header_size + payload_length from overflowing size_t (relevant on a
+         * 32-bit build if WS_MAX_MESSAGE_SIZE is overridden very large). Either
+         * way, close 1009 (Message Too Big) -- never a silent -1. */
+        if (frame.payload_length > WS_MAX_MESSAGE_SIZE ||
+            frame.payload_length > SIZE_MAX - (size_t)header_size) {
             websocket_close(conn, 1009, "Message too big");
             return -1;
         }
