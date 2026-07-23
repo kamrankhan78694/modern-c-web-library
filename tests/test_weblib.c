@@ -1435,6 +1435,44 @@ void test_template_load_file(void) {
     PASS();
 }
 
+/* Security regression: {{ }} must HTML-escape (XSS prevention); {{{ }}} is raw. */
+void test_template_autoescape(void) {
+    TEST("template (auto-escape / raw)");
+
+    template_context_t *ctx = template_context_create();
+    ASSERT(ctx != NULL);
+    template_context_set(ctx, "x", "<script>alert(1)</script> & \"'");
+
+    /* {{ x }} must escape: no raw markup, entities present. */
+    char *esc = template_render("<p>{{ x }}</p>", ctx);
+    ASSERT(esc != NULL);
+    ASSERT(strstr(esc, "<script>") == NULL);          /* no raw injection */
+    ASSERT(strstr(esc, "&lt;script&gt;") != NULL);    /* escaped */
+    ASSERT(strstr(esc, "&amp;") != NULL);             /* & escaped */
+    ASSERT(strstr(esc, "&quot;") != NULL);            /* " escaped */
+    ASSERT(strstr(esc, "&#39;") != NULL);             /* ' escaped */
+    ASSERT(strchr(esc, '"') == NULL);                 /* no raw quote survives */
+    ASSERT(strchr(esc, '\'') == NULL);                /* no raw apostrophe survives */
+    free(esc);
+
+    /* {{{ x }}} is an explicit opt-in to raw, unescaped output. */
+    template_context_set(ctx, "y", "<b>ok</b>");
+    char *raw = template_render("{{{ y }}}", ctx);
+    ASSERT(raw != NULL);
+    ASSERT(strcmp(raw, "<b>ok</b>") == 0);
+    free(raw);
+
+    /* Plain values are unchanged (back-compat). */
+    template_context_set(ctx, "name", "Alice");
+    char *plain = template_render("Hi {{ name }}", ctx);
+    ASSERT(plain != NULL);
+    ASSERT(strcmp(plain, "Hi Alice") == 0);
+    free(plain);
+
+    template_context_destroy(ctx);
+    PASS();
+}
+
 /* Test auth middleware - basic auth create/destroy */
 void test_basic_auth_create_destroy(void) {
     TEST("basic_auth (create/destroy)");
@@ -4327,6 +4365,7 @@ int main(void) {
     test_template_variables();
     test_template_render();
     test_template_load_file();
+    test_template_autoescape();
 
     /* Phase 6: Authentication middleware tests */
     test_basic_auth_create_destroy();

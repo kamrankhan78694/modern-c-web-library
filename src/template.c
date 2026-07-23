@@ -207,35 +207,33 @@ static char *buffer_to_string(string_buffer_t *buf) {
     return result;
 }
 
-/* Extract variable name from template syntax {{ var }} */
-static char *extract_var_name(const char *start, const char *end) {
-    /* Skip opening {{ */
-    start += 2;
-    
-    /* Skip whitespace */
+/* Extract a trimmed variable name from the content between the delimiters,
+ * i.e. the half-open range [content_start, content_end).  Returns a malloc'd
+ * copy, or NULL if empty / on allocation failure. */
+static char *extract_var_name(const char *content_start, const char *content_end) {
+    const char *start = content_start;
+    const char *end = content_end;
+
     while (start < end && isspace((unsigned char)*start)) {
         start++;
     }
-    
-    /* Find end (before }}) */
-    const char *var_end = end - 2;
-    while (var_end > start && isspace((unsigned char)*(var_end - 1))) {
-        var_end--;
+    while (end > start && isspace((unsigned char)*(end - 1))) {
+        end--;
     }
-    
-    if (var_end <= start) {
+
+    if (end <= start) {
         return NULL;
     }
-    
-    size_t len = var_end - start;
+
+    size_t len = (size_t)(end - start);
     char *name = (char *)malloc(len + 1);
     if (!name) {
         return NULL;
     }
-    
+
     memcpy(name, start, len);
     name[len] = '\0';
-    
+
     return name;
 }
 
@@ -254,19 +252,52 @@ char *template_render(const char *template_str, template_context_t *ctx) {
     const char *last = p;
     
     while (*p) {
-        /* Look for {{ */
-        if (p[0] == '{' && p[1] == '{') {
-            /* Append text before variable */
+        if (p[0] == '{' && p[1] == '{' && p[2] == '{') {
+            /* Raw substitution {{{ var }}}: the caller explicitly opts into
+             * trusting the value, so it is emitted without HTML escaping. */
             if (p > last) {
-                buffer_append(output, last, p - last);
+                buffer_append(output, last, (size_t)(p - last));
             }
-            
+
+            /* Find closing }}} */
+            const char *end = p + 3;
+            while (*end && !(end[0] == '}' && end[1] == '}' && end[2] == '}')) {
+                end++;
+            }
+
+            if (*end == '\0') {
+                /* No closing }}}, treat as literal text */
+                buffer_append_str(output, "{{{");
+                p += 3;
+                last = p;
+                continue;
+            }
+
+            char *var_name = extract_var_name(p + 3, end);
+            if (var_name) {
+                const char *value = template_context_get(ctx, var_name);
+                if (value) {
+                    buffer_append_str(output, value);  /* raw, unescaped */
+                }
+                /* Variable not found: leave empty (no output) */
+                free(var_name);
+            }
+
+            p = end + 3;
+            last = p;
+        } else if (p[0] == '{' && p[1] == '{') {
+            /* Escaped substitution {{ var }}: HTML-escaped by default so that
+             * binding untrusted data cannot inject markup (XSS). */
+            if (p > last) {
+                buffer_append(output, last, (size_t)(p - last));
+            }
+
             /* Find closing }} */
             const char *end = p + 2;
             while (*end && !(end[0] == '}' && end[1] == '}')) {
                 end++;
             }
-            
+
             if (*end == '\0') {
                 /* No closing }}, treat as literal text */
                 buffer_append_str(output, "{{");
@@ -274,20 +305,23 @@ char *template_render(const char *template_str, template_context_t *ctx) {
                 last = p;
                 continue;
             }
-            
-            /* Extract variable name */
-            char *var_name = extract_var_name(p, end + 2);
+
+            char *var_name = extract_var_name(p + 2, end);
             if (var_name) {
-                /* Get variable value from context */
                 const char *value = template_context_get(ctx, var_name);
                 if (value) {
-                    buffer_append_str(output, value);
+                    char *escaped = input_sanitize_html(value);
+                    if (escaped) {
+                        buffer_append_str(output, escaped);
+                        free(escaped);
+                    }
+                    /* On escaper allocation failure, omit the value rather than
+                     * emit it raw -- fail safe (never output unescaped data). */
                 }
                 /* Variable not found: leave empty (no output) */
                 free(var_name);
             }
-            
-            /* Move past }} */
+
             p = end + 2;
             last = p;
         } else {
