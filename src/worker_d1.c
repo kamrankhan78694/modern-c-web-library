@@ -261,13 +261,56 @@ static worker_d1_result_t *_d1_exec_insert(worker_d1_t *db, const char *sql,
     if (!t) return NULL;
     if (t->row_count >= D1_MAX_ROWS) return NULL;
 
+    /* Determine the column mapping. If the statement names columns --
+     * INSERT INTO t (b, a) VALUES (?, ?) -- bind each parameter to the NAMED
+     * column, not to physical order. Without a column list, bind positionally
+     * (SQL default: all columns in declared order). */
+    int col_map[D1_MAX_COLUMNS];
+    int named_count = -1;   /* -1 => no explicit column list */
+
+    const char *vals = _ci_strstr(p, "VALUES");
+    const char *open = strchr(p, '(');
+    if (open && (!vals || open < vals)) {
+        named_count = 0;
+        const char *q = open + 1;
+        while (*q && *q != ')' && named_count < D1_MAX_COLUMNS) {
+            char col[D1_MAX_COL_NAME];
+            q = _parse_word(q, col, sizeof(col));
+            if (col[0]) {
+                int idx = -1;
+                for (int c = 0; c < t->column_count; c++) {
+                    if (strcasecmp(t->columns[c].name, col) == 0) { idx = c; break; }
+                }
+                if (idx < 0) {
+                    /* Unknown column named in the INSERT: fail rather than
+                     * writing the value to the wrong cell. */
+                    worker_d1_result_t *r = calloc(1, sizeof(worker_d1_result_t));
+                    if (r) { r->success = false; }
+                    return r;
+                }
+                col_map[named_count++] = idx;
+            }
+            while (*q && *q != ',' && *q != ')') q++;
+            if (*q == ',') q++;
+        }
+    }
+
     d1_row_data_t *row = &t->rows[t->row_count];
     memset(row, 0, sizeof(d1_row_data_t));
 
-    /* Bind params to columns in order */
-    for (int i = 0; i < param_count && i < t->column_count; i++) {
-        if (params[i]) {
-            strncpy(row->cells[i], params[i], D1_MAX_CELL_LEN - 1);
+    if (named_count >= 0) {
+        /* Bind each parameter to its named column. */
+        for (int i = 0; i < param_count && i < named_count; i++) {
+            if (params[i]) {
+                strncpy(row->cells[col_map[i]], params[i], D1_MAX_CELL_LEN - 1);
+            }
+        }
+    } else {
+        /* No column list: positional binding to physical columns. */
+        for (int i = 0; i < param_count && i < t->column_count; i++) {
+            if (params[i]) {
+                strncpy(row->cells[i], params[i], D1_MAX_CELL_LEN - 1);
+            }
         }
     }
     t->row_count++;
@@ -298,7 +341,7 @@ static worker_d1_result_t *_d1_exec_select(worker_d1_t *db, const char *sql,
     /* Check for WHERE clause */
     const char *where = _ci_strstr(sql, "WHERE");
     int where_col = -1;
-    if (where && param_count > 0) {
+    if (where) {
         where += 5;
         char wcol[D1_MAX_COL_NAME];
         _parse_word(where, wcol, sizeof(wcol));
@@ -307,6 +350,13 @@ static worker_d1_result_t *_d1_exec_select(worker_d1_t *db, const char *sql,
                 where_col = c;
                 break;
             }
+        }
+        /* A WHERE clause that cannot be evaluated (unknown column or no bound
+         * parameter) must fail, not silently return every row. */
+        if (where_col < 0 || param_count <= 0 || !params[0]) {
+            worker_d1_result_t *err = calloc(1, sizeof(worker_d1_result_t));
+            if (err) { err->success = false; }
+            return err;
         }
     }
 
@@ -322,8 +372,8 @@ static worker_d1_result_t *_d1_exec_select(worker_d1_t *db, const char *sql,
     }
 
     for (int i = 0; i < t->row_count; i++) {
-        /* Apply WHERE filter */
-        if (where_col >= 0 && param_count > 0 && params[0]) {
+        /* Apply WHERE filter (where_col >= 0 implies a valid bound param). */
+        if (where_col >= 0) {
             if (strcmp(t->rows[i].cells[where_col], params[0]) != 0)
                 continue;
         }
@@ -355,7 +405,7 @@ static worker_d1_result_t *_d1_exec_delete(worker_d1_t *db, const char *sql,
 
     const char *where = _ci_strstr(sql, "WHERE");
     int where_col = -1;
-    if (where && param_count > 0) {
+    if (where) {
         where += 5;
         char wcol[D1_MAX_COL_NAME];
         _parse_word(where, wcol, sizeof(wcol));
@@ -365,14 +415,23 @@ static worker_d1_result_t *_d1_exec_delete(worker_d1_t *db, const char *sql,
                 break;
             }
         }
+        /* A WHERE clause was given but cannot be evaluated (unknown column or no
+         * bound parameter). Refuse the statement rather than silently deleting
+         * EVERY row -- a "WHERE bogus = ?" must never become DELETE-all. */
+        if (where_col < 0 || param_count <= 0 || !params[0]) {
+            worker_d1_result_t *r = calloc(1, sizeof(worker_d1_result_t));
+            if (r) { r->success = false; r->meta_changes = 0; }
+            return r;
+        }
     }
 
     int deleted = 0;
     for (int i = t->row_count - 1; i >= 0; i--) {
-        bool match = true;
-        if (where_col >= 0 && param_count > 0 && params[0]) {
-            match = (strcmp(t->rows[i].cells[where_col], params[0]) == 0);
-        }
+        /* No WHERE => delete all (intentional); otherwise filter by the
+         * resolved predicate. */
+        bool match = (where_col < 0)
+                     ? true
+                     : (strcmp(t->rows[i].cells[where_col], params[0]) == 0);
         if (match) {
             /* Shift rows */
             for (int j = i; j < t->row_count - 1; j++) {

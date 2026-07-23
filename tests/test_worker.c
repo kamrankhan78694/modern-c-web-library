@@ -578,6 +578,71 @@ static void test_d1_batch(void) {
     PASS();
 }
 
+/* Security regression: INSERT must map values to NAMED columns (not physical
+ * order), and a WHERE clause with an unknown column must NOT become a
+ * DELETE-all / SELECT-all. */
+static void test_d1_sql_safety(void) {
+    TEST("d1_sql_safety (named-column INSERT, unknown-WHERE guard)");
+    worker_d1_t *db = worker_d1_create("safedb");
+    ASSERT(db != NULL);
+    worker_d1_result_destroy(worker_d1_exec(db, "CREATE TABLE t (a, b)"));
+
+    /* Column list is REORDERED (b, a): values must land in the named columns. */
+    worker_d1_stmt_t *ins = worker_d1_prepare(db, "INSERT INTO t (b, a) VALUES (?, ?)");
+    ASSERT(ins != NULL);
+    worker_d1_stmt_bind(ins, 1, "bee");   /* -> column b */
+    worker_d1_stmt_bind(ins, 2, "aye");   /* -> column a */
+    worker_d1_result_t *ir = worker_d1_stmt_run(ins);
+    ASSERT(ir != NULL && ir->success);
+    worker_d1_result_destroy(ir);
+    worker_d1_stmt_destroy(ins);
+
+    worker_d1_stmt_t *sel = worker_d1_prepare(db, "SELECT * FROM t");
+    json_value_t *rows = worker_d1_stmt_all(sel);
+    ASSERT(rows != NULL);
+    char *js = json_stringify(rows);
+    ASSERT(js != NULL);
+    ASSERT(strstr(js, "\"a\":\"aye\"") != NULL);   /* mapped to named col a */
+    ASSERT(strstr(js, "\"b\":\"bee\"") != NULL);   /* mapped to named col b */
+    free(js);
+    json_value_free(rows);
+    worker_d1_stmt_destroy(sel);
+
+    /* DELETE with an unknown WHERE column must be refused, not delete-all. */
+    worker_d1_stmt_t *del = worker_d1_prepare(db, "DELETE FROM t WHERE nosuchcol = ?");
+    worker_d1_stmt_bind(del, 1, "x");
+    worker_d1_result_t *dr = worker_d1_stmt_run(del);
+    ASSERT(dr != NULL);
+    ASSERT(dr->success == false || dr->meta_changes == 0);
+    worker_d1_result_destroy(dr);
+    worker_d1_stmt_destroy(del);
+
+    /* The row must still be present (was NOT wiped). */
+    sel = worker_d1_prepare(db, "SELECT * FROM t");
+    rows = worker_d1_stmt_all(sel);
+    ASSERT(rows != NULL);
+    js = json_stringify(rows);
+    ASSERT(js != NULL && strstr(js, "aye") != NULL);
+    free(js);
+    json_value_free(rows);
+    worker_d1_stmt_destroy(sel);
+
+    /* SELECT with an unknown WHERE column must fail, not return every row. */
+    worker_d1_stmt_t *bsel = worker_d1_prepare(db, "SELECT * FROM t WHERE nosuchcol = ?");
+    worker_d1_stmt_bind(bsel, 1, "x");
+    json_value_t *brows = worker_d1_stmt_all(bsel);
+    if (brows != NULL) {
+        char *bjs = json_stringify(brows);
+        ASSERT(bjs == NULL || strstr(bjs, "aye") == NULL);
+        free(bjs);
+        json_value_free(brows);
+    }
+    worker_d1_stmt_destroy(bsel);
+
+    worker_d1_destroy(db);
+    PASS();
+}
+
 /* ========================================================
  * Queues Tests
  * ======================================================== */
@@ -783,6 +848,7 @@ int main(void) {
     test_d1_select();
     test_d1_delete_rows();
     test_d1_batch();
+    test_d1_sql_safety();
 
     /* Queues */
     test_queue_create_destroy();
