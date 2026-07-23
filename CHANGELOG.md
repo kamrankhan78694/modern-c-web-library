@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **v2.0.0 Roadmap** — Comprehensive 10-phase development plan (Phases 11–20)
+  - Phase 11 (v1.1.0): TLS Foundation — crypto primitives (SHA-256, AES-GCM, ChaCha20, X25519, HKDF)
+  - Phase 12 (v1.2.0): TLS 1.3 Handshake & HTTPS — record layer, handshake, certificates, ALPN
+  - Phase 13 (v1.3.0): HTTP/2 Protocol — binary framing, HPACK, stream multiplexing, server push
+  - Phase 14 (v1.4.0): Persistent Storage Engine — B-tree, WAL, transactions, iterator API
+  - Phase 15 (v1.5.0): Advanced Middleware — directory listing, SSE, content negotiation, route groups
+  - Phase 16 (v1.6.0): Multi-Process Architecture — fork-based workers, zero-downtime reload
+  - Phase 17 (v1.7.0): Cross-Platform Hardening — Windows IOCP, BSD support, platform abstraction
+  - Phase 18 (v1.8.0): Developer Experience — config parser, plugins, advanced templates, debug mode
+  - Phase 19 (v1.9.0): HTTP/3 & QUIC — UDP transport, QUIC protocol, connection migration
+  - Phase 20 (v2.0.0): Release Engineering — CLI tools, Prometheus, OpenTelemetry, fuzz testing
+- Updated `NEXT_PHASE.md` with complete v2.0.0 roadmap (first-principles design, adversarial review, atomic task breakdown, security threat model, QA pipeline)
+- Updated `TODO.md` with phase cross-references for all planned features
+
 ## [1.0.0] - 2026-02-22
 
 ### Added
