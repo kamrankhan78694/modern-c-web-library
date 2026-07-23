@@ -1573,6 +1573,55 @@ void test_db_pool_acquire_release(void) {
     PASS();
 }
 
+/* Regression: db_pool_destroy() must drain threads blocked inside
+ * db_pool_acquire() before it destroys the mutex/cond and frees the pool.
+ * Otherwise a waiter parked in pthread_cond_timedwait() re-locks a destroyed
+ * mutex and dereferences freed memory (use-after-free). Exercised best under
+ * -fsanitize=address,thread. */
+static db_pool_t *g_race_pool = NULL;
+
+static void *db_pool_waiter_thread(void *arg) {
+    (void)arg;
+    db_connection_t *c = db_pool_acquire(g_race_pool);
+    if (c) {
+        /* Hold briefly so sibling threads block in acquire, then release. */
+        usleep(1500 * 1000);
+        db_pool_release(g_race_pool, c);
+    }
+    return NULL;
+}
+
+void test_db_pool_destroy_race(void) {
+    TEST("db_pool (destroy drains blocked acquirers)");
+
+    db_pool_config_t config = db_pool_config_default(DB_TYPE_GENERIC, "generic://localhost");
+    config.min_connections = 0;
+    config.max_connections = 1;        /* single slot => most threads block in acquire */
+    config.connection_timeout = 10;    /* long, so waiters stay parked until shutdown */
+    config.validate_on_acquire = false;
+
+    g_race_pool = db_pool_create(&config);
+    ASSERT(g_race_pool != NULL);
+
+    pthread_t threads[5];
+    for (int i = 0; i < 5; i++) {
+        ASSERT(pthread_create(&threads[i], NULL, db_pool_waiter_thread, NULL) == 0);
+    }
+
+    /* Let one thread grab the single connection and the rest park in acquire. */
+    usleep(300 * 1000);
+
+    /* Destroy while acquirers are blocked; must not crash/UAF and must return. */
+    db_pool_destroy(g_race_pool);
+    g_race_pool = NULL;
+
+    for (int i = 0; i < 5; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    PASS();
+}
+
 /* ===== Phase 6.5: Bug Fix Regression Tests ===== */
 
 /* Test JSON escape sequence decoding in parse */
@@ -4205,6 +4254,7 @@ int main(void) {
     /* Phase 6: Database connection pool tests */
     test_db_pool_create_destroy();
     test_db_pool_acquire_release();
+    test_db_pool_destroy_race();
 
     /* Phase 6.5: Bug fix regression tests */
     test_json_escape_decode();

@@ -11,12 +11,14 @@
 /* Internal pool structure */
 struct db_pool {
     db_pool_config_t config;
+    char *owned_connection_string;  /* Pool-owned copy of config.connection_string */
     db_connection_t **connections;
     size_t capacity;
     size_t size;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     bool shutdown;
+    size_t active_acquirers;        /* Threads currently executing inside db_pool_acquire */
     db_pool_stats_t stats;
 };
 
@@ -156,31 +158,33 @@ db_pool_t *db_pool_create(const db_pool_config_t *config) {
     }
     
     pool->config = *config;
-    pool->config.connection_string = strdup(config->connection_string);
-    if (!pool->config.connection_string) {
+    /* The pool owns its own copy so the caller's buffer need not outlive the pool. */
+    pool->owned_connection_string = strdup(config->connection_string);
+    if (!pool->owned_connection_string) {
         free(pool);
         return NULL;
     }
-    
+    pool->config.connection_string = pool->owned_connection_string;
+
     pool->capacity = config->max_connections;
     pool->connections = (db_connection_t **)calloc(pool->capacity, sizeof(db_connection_t *));
     if (!pool->connections) {
-        free(pool->config.connection_string);
+        free(pool->owned_connection_string);
         free(pool);
         return NULL;
     }
-    
+
     if (pthread_mutex_init(&pool->mutex, NULL) != 0) {
         free(pool->connections);
-        free(pool->config.connection_string);
+        free(pool->owned_connection_string);
         free(pool);
         return NULL;
     }
-    
+
     if (pthread_cond_init(&pool->cond, NULL) != 0) {
         pthread_mutex_destroy(&pool->mutex);
         free(pool->connections);
-        free(pool->config.connection_string);
+        free(pool->owned_connection_string);
         free(pool);
         return NULL;
     }
@@ -208,12 +212,17 @@ db_connection_t *db_pool_acquire(db_pool_t *pool) {
     }
     
     pthread_mutex_lock(&pool->mutex);
-    
+    /* Register as an in-flight acquirer so db_pool_destroy waits for us to leave
+     * before it destroys the mutex/cond and frees the pool. */
+    pool->active_acquirers++;
+
     if (pool->shutdown) {
+        pool->active_acquirers--;
+        pthread_cond_broadcast(&pool->cond);
         pthread_mutex_unlock(&pool->mutex);
         return NULL;
     }
-    
+
     time_t start_time = time(NULL);
     db_connection_t *conn = NULL;
     
@@ -262,6 +271,9 @@ db_connection_t *db_pool_acquire(db_pool_t *pool) {
         }
     }
     
+    pool->active_acquirers--;
+    /* Wake db_pool_destroy in case it is waiting for acquirers to drain. */
+    pthread_cond_broadcast(&pool->cond);
     pthread_mutex_unlock(&pool->mutex);
     return conn;
 }
@@ -364,7 +376,18 @@ void db_pool_destroy(db_pool_t *pool) {
     pthread_mutex_lock(&pool->mutex);
     pool->shutdown = true;
     pthread_cond_broadcast(&pool->cond);
-    
+
+    /* Drain in-flight acquirers before teardown.  A thread blocked in
+     * pthread_cond_timedwait() inside db_pool_acquire() must re-acquire the
+     * mutex (which we hold) to return; once it observes shutdown it decrements
+     * active_acquirers and broadcasts.  Destroying the mutex/cond or freeing the
+     * pool while such a waiter is still parked would be a use-after-free.
+     * Contract: callers must not begin NEW db_pool_acquire() calls after
+     * db_pool_destroy() has started; this only drains already-in-flight ones. */
+    while (pool->active_acquirers > 0) {
+        pthread_cond_wait(&pool->cond, &pool->mutex);
+    }
+
     /* Wait for in-use connections to be released before destroying */
     {
         bool has_in_use = true;
@@ -401,7 +424,7 @@ void db_pool_destroy(db_pool_t *pool) {
     pthread_cond_destroy(&pool->cond);
     pthread_mutex_destroy(&pool->mutex);
     free(pool->connections);
-    free(pool->config.connection_string);
+    free(pool->owned_connection_string);
     free(pool);
 }
 
