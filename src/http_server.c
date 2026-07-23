@@ -524,6 +524,18 @@ static void apply_socket_timeouts(int fd, int read_sec, int write_sec) {
     }
 }
 
+/* Monotonic wall-clock seconds for measuring elapsed time.  Unlike time(), it
+ * is immune to system-clock jumps (NTP/DST), so a backward jump cannot extend
+ * (and thereby defeat) the request deadline.  Falls back to time() only if the
+ * monotonic clock is unavailable at runtime. */
+static time_t monotonic_seconds(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        return (time_t)ts.tv_sec;
+    }
+    return time(NULL);
+}
+
 /* Thread pool work wrapper — handle_connection expects void* and frees conn */
 static void connection_work(void *arg) {
     handle_connection(arg);
@@ -708,15 +720,15 @@ static void *handle_connection(void *arg) {
             result = http_parser_execute(&conn->parser, NULL, 0);
         }
 
-        /* Start the total-request deadline for this request. */
-        time_t request_start = time(NULL);
+        /* Start the total-request deadline for this request (monotonic clock). */
+        time_t request_start = monotonic_seconds();
 
         while (result == PARSER_INCOMPLETE || result == PARSER_EXPECT_CONTINUE) {
             /* Enforce the whole-request deadline: a slow-drip client keeps each
              * recv() under SO_RCVTIMEO, so only this wall-clock bound stops it
              * from holding the worker thread indefinitely (slow-loris). */
             if (server->request_timeout_sec > 0 &&
-                (long)(time(NULL) - request_start) >= (long)server->request_timeout_sec) {
+                (long)(monotonic_seconds() - request_start) >= (long)server->request_timeout_sec) {
                 send_error_response(client_fd, HTTP_REQUEST_TIMEOUT, "Request Timeout");
                 connection_open = false;
                 goto iteration_cleanup;
@@ -855,6 +867,7 @@ static const char *status_reason_phrase(http_status_t status) {
         case HTTP_FORBIDDEN: return "Forbidden";
         case HTTP_NOT_FOUND: return "Not Found";
         case HTTP_METHOD_NOT_ALLOWED: return "Method Not Allowed";
+        case HTTP_REQUEST_TIMEOUT: return "Request Timeout";
         case HTTP_PAYLOAD_TOO_LARGE: return "Payload Too Large";
         case HTTP_URI_TOO_LONG: return "URI Too Long";
         case HTTP_TOO_MANY_REQUESTS: return "Too Many Requests";
