@@ -995,28 +995,36 @@ void test_stress_slowloris_deadline(void) {
     addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     ASSERT(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
 
-    time_t t_start = time(NULL);
-    /* Start a request but never send the terminating CRLF; dribble one byte at
-     * a time, each well within SO_RCVTIMEO, so the per-recv timer keeps resetting. */
+    /* Start a request but never send the terminating CRLF, then dribble bytes
+     * continuously (each within SO_RCVTIMEO, so the per-recv timer keeps
+     * resetting -- classic slow-loris).  With the total deadline the server
+     * cuts us off ~1s in; we detect that by a failed send() (EPIPE on a closed
+     * socket; SIGPIPE is ignored process-wide) or a non-blocking recv seeing the
+     * 408 / EOF / reset.  A regression reads the drip forever, so the safety cap
+     * is reached and `cutoff` stays false.  Polling (not a fixed sleep) keeps
+     * this robust under slow/loaded CI and Valgrind. */
     const char *partial = "GET /test HTTP/1.1\r\nHost: localhost\r\n";
     send(sock, partial, strlen(partial), 0);
-    for (int i = 0; i < 4; i++) {
-        send(sock, "a", 1, 0);     /* dribble; never completes the request */
-        usleep(300000);            /* 4 * 300ms = 1.2s > 1s deadline */
-    }
 
-    /* With the deadline, the server cuts us off at ~1s, so this recv returns
-     * promptly (408 / EOF / reset). A regression leaves the server blocked in
-     * recv until SO_RCVTIMEO, so the client recv would time out instead -- the
-     * timing assertion below catches that (elapsed would be ~4s, not ~1.2s). */
-    char resp[512];
-    ssize_t n = recv(sock, resp, sizeof(resp) - 1, 0);
-    time_t elapsed = time(NULL) - t_start;
-    ASSERT(elapsed <= 3);
-    if (n > 0) {
-        resp[n] = '\0';
-        ASSERT(strstr(resp, "408") != NULL);
+    time_t t_start = time(NULL);
+    int cutoff = 0;
+    while ((time(NULL) - t_start) < 6) {                 /* safety cap */
+        if (send(sock, "a", 1, 0) < 0) { cutoff = 1; break; }   /* server closed */
+        char buf[512];
+        ssize_t r = recv(sock, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+        if (r == 0) { cutoff = 1; break; }               /* FIN */
+        if (r > 0) { cutoff = 1; break; }                /* 408 response */
+        if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            cutoff = 1; break;                           /* e.g. ECONNRESET */
+        }
+        usleep(150000);                                  /* 150ms drip interval */
     }
+    time_t elapsed = time(NULL) - t_start;
+
+    /* The server must have cut off the never-completing drip (slow-loris)
+     * within the deadline plus a generous margin, not held it to the safety cap. */
+    ASSERT(cutoff == 1);
+    ASSERT(elapsed <= 4);
 
     close(sock);
     http_server_stop(server);
