@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>   /* isfinite (builtin macro; no libm link) */
+#include <locale.h> /* localeconv (normalize decimal separator to '.') */
 
 /* Internal structures */
 typedef struct json_object_entry {
@@ -763,6 +765,63 @@ static bool stringify_string(const char *str, char **output, size_t *capacity, s
     return true;
 }
 
+/* JSON always uses '.' as the decimal separator, but snprintf("%g") emits the
+ * program's active LC_NUMERIC separator (e.g. ',' under de_DE), which would be
+ * invalid JSON. Normalize it in place (a 1:1 char swap, so length is unchanged)
+ * so output is valid regardless of the host locale. Only the %g path can
+ * produce a separator; integer/"null"/"-0" output has none. */
+static void json_normalize_decimal(char *s) {
+    char sep = localeconv()->decimal_point[0];
+    if (sep != '\0' && sep != '.') {
+        char *p = strchr(s, sep);
+        if (p) *p = '.';
+    }
+}
+
+/* Serialize a JSON number (double) losslessly into buf.
+ *   - Integral values within a double's exact-integer range (|x| < 2^53) print
+ *     with no decimal point or exponent (e.g. 1234567890, not 1.23457e+09).
+ *   - Other finite values use the SHORTEST %g precision that reparses to the
+ *     same double (round-trip exact), avoiding %g's default 6-significant-digit
+ *     truncation.
+ *   - Non-finite values (NaN/Infinity, which JSON cannot represent) become null
+ *     rather than the invalid "nan"/"inf" that %g would emit.
+ * Returns the written length, or -1 on error. */
+static int json_format_number(double num, char *buf, size_t bufsz) {
+    if (!isfinite(num)) {
+        int n = snprintf(buf, bufsz, "null");
+        return (n < 0 || (size_t)n >= bufsz) ? -1 : n;
+    }
+    /* Preserve the sign of zero for strict round-trip losslessness: -0.0 must
+     * not collapse to "0" (the (long long) cast drops the sign bit). JSON
+     * permits -0, which parses back to -0.0. */
+    if (num == 0.0) {
+        int n = signbit(num) ? snprintf(buf, bufsz, "-0")
+                             : snprintf(buf, bufsz, "0");
+        return (n < 0 || (size_t)n >= bufsz) ? -1 : n;
+    }
+    /* Exact integer that a double represents without loss (|x| <= 2^53): print
+     * as an integer. The inclusive bound keeps the (long long) cast in range
+     * (2^53 << LLONG_MAX). */
+    if (num >= -9007199254740992.0 && num <= 9007199254740992.0 &&
+        num == (double)(long long)num) {
+        int n = snprintf(buf, bufsz, "%lld", (long long)num);
+        return (n < 0 || (size_t)n >= bufsz) ? -1 : n;
+    }
+    for (int prec = 15; prec <= 17; prec++) {
+        int n = snprintf(buf, bufsz, "%.*g", prec, num);
+        if (n < 0 || (size_t)n >= bufsz) return -1;
+        if (strtod(buf, NULL) == num) {   /* strtod honors the same LC_NUMERIC */
+            json_normalize_decimal(buf);  /* -> '.' so output is valid JSON */
+            return n;
+        }
+    }
+    int n = snprintf(buf, bufsz, "%.17g", num);   /* fallback: full precision */
+    if (n < 0 || (size_t)n >= bufsz) return -1;
+    json_normalize_decimal(buf);
+    return n;
+}
+
 static bool stringify_value(json_value_t *value, char **output, size_t *capacity, size_t *length) {
     if (!value || !output || !*output) {
         return false;
@@ -787,15 +846,13 @@ static bool stringify_value(json_value_t *value, char **output, size_t *capacity
         }
             
         case JSON_NUMBER: {
-            if (!ensure_stringify_capacity(output, capacity, *length, 64)) return false;
-            int written = snprintf(*output + *length, *capacity - *length, "%g", value->data.number_val);
-            if (written < 0) return false;
-            if ((size_t)written >= *capacity - *length) {
-                if (!ensure_stringify_capacity(output, capacity, *length, (size_t)written + 1)) return false;
-                written = snprintf(*output + *length, *capacity - *length, "%g", value->data.number_val);
-                if (written < 0) return false;
-            }
-            *length += (size_t)written;
+            char numbuf[40];   /* max: "-1.2345678901234567e-308" (~24) or 20-digit int */
+            int nlen = json_format_number(value->data.number_val, numbuf, sizeof(numbuf));
+            if (nlen < 0) return false;
+            if (!ensure_stringify_capacity(output, capacity, *length, (size_t)nlen + 1)) return false;
+            memcpy(*output + *length, numbuf, (size_t)nlen);
+            *length += (size_t)nlen;
+            (*output)[*length] = '\0';
             break;
         }
             
