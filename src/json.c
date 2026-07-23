@@ -778,9 +778,18 @@ static int json_format_number(double num, char *buf, size_t bufsz) {
         int n = snprintf(buf, bufsz, "null");
         return (n < 0 || (size_t)n >= bufsz) ? -1 : n;
     }
-    /* Exact integer that fits a double without loss: print as an integer. The
-     * 2^53 bound keeps the (long long) cast well within range. */
-    if (num < 9007199254740992.0 && num > -9007199254740992.0 &&
+    /* Preserve the sign of zero for strict round-trip losslessness: -0.0 must
+     * not collapse to "0" (the (long long) cast drops the sign bit). JSON
+     * permits -0, which parses back to -0.0. */
+    if (num == 0.0) {
+        int n = signbit(num) ? snprintf(buf, bufsz, "-0")
+                             : snprintf(buf, bufsz, "0");
+        return (n < 0 || (size_t)n >= bufsz) ? -1 : n;
+    }
+    /* Exact integer that a double represents without loss (|x| <= 2^53): print
+     * as an integer. The inclusive bound keeps the (long long) cast in range
+     * (2^53 << LLONG_MAX). */
+    if (num >= -9007199254740992.0 && num <= 9007199254740992.0 &&
         num == (double)(long long)num) {
         int n = snprintf(buf, bufsz, "%lld", (long long)num);
         return (n < 0 || (size_t)n >= bufsz) ? -1 : n;

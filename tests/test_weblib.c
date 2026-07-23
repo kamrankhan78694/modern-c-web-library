@@ -256,10 +256,29 @@ void test_json_number_precision(void) {
     double third = 1.0 / 3.0;
     json_value_t *t = json_number_create(third);
     s = json_stringify(t);
+    ASSERT(s != NULL);
     json_value_t *reparsed = json_parse(s);
     ASSERT(reparsed != NULL && reparsed->type == JSON_NUMBER);
     ASSERT(reparsed->data.number_val == third);
     free(s); json_value_free(t); json_value_free(reparsed);
+
+    /* Signed zero: +0.0 -> "0", -0.0 -> "-0" (preserved for strict round-trip;
+     * -0 is valid JSON and parses back to -0.0). */
+    json_value_t *pz = json_number_create(0.0);
+    s = json_stringify(pz);
+    ASSERT(s != NULL && strcmp(s, "0") == 0);
+    free(s); json_value_free(pz);
+
+    json_value_t *nz = json_number_create(-0.0);
+    s = json_stringify(nz);
+    ASSERT(s != NULL && strcmp(s, "-0") == 0);
+    free(s); json_value_free(nz);
+
+    /* Exactly 2^53 is representable and must print as an integer, not exponent. */
+    json_value_t *p53 = json_number_create(9007199254740992.0);
+    s = json_stringify(p53);
+    ASSERT(s != NULL && strcmp(s, "9007199254740992") == 0);
+    free(s); json_value_free(p53);
 
     /* Non-finite values (JSON has no NaN/Infinity) serialize as valid null,
      * not the invalid "inf"/"nan" that %g would emit. */
