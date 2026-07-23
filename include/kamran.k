@@ -1203,8 +1203,15 @@ const char *template_context_get(template_context_t *ctx, const char *key);
 void template_context_destroy(template_context_t *ctx);
 
 /**
- * Render a template string with variable substitution
- * Variables use {{ variable_name }} syntax
+ * Render a template string with variable substitution.
+ *
+ * Substitution is HTML-escaped by default to prevent XSS:
+ *   {{ name }}   -> value is HTML-escaped ( & < > " ' )   [safe default]
+ *   {{{ name }}} -> value is emitted raw/unescaped         [trusted HTML only]
+ *
+ * Only use the triple-brace raw form for values you fully control; binding
+ * untrusted input with {{{ }}} reintroduces XSS. Unknown variables render empty.
+ *
  * @param template_str Template string
  * @param ctx Template context with variables
  * @return Rendered string (caller must free) or NULL on error
