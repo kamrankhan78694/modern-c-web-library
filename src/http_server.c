@@ -574,8 +574,17 @@ static void *accept_connections(void *arg) {
         server->active_connections++;
         pthread_mutex_unlock(&server->conn_lock);
         
-        /* Apply socket timeouts */
-        apply_socket_timeouts(client_fd, server->read_timeout_sec, server->write_timeout_sec);
+        /* Apply socket timeouts.  The request deadline is only checked between
+         * recv() calls, so recv() must wake within the deadline for it to bound
+         * a partial-then-silent client.  Cap the effective read timeout at the
+         * request deadline (treating 0 as "no timeout") so the deadline stays
+         * enforced even when the per-recv read timeout is disabled. */
+        int eff_read_timeout = server->read_timeout_sec;
+        if (server->request_timeout_sec > 0 &&
+            (eff_read_timeout <= 0 || eff_read_timeout > server->request_timeout_sec)) {
+            eff_read_timeout = server->request_timeout_sec;
+        }
+        apply_socket_timeouts(client_fd, eff_read_timeout, server->write_timeout_sec);
         
         /* Submit to thread pool */
         connection_t *conn = (connection_t *)calloc(1, sizeof(connection_t));
@@ -2043,7 +2052,15 @@ static int set_nonblocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-/* Async accept handler */
+/* Async accept handler.
+ *
+ * NOTE: async mode does NOT yet bound slow/idle clients. Unlike the threaded
+ * path, it registers no per-connection start-time or idle timer, so the
+ * request_timeout_sec deadline is not enforced here and a slow-loris (or fully
+ * idle) client persists until it disconnects, tying up an fd + memory. Less
+ * severe than the threaded case (no worker thread is held), but still a gap --
+ * tracked as a follow-up: add an event-loop idle/deadline reaper for async
+ * connections. */
 static void async_accept_handler(int fd, int events, void *user_data) {
     http_server_t *server = (http_server_t *)user_data;
     

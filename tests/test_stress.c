@@ -1034,6 +1034,58 @@ void test_stress_slowloris_deadline(void) {
     PASS();
 }
 
+/* Security regression: with the per-recv read timeout disabled, a partial
+ * request followed by silence must STILL be cut off by the request deadline --
+ * the effective recv() timeout is capped at the deadline so it stays enforced. */
+void test_stress_request_deadline_silent(void) {
+    TEST("request deadline bounds a silent client even with read timeout 0");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/test", dummy_handler);
+    http_server_set_router(server, router);
+
+    http_server_set_timeout(server, 0, 0);                    /* read timeout DISABLED */
+    ASSERT(http_server_set_request_timeout(server, 1) == 0);  /* 1s total deadline */
+
+    uint16_t port = 19008;
+    ASSERT(http_server_listen(server, port) == 0);
+    usleep(200000);
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT(sock >= 0);
+    struct timeval cto = { .tv_sec = 3, .tv_usec = 0 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &cto, sizeof(cto));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    ASSERT(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+
+    /* Send a partial request, then go completely silent. */
+    const char *partial = "GET /test HTTP/1.1\r\nHost: localhost\r\n";
+    send(sock, partial, strlen(partial), 0);
+
+    /* The server must act (408 / close) within our 3s recv timeout. A regression
+     * (deadline not enforced when the read timeout is 0) leaves the server
+     * blocked in recv indefinitely, so our recv would time out with EAGAIN. */
+    char buf[512];
+    errno = 0;
+    ssize_t n = recv(sock, buf, sizeof(buf) - 1, 0);
+    int server_acted = (n >= 0) || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK);
+    ASSERT(server_acted);
+
+    close(sock);
+    http_server_stop(server);
+    usleep(100000);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 /* ===== Input Validation Stress Tests ===== */
 
 void test_stress_input_validation_long_strings(void) {
@@ -1196,6 +1248,7 @@ int main(void) {
         test_stress_many_headers();
         test_stress_slow_client();
         test_stress_slowloris_deadline();
+        test_stress_request_deadline_silent();
     }
 
     /* Input Validation Stress Tests */

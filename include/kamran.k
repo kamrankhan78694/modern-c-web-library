@@ -630,7 +630,11 @@ int http_server_set_timeout(http_server_t *server, int read_sec, int write_sec);
  * Set the total wall-clock deadline for reading a complete request.
  * Unlike the per-recv read timeout (SO_RCVTIMEO, which a drip client resets on
  * every byte), this bounds the whole request and defends against slow-loris.
- * Must be called before http_server_listen(). A value of 0 disables it.
+ * The deadline is evaluated per request, so it may be changed at runtime and
+ * takes effect on subsequent requests. A value of 0 disables it.
+ * A fully-silent client is bounded even when the read timeout is 0: the server
+ * caps the effective recv() timeout at this deadline. Worst-case hold is about
+ * this deadline plus one recv interval. Threaded mode only (see async note).
  * @param server Server instance
  * @param sec Deadline in seconds (default: 60, 0 = no deadline)
  * @return 0 on success, -1 on failure (NULL server or negative value)
