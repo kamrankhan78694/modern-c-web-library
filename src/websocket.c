@@ -649,6 +649,14 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
          * way, close 1009 (Message Too Big) -- never a silent -1. */
         if (frame.payload_length > WS_MAX_MESSAGE_SIZE ||
             frame.payload_length > SIZE_MAX - (size_t)header_size) {
+            /* Drop any in-progress reassembly, consistent with the other error
+             * paths (defensive; the caller also destroys the connection on -1). */
+            if (conn->fragment_buffer) {
+                free(conn->fragment_buffer);
+                conn->fragment_buffer = NULL;
+                conn->fragment_len = 0;
+                conn->fragment_capacity = 0;
+            }
             websocket_close(conn, 1009, "Message too big");
             return -1;
         }
