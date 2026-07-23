@@ -82,3 +82,9 @@ _codeql_detected_source_root
 *.swp
 *.swo
 *~
+
+# WebAssembly build artifacts
+*.wasm
+*.wast
+*.wat
+build-wasm/

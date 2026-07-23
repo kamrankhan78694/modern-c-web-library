@@ -5,14 +5,20 @@
  * status and uptime.  Designed for load balancers, Kubernetes probes, and
  * monitoring dashboards.
  */
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 /* Module-level start time, set on first handler invocation */
 static time_t _health_start_time = 0;
+static pthread_once_t _health_once = PTHREAD_ONCE_INIT;
+
+static void _health_init_start_time(void) {
+    _health_start_time = time(NULL);
+}
 
 /* ------------------------------------------------------------------ */
 /* Route handler: GET /healthz                                        */
@@ -20,9 +26,7 @@ static time_t _health_start_time = 0;
 void health_check_handler(http_request_t *req, http_response_t *res) {
     (void)req;
 
-    if (_health_start_time == 0) {
-        _health_start_time = time(NULL);
-    }
+    pthread_once(&_health_once, _health_init_start_time);
 
     time_t now = time(NULL);
     long uptime_sec = (long)(now - _health_start_time);

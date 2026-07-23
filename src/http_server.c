@@ -1,19 +1,75 @@
-#include "weblib.h"
-#include "thread_pool.h"
-#include <errno.h>
-#include <fcntl.h>
-#include <limits.h>
-#include <netinet/in.h>
-#include <pthread.h>
-#include <signal.h>
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <time.h>
-#include <unistd.h>
 #include <ctype.h>
+
+/* Portable case-insensitive substring search (replaces GNU strcasestr) */
+static const char *_portable_strcasestr(const char *haystack, const char *needle) {
+    if (!haystack) return NULL;
+    if (!needle || !*needle) return haystack;
+    size_t needle_len = strlen(needle);
+    for (; *haystack; haystack++) {
+        if (strncasecmp(haystack, needle, needle_len) == 0) {
+            return haystack;
+        }
+    }
+    return NULL;
+}
+
+/* ===== WASM-safe section (compiled on all platforms) ===== */
+
+/*
+ * Verify at compile time that the version defined in kamran.k matches the
+ * version set in CMakeLists.txt (passed via -DCMAKE_VERSION_{MAJOR,MINOR,PATCH}).
+ */
+#ifdef CMAKE_VERSION_MAJOR
+_Static_assert(WEBLIB_VERSION_MAJOR == CMAKE_VERSION_MAJOR,
+               "MAJOR version mismatch: update WEBLIB_VERSION_MAJOR in kamran.k "
+               "to match the project(VERSION ...) in CMakeLists.txt");
+_Static_assert(WEBLIB_VERSION_MINOR == CMAKE_VERSION_MINOR,
+               "MINOR version mismatch: update WEBLIB_VERSION_MINOR in kamran.k "
+               "to match the project(VERSION ...) in CMakeLists.txt");
+_Static_assert(WEBLIB_VERSION_PATCH == CMAKE_VERSION_PATCH,
+               "PATCH version mismatch: update WEBLIB_VERSION_PATCH in kamran.k "
+               "to match the project(VERSION ...) in CMakeLists.txt");
+#endif
+
+const char *weblib_kamran_signature(void) {
+    return WEBLIB_VERSION_STRING;
+}
+
+const char *weblib_version(void) {
+    return WEBLIB_VERSION;
+}
+
+void weblib_version_components(int *major, int *minor, int *patch) {
+    if (major) *major = WEBLIB_VERSION_MAJOR;
+    if (minor) *minor = WEBLIB_VERSION_MINOR;
+    if (patch) *patch = WEBLIB_VERSION_PATCH;
+}
+
+#ifdef __EMSCRIPTEN__
+/*
+ * Under Emscripten the HTTP server, sockets, signals, and threading
+ * are unavailable.  Only weblib_kamran_signature() (defined above)
+ * is compiled for WASM; use the wasm_* API surface instead
+ * (see src/wasm_runtime.c).
+ */
+#else
+/* ===== Native implementation (sockets, threads, signals) ===== */
+
+#include "thread_pool.h"
+#include <errno.h>
+#include <limits.h>
 #include <strings.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 /* BUG-1 fix: Use MSG_NOSIGNAL on send() where available, else rely on
    the process-wide signal(SIGPIPE, SIG_IGN) set in http_server_create(). */
@@ -50,10 +106,6 @@ static void _kamran_init_impl(void) {
  */
 static void weblib_kamran_init(void) {
     pthread_once(&kamran_init_once, _kamran_init_impl);
-}
-
-const char *weblib_kamran_signature(void) {
-    return WEBLIB_VERSION_STRING;
 }
 
 typedef struct http_header_node {
@@ -100,6 +152,7 @@ typedef struct http_parser {
     size_t body_received;
     size_t body_capacity;
     bool chunked;
+    bool seen_content_length;    /* detect CL + TE smuggling in any order */
     bool seen_transfer_encoding; /* detect duplicate Transfer-Encoding headers */
     bool expect_continue;        /* Expect: 100-continue was present */
     size_t current_chunk_size;
@@ -692,8 +745,8 @@ static void *handle_connection(void *arg) {
         }
 
         if (server->router) {
-            if (router_route(server->router, conn->request, conn->response) < 0) {
-                /* router_route already set 404 response body */
+            if (router_route(server->router, conn->request, conn->response) != 0) {
+                /* router_route already set error/404 response body */
             }
         } else {
             http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
@@ -811,6 +864,13 @@ static int header_list_add(http_header_node_t **head_ref, const char *name, cons
         return -1;
     }
 
+    /* Reject header values containing CR or LF to prevent header injection */
+    for (const char *p = value; *p; p++) {
+        if (*p == '\r' || *p == '\n') {
+            return -1;
+        }
+    }
+
     char *lower = lowercase_dup(name);
     if (!lower) {
         return -1;
@@ -823,14 +883,19 @@ static int header_list_add(http_header_node_t **head_ref, const char *name, cons
             free(lower);
             return -1;
         }
-        free(existing->value);
-        existing->value = new_value;
+        char *new_raw = NULL;
         if (raw_name) {
-            char *new_raw = strdup(raw_name);
+            new_raw = strdup(raw_name);
             if (!new_raw) {
+                free(new_value);
                 free(lower);
                 return -1;
             }
+        }
+        /* All allocations succeeded — now apply changes atomically */
+        free(existing->value);
+        existing->value = new_value;
+        if (new_raw) {
             free(existing->raw_name);
             existing->raw_name = new_raw;
         }
@@ -1188,6 +1253,10 @@ static void parser_set_error(http_parser_t *parser, http_status_t status, const 
 }
 
 static int ensure_buffer_capacity(http_parser_t *parser, size_t additional) {
+    if (additional > SIZE_MAX - parser->buffer_len) {
+        parser_set_error(parser, HTTP_PAYLOAD_TOO_LARGE, "Payload Too Large");
+        return -1;
+    }
     size_t required = parser->buffer_len + additional;
     if (required > MAX_REQUEST_BUFFER) {
         parser_set_error(parser, HTTP_PAYLOAD_TOO_LARGE, "Payload Too Large");
@@ -1410,6 +1479,14 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     }
 
     if (strcasecmp(name_buf, "content-length") == 0) {
+        /* RFC 7230 §3.3.3: reject if Transfer-Encoding already seen */
+        if (parser->seen_transfer_encoding) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST,
+                             "Both Content-Length and Transfer-Encoding present");
+            return -1;
+        }
         char *endptr = NULL;
         unsigned long long val = strtoull(value_buf, &endptr, 10);
         if (endptr == value_buf || *endptr != '\0') {
@@ -1425,6 +1502,7 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
             return -1;
         }
         parser->content_length = (size_t)val;
+        parser->seen_content_length = true;
     } else if (strcasecmp(name_buf, "transfer-encoding") == 0) {
         if (parser->seen_transfer_encoding) {
             free(name_buf);
@@ -1432,19 +1510,26 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
             parser_set_error(parser, HTTP_BAD_REQUEST, "Duplicate Transfer-Encoding header");
             return -1;
         }
+        /* RFC 7230 §3.3.3: reject if Content-Length already seen */
+        if (parser->seen_content_length) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST,
+                             "Both Content-Length and Transfer-Encoding present");
+            return -1;
+        }
         parser->seen_transfer_encoding = true;
         if (strstr(value_buf, "chunked") != NULL) {
             parser->chunked = true;
-            parser->content_length = 0;
         }
     } else if (strcasecmp(name_buf, "expect") == 0) {
         if (strcasecmp(value_buf, "100-continue") == 0) {
             parser->expect_continue = true;
         }
     } else if (strcasecmp(name_buf, "connection") == 0) {
-        if (strcasestr(value_buf, "close")) {
+        if (_portable_strcasestr(value_buf, "close")) {
             parser->keep_alive = false;
-        } else if (strcasestr(value_buf, "keep-alive")) {
+        } else if (_portable_strcasestr(value_buf, "keep-alive")) {
             parser->keep_alive = true;
         }
     } else if (strcasecmp(name_buf, "host") == 0) {
@@ -1565,7 +1650,9 @@ static int parse_chunk_size(http_parser_t *parser) {
     char *endptr = NULL;
     errno = 0;
     unsigned long chunk_size = strtoul(line, &endptr, 16);
-    if (endptr == line || errno == ERANGE || chunk_size > MAX_BODY_BYTES) {
+    /* Reject trailing garbage after hex digits (allow optional chunk-ext starting with ';') */
+    if (endptr == line || errno == ERANGE || chunk_size > MAX_BODY_BYTES ||
+        (*endptr != '\0' && *endptr != ';')) {
         free(line);
         parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid chunk size");
         return -1;
@@ -1667,6 +1754,7 @@ static void http_parser_reset(http_parser_t *parser, http_request_t *req, bool p
     parser->body_received = 0;
     parser->body_capacity = 0;
     parser->chunked = false;
+    parser->seen_content_length = false;
     parser->seen_transfer_encoding = false;
     parser->expect_continue = false;
     parser->current_chunk_size = 0;
@@ -1691,7 +1779,7 @@ static parser_result_t http_parser_execute(http_parser_t *parser, const char *da
         return PARSER_ERROR;
     }
 
-    if (len > 0) {
+    if (len > 0 && data) {
         if (ensure_buffer_capacity(parser, len) < 0) {
             return PARSER_ERROR;
         }
@@ -1922,6 +2010,16 @@ static void async_accept_handler(int fd, int events, void *user_data) {
         return;
     }
     
+    /* Enforce connection limit in async mode */
+    pthread_mutex_lock(&server->conn_lock);
+    if (server->active_connections >= server->max_connections) {
+        pthread_mutex_unlock(&server->conn_lock);
+        close(client_fd);
+        return;
+    }
+    server->active_connections++;
+    pthread_mutex_unlock(&server->conn_lock);
+    
     /* Set client socket to non-blocking */
     if (set_nonblocking(client_fd) < 0) {
         perror("Failed to set client socket to non-blocking");
@@ -1989,8 +2087,8 @@ static bool async_on_parser_result(async_connection_t *conn, int fd, parser_resu
         keep_alive = false;
     } else if (result == PARSER_COMPLETE) {
         if (server->router) {
-            if (router_route(server->router, conn->request, conn->response) < 0) {
-                /* router_route already set 404 response body */
+            if (router_route(server->router, conn->request, conn->response) != 0) {
+                /* router_route already set error/404 response body */
             }
         } else {
             http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
@@ -2002,6 +2100,16 @@ static bool async_on_parser_result(async_connection_t *conn, int fd, parser_resu
         } else {
             keep_alive = conn->parser.keep_alive && !response_forces_close(conn->response);
         }
+    } else if (result == PARSER_EXPECT_CONTINUE) {
+        /* RFC 7231 §5.1.1: send 100 Continue before waiting for body */
+        static const char CONTINUE_RESP[] = "HTTP/1.1 100 Continue\r\n\r\n";
+        int send_flags = 0;
+#ifdef MSG_NOSIGNAL
+        send_flags |= MSG_NOSIGNAL;
+#endif
+        send(fd, CONTINUE_RESP, sizeof(CONTINUE_RESP) - 1, send_flags);
+        /* Continue reading body data */
+        return true;
     } else {
         return true;
     }
@@ -2330,6 +2438,15 @@ static void free_async_connection(async_connection_t *conn) {
         return;
     }
     
+    /* Decrement active connection count */
+    if (conn->server) {
+        pthread_mutex_lock(&conn->server->conn_lock);
+        if (conn->server->active_connections > 0) {
+            conn->server->active_connections--;
+        }
+        pthread_mutex_unlock(&conn->server->conn_lock);
+    }
+    
     if (conn->client_fd >= 0) {
         close(conn->client_fd);
         conn->client_fd = -1;
@@ -2351,3 +2468,4 @@ static void free_async_connection(async_connection_t *conn) {
     free(conn);
 }
 
+#endif /* !__EMSCRIPTEN__ */

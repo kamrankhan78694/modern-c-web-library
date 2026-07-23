@@ -1,5 +1,7 @@
 # Deployment Guide
 
+**Modern C Web Library v1.0.0** — Production Deployment
+
 This document describes how to build, package, and deploy applications built with the Modern C Web Library.
 
 ## Prerequisites
@@ -36,7 +38,7 @@ This produces:
 
 ```bash
 sudo make install
-# Headers → /usr/local/include/weblib.h, /usr/local/include/db_pool.h
+# Headers → /usr/local/include/kamran.k, /usr/local/include/db_pool.h
 # Libraries → /usr/local/lib/libweblib.a, /usr/local/lib/libweblib_shared.so
 ```
 

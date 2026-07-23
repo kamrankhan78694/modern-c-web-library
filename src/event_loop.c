@@ -1,12 +1,16 @@
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <errno.h>
-#include <sys/time.h>
 #include <limits.h>
 
+#ifdef __EMSCRIPTEN__
+/* WASM: no real I/O backend; stub event loop */
+#define USE_WASM_STUB 1
+#else
+#include <unistd.h>
+#include <sys/time.h>
 #ifdef __linux__
 #include <sys/epoll.h>
 #define USE_EPOLL 1
@@ -17,6 +21,7 @@
 #include <poll.h>
 #define USE_POLL 1
 #endif
+#endif /* __EMSCRIPTEN__ */
 
 #define MAX_EVENTS 1024
 #define MAX_TIMERS 64
@@ -33,7 +38,11 @@ struct event_handler {
 /* Timer structure */
 typedef struct {
     int id;
+#ifdef USE_WASM_STUB
+    double expiry_ms;  /* milliseconds since epoch */
+#else
     struct timeval expiry;
+#endif
     event_callback_t callback;
     void *user_data;
     bool active;
@@ -53,6 +62,7 @@ struct event_loop {
     int poll_count;
     int poll_capacity;
 #endif
+    /* USE_WASM_STUB: no backend fd needed */
     
     event_handler_t *handlers;
     int handler_count;
@@ -116,6 +126,7 @@ event_loop_t *event_loop_create(void) {
         return NULL;
     }
 #endif
+    /* USE_WASM_STUB: no backend fd to create */
     
     return loop;
 }
@@ -134,6 +145,10 @@ int event_loop_add_fd(event_loop_t *loop, int fd, int events, event_callback_t c
     
     /* Expand handlers array if needed */
     if (loop->handler_count >= loop->handler_capacity) {
+        if (loop->handler_capacity > INT_MAX / 2) {
+            fprintf(stderr, "Handler capacity overflow\n");
+            return -1;
+        }
         int new_capacity = loop->handler_capacity * 2;
         event_handler_t *new_handlers = (event_handler_t *)realloc(loop->handlers, 
                                                                     new_capacity * sizeof(event_handler_t));
@@ -188,6 +203,10 @@ int event_loop_add_fd(event_loop_t *loop, int fd, int events, event_callback_t c
 #elif defined(USE_POLL)
     /* Expand poll_fds if needed */
     if (loop->poll_count >= loop->poll_capacity) {
+        if (loop->poll_capacity > INT_MAX / 2) {
+            loop->handler_count--;
+            return -1;
+        }
         int new_capacity = loop->poll_capacity * 2;
         struct pollfd *new_fds = (struct pollfd *)realloc(loop->poll_fds,
                                                           new_capacity * sizeof(struct pollfd));
@@ -208,6 +227,7 @@ int event_loop_add_fd(event_loop_t *loop, int fd, int events, event_callback_t c
     pfd->revents = 0;
     loop->poll_count++;
 #endif
+    /* USE_WASM_STUB: handler tracked in array only; no backend registration */
     
     return 0;
 }
@@ -269,6 +289,7 @@ int event_loop_modify_fd(event_loop_t *loop, int fd, int events) {
         }
     }
 #endif
+    /* USE_WASM_STUB: no backend modification needed */
     
     /* Update handler only after backend succeeds */
     loop->handlers[idx].events = events;
@@ -307,6 +328,7 @@ int event_loop_remove_fd(event_loop_t *loop, int fd) {
         }
     }
 #endif
+    /* USE_WASM_STUB: no backend fd to remove */
     
     /* Mark handler as inactive and compact array */
     loop->handlers[idx].active = false;
@@ -329,7 +351,12 @@ int event_loop_run(event_loop_t *loop) {
     while (loop->running) {
         int timeout_ms = get_next_timeout(loop);
         
-#ifdef USE_EPOLL
+#ifdef USE_WASM_STUB
+        /* WASM: no real I/O; just process timers */
+        (void)timeout_ms;
+        process_timers(loop);
+        loop->running = false; /* Single iteration; caller drives the loop */
+#elif defined(USE_EPOLL)
         struct epoll_event events[MAX_EVENTS];
         int nfds = epoll_wait(loop->epoll_fd, events, MAX_EVENTS, timeout_ms);
         
@@ -395,8 +422,9 @@ int event_loop_run(event_loop_t *loop) {
             return -1;
         }
         
-        /* Process events */
-        for (int i = 0; i < loop->poll_count && nfds > 0; i++) {
+        /* Process events — iterate in reverse so that swap-with-last
+         * compaction from event_loop_remove_fd() doesn't skip entries */
+        for (int i = loop->poll_count - 1; i >= 0 && nfds > 0; i--) {
             if (loop->poll_fds[i].revents == 0) continue;
             
             nfds--;
@@ -446,6 +474,7 @@ void event_loop_destroy(event_loop_t *loop) {
 #elif defined(USE_POLL)
     free(loop->poll_fds);
 #endif
+    /* USE_WASM_STUB: no backend resources to release */
     
     free(loop->handlers);
     free(loop);
@@ -472,6 +501,9 @@ int event_loop_add_timeout(event_loop_t *loop, int timeout_ms, event_callback_t 
     timer->active = true;
     
     /* Calculate expiry time */
+#ifdef USE_WASM_STUB
+    timer->expiry_ms = 0; /* placeholder; WASM timers are host-driven */
+#else
     gettimeofday(&timer->expiry, NULL);
     timer->expiry.tv_sec += timeout_ms / 1000;
     timer->expiry.tv_usec += (timeout_ms % 1000) * 1000;
@@ -479,6 +511,7 @@ int event_loop_add_timeout(event_loop_t *loop, int timeout_ms, event_callback_t 
         timer->expiry.tv_sec++;
         timer->expiry.tv_usec -= 1000000;
     }
+#endif
     
     loop->timer_count++;
     
@@ -518,6 +551,23 @@ static int find_handler_index(event_loop_t *loop, int fd) {
 
 /* Process expired timers */
 static void process_timers(event_loop_t *loop) {
+#ifdef USE_WASM_STUB
+    /* WASM: timers are placeholder stubs; fire all pending timers */
+    int count = loop->timer_count;
+    for (int i = 0; i < count && i < loop->timer_count; i++) {
+        if (!loop->timers[i].active) continue;
+        event_callback_t cb = loop->timers[i].callback;
+        void *ud = loop->timers[i].user_data;
+        loop->timers[i].active = false;
+        if (i < loop->timer_count - 1) {
+            loop->timers[i] = loop->timers[loop->timer_count - 1];
+        }
+        loop->timer_count--;
+        count--;
+        i--;
+        cb(-1, EVENT_TIMEOUT, ud);
+    }
+#else
     struct timeval now;
     gettimeofday(&now, NULL);
     
@@ -544,6 +594,7 @@ static void process_timers(event_loop_t *loop) {
             cb(-1, EVENT_TIMEOUT, ud);
         }
     }
+#endif
 }
 
 /* Get next timeout in milliseconds */
@@ -552,6 +603,9 @@ static int get_next_timeout(event_loop_t *loop) {
         return -1; /* No timeout, block indefinitely */
     }
     
+#ifdef USE_WASM_STUB
+    return 0; /* WASM: immediate return */
+#else
     struct timeval now;
     gettimeofday(&now, NULL);
     
@@ -573,6 +627,7 @@ static int get_next_timeout(event_loop_t *loop) {
     }
     
     return min_timeout;
+#endif
 }
 
 /* Get current timer count and maximum */

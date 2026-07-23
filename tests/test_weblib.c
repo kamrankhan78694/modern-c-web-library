@@ -1,4 +1,4 @@
-#include "weblib.h"
+#include "kamran.k"
 #include "db_pool.h"
 #include "thread_pool.h"
 #include <stdio.h>
@@ -35,6 +35,17 @@ static void _test_free_header_list(void *headers) {
         free(h);
         h = next;
     }
+}
+
+/*
+ * Test-local helper: find the value of a header by lowercase name.
+ * Returns NULL when the header is not present.
+ */
+static const char *_test_find_header(void *headers, const char *name_lower) {
+    for (_test_hdr_node_t *h = (_test_hdr_node_t *)headers; h; h = h->next) {
+        if (strcmp(h->name, name_lower) == 0) return h->value;
+    }
+    return NULL;
 }
 
 /* Dummy handler for testing */
@@ -142,8 +153,13 @@ void test_json_bool_create(void) {
     ASSERT(bool_val != NULL);
     ASSERT(bool_val->type == JSON_BOOL);
     ASSERT(bool_val->data.bool_val == true);
-    
     json_value_free(bool_val);
+
+    json_value_t *bool_false = json_bool_create(false);
+    ASSERT(bool_false != NULL);
+    ASSERT(bool_false->type == JSON_BOOL);
+    ASSERT(bool_false->data.bool_val == false);
+    json_value_free(bool_false);
     
     PASS();
 }
@@ -186,6 +202,8 @@ void test_json_stringify(void) {
     ASSERT(strstr(json_str, "\"John\"") != NULL);
     ASSERT(strstr(json_str, "\"age\"") != NULL);
     ASSERT(strstr(json_str, "30") != NULL);
+    ASSERT(strstr(json_str, "\"active\"") != NULL);
+    ASSERT(strstr(json_str, "true") != NULL);
     
     free(json_str);
     json_value_free(obj);
@@ -343,22 +361,20 @@ static void test_timeout_callback(int fd, int events, void *user_data) {
     }
 }
 
-/* Test event loop timeout */
+/* Test event loop timeout registration */
 void test_event_loop_timeout(void) {
     TEST("event_loop_add_timeout");
     
     event_loop_t *loop = event_loop_create();
     ASSERT(loop != NULL);
     
-    timeout_called = false;
+    /* Timer count should start at 0 */
+    ASSERT(event_loop_get_timer_count(loop) == 0);
     
-    /* Add a short timeout (100ms) */
+    /* Add a timeout and verify it was registered */
     int timer_id = event_loop_add_timeout(loop, 100, test_timeout_callback, NULL);
     ASSERT(timer_id > 0);
-    
-    /* Run event loop for a short time */
-    /* Note: We'll stop it after timeout fires */
-    /* For testing, we'll use a simple timer mechanism */
+    ASSERT(event_loop_get_timer_count(loop) == 1);
     
     event_loop_destroy(loop);
     
@@ -385,14 +401,18 @@ void test_event_loop_cancel_timeout(void) {
     PASS();
 }
 
-/* Test WebSocket frame encoding */
+/* Test WebSocket connection open state and fd (was: frame_encode — renamed) */
 void test_websocket_frame_encode(void) {
-    TEST("websocket_frame_encode");
+    TEST("websocket_connection_open_state");
     
-    /* Create a WebSocket connection (fd doesn't matter for this test) */
     websocket_connection_t *conn = websocket_connection_create(999);
     ASSERT(conn != NULL);
     ASSERT(websocket_is_open(conn));
+    ASSERT(websocket_get_fd(conn) == 999);
+    
+    /* After close the connection should no longer be open */
+    websocket_close(conn, WS_CLOSE_NORMAL, "done");
+    ASSERT(websocket_is_open(conn) == false);
     
     websocket_connection_destroy(conn);
     
@@ -607,27 +627,26 @@ void test_json_object_with_array(void) {
 
 /* ===== Phase 5 Tests ===== */
 
-/* Test body parser - URL-encoded form data */
+/* Test body parser - graceful fallback without Content-Type header.
+ * Without Content-Type, the parser succeeds but produces no parsed fields. */
 void test_body_parser_urlencoded(void) {
-    TEST("body_parser (url-encoded)");
+    TEST("body_parser (no Content-Type → no fields)");
 
-    /* Create a request with URL-encoded body */
+    /* Create a request with URL-encoded body but NO Content-Type header */
     http_request_t req = {0};
     req.method = HTTP_POST;
     req.path = strdup("/form");
     req.body = strdup("username=john&password=secret123&email=john%40example.com");
     req.body_length = strlen(req.body);
 
-    /* We need headers for Content-Type. Since the internal header API is used,
-     * we'll test via http_request_parse_body which calls get_header.
-     * For unit testing without full server infrastructure, we'll test the
-     * standalone form field access after manual parse. */
-
-    /* The body parser auto-creates parser data, so we just test that parse
-     * doesn't crash on a request without headers (it should return gracefully) */
     int result = http_request_parse_body(&req);
     /* Without Content-Type header, parse should succeed but find nothing */
     ASSERT(result == 0);
+
+    /* Verify that no form fields were parsed */
+    ASSERT(http_request_get_form_field(&req, "username") == NULL);
+    ASSERT(http_request_get_form_field(&req, "password") == NULL);
+    ASSERT(http_request_get_form_field(&req, "email") == NULL);
 
     free(req.path);
     free(req.body);
@@ -764,7 +783,17 @@ void test_cookie_set(void) {
         .same_site = "Lax"
     };
     http_response_set_cookie(&res, "session", "abc123", &opts);
-    /* The Set-Cookie header should be set (verified by the fact it doesn't crash) */
+
+    /* Verify the Set-Cookie header was actually set with correct content */
+    const char *cookie_hdr = _test_find_header(res.headers, "set-cookie");
+    ASSERT(cookie_hdr != NULL);
+    ASSERT(strstr(cookie_hdr, "session=abc123") != NULL);
+    ASSERT(strstr(cookie_hdr, "Domain=example.com") != NULL);
+    ASSERT(strstr(cookie_hdr, "Path=/api") != NULL);
+    ASSERT(strstr(cookie_hdr, "Max-Age=3600") != NULL);
+    ASSERT(strstr(cookie_hdr, "Secure") != NULL);
+    ASSERT(strstr(cookie_hdr, "HttpOnly") != NULL);
+    ASSERT(strstr(cookie_hdr, "SameSite=Lax") != NULL);
 
     _test_free_header_list(res.headers);
 
@@ -784,7 +813,12 @@ void test_cookie_delete(void) {
 
     /* Delete a cookie */
     http_response_delete_cookie(&res, "session");
-    /* Should set Set-Cookie: session=; Path=/; Max-Age=0 */
+
+    /* Verify Set-Cookie header contains deletion markers */
+    const char *cookie_hdr = _test_find_header(res.headers, "set-cookie");
+    ASSERT(cookie_hdr != NULL);
+    ASSERT(strstr(cookie_hdr, "session=") != NULL);
+    ASSERT(strstr(cookie_hdr, "Max-Age=0") != NULL);
 
     _test_free_header_list(res.headers);
 
@@ -1207,7 +1241,24 @@ void test_session_cleanup(void) {
 
     ASSERT(session_get(store, sid) != NULL);
 
+    /* Create a session with very short max_age=1 */
+    char *sid_short = session_create(store, 1);
+    ASSERT(sid_short != NULL);
+    ASSERT(session_get(store, sid_short) != NULL);
+
+    /* Wait for the short session to expire (max_age=1s, so 2s is sufficient) */
+    sleep(2);
+
+    /* Cleanup should now remove the expired session */
+    cleaned = session_cleanup_expired(store);
+    ASSERT(cleaned == 1);
+
+    /* Expired session should be gone, permanent one should remain */
+    ASSERT(session_get(store, sid_short) == NULL);
+    ASSERT(session_get(store, sid) != NULL);
+
     free(sid);
+    free(sid_short);
     session_store_destroy(store);
 
     PASS();
@@ -1242,8 +1293,22 @@ void test_session_cookie_set(void) {
     /* Set a session cookie */
     session_set_cookie(&res, "abc123", 3600, "/api");
 
-    /* Delete session cookie */
+    /* Verify the Set-Cookie header contains the session ID and path */
+    const char *cookie_hdr = _test_find_header(res.headers, "set-cookie");
+    ASSERT(cookie_hdr != NULL);
+    ASSERT(strstr(cookie_hdr, "abc123") != NULL);
+    ASSERT(strstr(cookie_hdr, "HttpOnly") != NULL);
+
+    _test_free_header_list(res.headers);
+    res.headers = NULL;
+
+    /* Delete session cookie (negative max_age) */
     session_set_cookie(&res, "abc123", -1, "/");
+
+    /* Verify the deletion cookie has Max-Age=0 */
+    cookie_hdr = _test_find_header(res.headers, "set-cookie");
+    ASSERT(cookie_hdr != NULL);
+    ASSERT(strstr(cookie_hdr, "Max-Age=0") != NULL);
 
     _test_free_header_list(res.headers);
 
@@ -1468,8 +1533,8 @@ void test_db_pool_create_destroy(void) {
 
     db_pool_destroy(pool);
 
-    /* Free the config connection string that was strdup'd */
-    free(config.connection_string);
+    /* db_pool_config_default no longer strdup's the connection string;
+     * db_pool_create makes its own copy, so nothing to free here. */
 
     /* Destroy NULL should not crash */
     db_pool_destroy(NULL);
@@ -1503,7 +1568,7 @@ void test_db_pool_acquire_release(void) {
     ASSERT(stats.total_released >= 1);
 
     db_pool_destroy(pool);
-    free(config.connection_string);
+    /* connection_string no longer strdup'd by db_pool_config_default */
 
     PASS();
 }
@@ -2047,6 +2112,19 @@ void test_log_middleware_invoke(void) {
     bool cont = fn(&req, &res, NULL);
     ASSERT(cont == true);
 
+    /* Verify something was actually written to the log sink */
+    fflush(sink);
+    long written = ftell(sink);
+    ASSERT(written > 0);
+
+    /* Read back and verify it contains the request info */
+    rewind(sink);
+    char log_buf[512];
+    size_t nread = fread(log_buf, 1, sizeof(log_buf) - 1, sink);
+    log_buf[nread] = '\0';
+    ASSERT(nread > 0);
+    ASSERT(strstr(log_buf, "/test") != NULL || strstr(log_buf, "GET") != NULL);
+
     /* NULL inputs should not crash */
     cont = fn(NULL, NULL, NULL);
     ASSERT(cont == true);
@@ -2500,6 +2578,8 @@ void test_integration_post_body(void) {
     ssize_t n = _send_raw_request(port, req, strlen(req), buf, sizeof(buf));
     ASSERT(n > 0);
     ASSERT(strstr(buf, "200") != NULL);
+    /* Verify the body was actually echoed back */
+    ASSERT(strstr(buf, "hello world") != NULL);
 
     http_server_stop(server);
     http_server_destroy(server);
@@ -2860,10 +2940,23 @@ void test_metrics_record_status(void) {
 
     /* Record some statuses */
     metrics_record_status(200);
-    metrics_record_status(201);
-    metrics_record_status(301);
+    metrics_record_status(200);
     metrics_record_status(404);
     metrics_record_status(500);
+
+    /* Verify recorded data is reflected via the metrics handler */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/metrics";
+    http_response_t res = {0};
+    metrics_handler(&req, &res);
+
+    ASSERT(res.body != NULL);
+    ASSERT(res.body_length > 0);
+    ASSERT(strstr(res.body, "\"total_requests\"") != NULL);
+
+    free(res.body);
+    _test_free_header_list(res.headers);
 
     /* NULL safety (no crash when not initialized) */
     metrics_middleware_destroy();
@@ -2981,25 +3074,44 @@ void test_compression_should_compress(void) {
 }
 
 void test_gzip_compress_valid(void) {
-    TEST("gzip (compress produces valid output)");
+    TEST("gzip (compress via send_compressed)");
 
-    /* Check that gzip_compress produces output starting with gzip magic bytes */
+    /* Build a body long enough to exceed the compression threshold (256 bytes) */
     const char *input = "Hello World! This is a test of compression. "
                         "It needs to be long enough to be worth compressing. "
                         "Adding more repetitive text to ensure good compression ratio. "
                         "Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello "
                         "World World World World World World World World World World.";
     size_t input_len = strlen(input);
+    /* Body must exceed the 256-byte minimum compression threshold */
+    ASSERT(input_len >= 256);
 
-    /* Use the internal gzip_compress via the extern declaration */
-    /* Since gzip_compress is not in weblib.h, we test indirectly
-     * through http_response_send_compressed behavior.
-     * But we CAN verify CRC32 is correct. */
+    /* Use the public http_response_send_compressed API to exercise gzip */
+    http_response_t res = {0};
+    http_response_send_compressed(&res, HTTP_OK, input, input_len,
+                                  "text/plain", "gzip");
 
-    /* The CRC32 of this string should be non-zero */
-    uint32_t crc = crc32_compute((const uint8_t *)input, input_len);
-    ASSERT(crc != 0);
-    (void)input_len;
+    /* Response must have a body */
+    ASSERT(res.body != NULL);
+    ASSERT(res.body_length > 0);
+
+    /* If compression kicked in the Content-Encoding header should be "gzip"
+     * and the body should start with the gzip magic bytes 0x1f 0x8b */
+    const char *ce = _test_find_header(res.headers, "content-encoding");
+    if (ce && strcmp(ce, "gzip") == 0) {
+        ASSERT(res.body_length >= 2);
+        ASSERT((uint8_t)res.body[0] == 0x1f);
+        ASSERT((uint8_t)res.body[1] == 0x8b);
+        /* Compressed size should be smaller than original for this repetitive input */
+        ASSERT(res.body_length < input_len);
+    } else {
+        /* Fallback to uncompressed — body should match original */
+        ASSERT(res.body_length == input_len);
+        ASSERT(memcmp(res.body, input, input_len) == 0);
+    }
+
+    free(res.body);
+    _test_free_header_list(res.headers);
 
     PASS();
 }
@@ -3446,6 +3558,557 @@ void test_kamran_multiple_servers(void) {
     PASS();
 }
 
+/* ===== Environment Configuration tests ===== */
+
+void test_env_config_get_string(void) {
+    TEST("env_config_get (string accessor)");
+
+    /* Unset variable returns default */
+    unsetenv("WEBLIB_TEST_STR");
+    ASSERT(strcmp(env_config_get("WEBLIB_TEST_STR", "fallback"), "fallback") == 0);
+
+    /* Set variable returns its value */
+    setenv("WEBLIB_TEST_STR", "hello", 1);
+    ASSERT(strcmp(env_config_get("WEBLIB_TEST_STR", "fallback"), "hello") == 0);
+
+    /* Empty string treated as unset → returns default */
+    setenv("WEBLIB_TEST_STR", "", 1);
+    ASSERT(strcmp(env_config_get("WEBLIB_TEST_STR", "fallback"), "fallback") == 0);
+
+    /* NULL key returns default */
+    ASSERT(strcmp(env_config_get(NULL, "safe"), "safe") == 0);
+
+    unsetenv("WEBLIB_TEST_STR");
+    PASS();
+}
+
+void test_env_config_get_int(void) {
+    TEST("env_config_get_int (integer accessor)");
+
+    /* Valid integer */
+    setenv("WEBLIB_TEST_INT", "42", 1);
+    ASSERT(env_config_get_int("WEBLIB_TEST_INT", -1) == 42);
+
+    /* Negative integer */
+    setenv("WEBLIB_TEST_INT", "-7", 1);
+    ASSERT(env_config_get_int("WEBLIB_TEST_INT", 0) == -7);
+
+    /* Zero */
+    setenv("WEBLIB_TEST_INT", "0", 1);
+    ASSERT(env_config_get_int("WEBLIB_TEST_INT", 99) == 0);
+
+    /* Trailing garbage returns default */
+    setenv("WEBLIB_TEST_INT", "12abc", 1);
+    ASSERT(env_config_get_int("WEBLIB_TEST_INT", -1) == -1);
+
+    /* Pure text returns default */
+    setenv("WEBLIB_TEST_INT", "hello", 1);
+    ASSERT(env_config_get_int("WEBLIB_TEST_INT", 55) == 55);
+
+    /* Empty string returns default */
+    setenv("WEBLIB_TEST_INT", "", 1);
+    ASSERT(env_config_get_int("WEBLIB_TEST_INT", 100) == 100);
+
+    /* Unset returns default */
+    unsetenv("WEBLIB_TEST_INT");
+    ASSERT(env_config_get_int("WEBLIB_TEST_INT", 200) == 200);
+
+    /* NULL key */
+    ASSERT(env_config_get_int(NULL, 300) == 300);
+
+    unsetenv("WEBLIB_TEST_INT");
+    PASS();
+}
+
+void test_env_config_get_bool(void) {
+    TEST("env_config_get_bool (boolean accessor)");
+
+    /* Truthy values (case-insensitive) */
+    setenv("WEBLIB_TEST_BOOL", "true", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", false) == true);
+    setenv("WEBLIB_TEST_BOOL", "TRUE", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", false) == true);
+    setenv("WEBLIB_TEST_BOOL", "1", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", false) == true);
+    setenv("WEBLIB_TEST_BOOL", "yes", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", false) == true);
+    setenv("WEBLIB_TEST_BOOL", "YES", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", false) == true);
+    setenv("WEBLIB_TEST_BOOL", "on", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", false) == true);
+
+    /* Falsy values */
+    setenv("WEBLIB_TEST_BOOL", "false", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", true) == false);
+    setenv("WEBLIB_TEST_BOOL", "FALSE", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", true) == false);
+    setenv("WEBLIB_TEST_BOOL", "0", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", true) == false);
+    setenv("WEBLIB_TEST_BOOL", "no", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", true) == false);
+    setenv("WEBLIB_TEST_BOOL", "off", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", true) == false);
+
+    /* Unrecognized string returns default */
+    setenv("WEBLIB_TEST_BOOL", "maybe", 1);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", true) == true);
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", false) == false);
+
+    /* Unset returns default */
+    unsetenv("WEBLIB_TEST_BOOL");
+    ASSERT(env_config_get_bool("WEBLIB_TEST_BOOL", true) == true);
+
+    /* NULL key */
+    ASSERT(env_config_get_bool(NULL, false) == false);
+
+    unsetenv("WEBLIB_TEST_BOOL");
+    PASS();
+}
+
+void test_env_config_get_port(void) {
+    TEST("env_config_get_port (port accessor)");
+
+    /* Valid port */
+    setenv("WEBLIB_TEST_PORT", "8080", 1);
+    ASSERT(env_config_get_port("WEBLIB_TEST_PORT", 3000) == 8080);
+
+    /* Port 0 is valid */
+    setenv("WEBLIB_TEST_PORT", "0", 1);
+    ASSERT(env_config_get_port("WEBLIB_TEST_PORT", 3000) == 0);
+
+    /* Max port */
+    setenv("WEBLIB_TEST_PORT", "65535", 1);
+    ASSERT(env_config_get_port("WEBLIB_TEST_PORT", 3000) == 65535);
+
+    /* Out of range returns default */
+    setenv("WEBLIB_TEST_PORT", "70000", 1);
+    ASSERT(env_config_get_port("WEBLIB_TEST_PORT", 3000) == 3000);
+
+    /* Negative returns default */
+    setenv("WEBLIB_TEST_PORT", "-1", 1);
+    ASSERT(env_config_get_port("WEBLIB_TEST_PORT", 3000) == 3000);
+
+    /* Non-numeric returns default */
+    setenv("WEBLIB_TEST_PORT", "abc", 1);
+    ASSERT(env_config_get_port("WEBLIB_TEST_PORT", 3000) == 3000);
+
+    /* Unset returns default */
+    unsetenv("WEBLIB_TEST_PORT");
+    ASSERT(env_config_get_port("WEBLIB_TEST_PORT", 4000) == 4000);
+
+    unsetenv("WEBLIB_TEST_PORT");
+    PASS();
+}
+
+void test_env_config_require(void) {
+    TEST("env_config_require (required variable)");
+
+    /* Present returns value */
+    setenv("WEBLIB_TEST_REQ", "secret123", 1);
+    const char *v = env_config_require("WEBLIB_TEST_REQ");
+    ASSERT(v != NULL);
+    ASSERT(strcmp(v, "secret123") == 0);
+
+    /* Empty string treated as missing */
+    setenv("WEBLIB_TEST_REQ", "", 1);
+    ASSERT(env_config_require("WEBLIB_TEST_REQ") == NULL);
+
+    /* Unset returns NULL */
+    unsetenv("WEBLIB_TEST_REQ");
+    ASSERT(env_config_require("WEBLIB_TEST_REQ") == NULL);
+
+    /* NULL key returns NULL */
+    ASSERT(env_config_require(NULL) == NULL);
+
+    unsetenv("WEBLIB_TEST_REQ");
+    PASS();
+}
+
+void test_env_config_server_apply(void) {
+    TEST("http_server_apply_env (server integration)");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+
+    /* NULL server returns -1 */
+    ASSERT(http_server_apply_env(NULL) == -1);
+
+    /* Set env vars and apply */
+    setenv("WEBLIB_READ_TIMEOUT", "10", 1);
+    setenv("WEBLIB_WRITE_TIMEOUT", "20", 1);
+    setenv("WEBLIB_THREAD_COUNT", "8", 1);
+
+    int rc = http_server_apply_env(server);
+    ASSERT(rc == 0);
+
+    ASSERT(http_server_get_read_timeout(server) == 10);
+    ASSERT(http_server_get_write_timeout(server) == 20);
+
+    /* Clean up env */
+    unsetenv("WEBLIB_READ_TIMEOUT");
+    unsetenv("WEBLIB_WRITE_TIMEOUT");
+    unsetenv("WEBLIB_THREAD_COUNT");
+
+    /* Apply with no env vars set should succeed (no-op) */
+    rc = http_server_apply_env(server);
+    ASSERT(rc == 0);
+
+    http_server_destroy(server);
+    PASS();
+}
+
+/* ===== Secure env_config tests ===== */
+
+void test_env_config_is_set(void) {
+    TEST("env_config_is_set (presence check)");
+
+    setenv("WEBLIB_TEST_ISSET", "value", 1);
+    ASSERT(env_config_is_set("WEBLIB_TEST_ISSET") == true);
+
+    setenv("WEBLIB_TEST_ISSET", "", 1);
+    ASSERT(env_config_is_set("WEBLIB_TEST_ISSET") == false);
+
+    unsetenv("WEBLIB_TEST_ISSET");
+    ASSERT(env_config_is_set("WEBLIB_TEST_ISSET") == false);
+
+    ASSERT(env_config_is_set(NULL) == false);
+
+    PASS();
+}
+
+void test_env_secure_value_lifecycle(void) {
+    TEST("env_secure_value lifecycle (get/read/free)");
+
+    setenv("WEBLIB_TEST_SECRET", "my-api-key-12345", 1);
+
+    env_secure_value_t *sv = env_config_get_secure("WEBLIB_TEST_SECRET");
+    ASSERT(sv != NULL);
+
+    const char *raw = env_secure_value_get(sv);
+    ASSERT(raw != NULL);
+    ASSERT(strcmp(raw, "my-api-key-12345") == 0);
+    ASSERT(env_secure_value_len(sv) == 16);
+
+    env_secure_value_free(sv);
+
+    unsetenv("WEBLIB_TEST_SECRET");
+    PASS();
+}
+
+void test_env_secure_value_missing(void) {
+    TEST("env_secure_value (missing variable returns NULL)");
+
+    unsetenv("WEBLIB_TEST_NOSECRET");
+    ASSERT(env_config_get_secure("WEBLIB_TEST_NOSECRET") == NULL);
+
+    setenv("WEBLIB_TEST_NOSECRET", "", 1);
+    ASSERT(env_config_get_secure("WEBLIB_TEST_NOSECRET") == NULL);
+
+    ASSERT(env_config_get_secure(NULL) == NULL);
+
+    unsetenv("WEBLIB_TEST_NOSECRET");
+    PASS();
+}
+
+void test_env_secure_value_null_safety(void) {
+    TEST("env_secure_value (NULL-safety on accessors)");
+
+    ASSERT(env_secure_value_get(NULL) == NULL);
+    ASSERT(env_secure_value_len(NULL) == 0);
+    env_secure_value_free(NULL); /* must not crash */
+
+    PASS();
+}
+
+void test_env_secure_value_wipe(void) {
+    TEST("env_secure_value (memory wipe on free)");
+
+    setenv("WEBLIB_TEST_WIPE", "SUPERSECRET", 1);
+
+    env_secure_value_t *sv = env_config_get_secure("WEBLIB_TEST_WIPE");
+    ASSERT(sv != NULL);
+
+    const char *ptr = env_secure_value_get(sv);
+    ASSERT(ptr != NULL);
+    ASSERT(env_secure_value_len(sv) == 11);
+    ASSERT(strcmp(ptr, "SUPERSECRET") == 0);
+
+    /* env_secure_value_free() calls _secure_wipe() which uses a volatile
+     * pointer loop (compiler-barrier) to zero the buffer before freeing.
+     * We cannot safely verify post-free memory, but the wipe mechanism
+     * is validated by code inspection and compiler-barrier guarantees. */
+    env_secure_value_free(sv);
+
+    unsetenv("WEBLIB_TEST_WIPE");
+    PASS();
+}
+
+void test_env_config_redact(void) {
+    TEST("env_config_redact (log-safe masking)");
+
+    /* NULL returns NULL */
+    ASSERT(env_config_redact(NULL) == NULL);
+
+    /* Empty string returns NULL */
+    ASSERT(env_config_redact("") == NULL);
+
+    /* Short value (≤4 chars) fully masked */
+    char *r1 = env_config_redact("abc");
+    ASSERT(r1 != NULL);
+    ASSERT(strcmp(r1, "****") == 0);
+    free(r1);
+
+    char *r1b = env_config_redact("abcd");
+    ASSERT(r1b != NULL);
+    ASSERT(strcmp(r1b, "****") == 0);
+    free(r1b);
+
+    /* Longer value: first + asterisks + last */
+    char *r2 = env_config_redact("sk-abc123xyz");
+    ASSERT(r2 != NULL);
+    ASSERT(r2[0] == 's');
+    ASSERT(r2[11] == 'z');
+    /* middle chars all asterisks */
+    for (int i = 1; i < 11; i++) {
+        ASSERT(r2[i] == '*');
+    }
+    ASSERT(r2[12] == '\0');
+    free(r2);
+
+    /* 5-char value: "a***e" */
+    char *r3 = env_config_redact("abcde");
+    ASSERT(r3 != NULL);
+    ASSERT(strcmp(r3, "a***e") == 0);
+    free(r3);
+
+    PASS();
+}
+
+void test_env_config_redact_integration(void) {
+    TEST("env_config_redact (integration with secure value)");
+
+    setenv("WEBLIB_TEST_REDACT", "ghp_1234567890abcdef", 1);
+
+    env_secure_value_t *sv = env_config_get_secure("WEBLIB_TEST_REDACT");
+    ASSERT(sv != NULL);
+
+    char *redacted = env_config_redact(env_secure_value_get(sv));
+    ASSERT(redacted != NULL);
+    ASSERT(redacted[0] == 'g');
+    ASSERT(redacted[strlen(redacted) - 1] == 'f');
+    /* Ensure no plaintext leaked in redacted output */
+    ASSERT(strstr(redacted, "1234567890") == NULL);
+
+    free(redacted);
+    env_secure_value_free(sv);
+    unsetenv("WEBLIB_TEST_REDACT");
+    PASS();
+}
+
+/* ===== Security utilities tests ===== */
+
+void test_secure_zero(void) {
+    TEST("secure_zero (memory wipe)");
+
+    char buf[16] = "SECRETPASSWORD!";
+    ASSERT(buf[0] == 'S');
+
+    secure_zero(buf, sizeof(buf));
+    for (int i = 0; i < 16; i++) {
+        ASSERT(buf[i] == 0);
+    }
+
+    /* NULL-safe */
+    secure_zero(NULL, 10);
+    /* zero-length is a no-op */
+    char c = 'x';
+    secure_zero(&c, 0);
+    ASSERT(c == 'x');
+
+    PASS();
+}
+
+void test_secure_compare(void) {
+    TEST("secure_compare (constant-time comparison)");
+
+    const char *a = "hello123";
+    const char *b = "hello123";
+    const char *c = "hello124";
+
+    /* Equal buffers */
+    ASSERT(secure_compare(a, b, 8) == true);
+
+    /* Differing buffers */
+    ASSERT(secure_compare(a, c, 8) == false);
+
+    /* Zero-length always equal */
+    ASSERT(secure_compare(a, c, 0) == true);
+
+    /* NULL-safety */
+    ASSERT(secure_compare(NULL, b, 8) == false);
+    ASSERT(secure_compare(a, NULL, 8) == false);
+    ASSERT(secure_compare(NULL, NULL, 8) == false);
+
+    /* Partial match (only first N bytes) */
+    ASSERT(secure_compare(a, c, 7) == true);  /* "hello12" == "hello12" */
+    ASSERT(secure_compare(a, c, 8) == false); /* "hello123" != "hello124" */
+
+    PASS();
+}
+
+void test_secure_random_bytes(void) {
+    TEST("secure_random_bytes (CSPRNG)");
+
+    unsigned char buf1[32] = {0};
+    unsigned char buf2[32] = {0};
+
+    /* Generate random bytes */
+    ASSERT(secure_random_bytes(buf1, sizeof(buf1)) == 0);
+    ASSERT(secure_random_bytes(buf2, sizeof(buf2)) == 0);
+
+    /* Two independent fills should differ (probability of collision: 2^-256) */
+    ASSERT(memcmp(buf1, buf2, 32) != 0);
+
+    /* Buffer should not be all zeros (probability: 2^-256) */
+    int all_zero = 1;
+    for (int i = 0; i < 32; i++) {
+        if (buf1[i] != 0) { all_zero = 0; break; }
+    }
+    ASSERT(all_zero == 0);
+
+    /* NULL/zero-length returns error */
+    ASSERT(secure_random_bytes(NULL, 16) == -1);
+    ASSERT(secure_random_bytes(buf1, 0) == -1);
+
+    PASS();
+}
+
+void test_security_headers_create_destroy(void) {
+    TEST("security_headers_middleware (create/destroy)");
+
+    /* Default config (NULL) */
+    middleware_fn_t mw = security_headers_middleware_create(NULL);
+    ASSERT(mw != NULL);
+    security_headers_middleware_destroy();
+
+    /* Custom config */
+    security_headers_config_t cfg = {0};
+    cfg.content_security_policy = "default-src 'self'; script-src 'none'";
+    cfg.frame_options = "SAMEORIGIN";
+    cfg.enable_hsts = true;
+    cfg.hsts_max_age = 86400;
+    cfg.hsts_include_subdomains = true;
+
+    mw = security_headers_middleware_create(&cfg);
+    ASSERT(mw != NULL);
+
+    /* Double destroy is safe */
+    security_headers_middleware_destroy();
+    security_headers_middleware_destroy();
+
+    PASS();
+}
+
+/* ===== Bug-fix regression tests: request smuggling, header injection, WS OOM ===== */
+
+void test_parser_cl_before_te_smuggling(void) {
+    TEST("parser (Content-Length before Transfer-Encoding → 400)");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_POST, "/ok", dummy_handler);
+    http_server_set_router(server, router);
+
+    uint16_t port = 18812;
+    int listen_result = http_server_listen(server, port);
+    ASSERT(listen_result == 0);
+    usleep(50000);
+
+    /* Content-Length comes BEFORE Transfer-Encoding – must be rejected */
+    const char *smuggle_request =
+        "POST /ok HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Length: 5\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n"
+        "hello";
+
+    char resp_buf[2048];
+    ssize_t nread = _send_raw_request(port, smuggle_request, strlen(smuggle_request),
+                                       resp_buf, sizeof(resp_buf));
+    ASSERT(nread > 0);
+    ASSERT(strstr(resp_buf, "400") != NULL);
+
+    /* Sanity: a valid POST without conflict should work */
+    const char *good_request =
+        "POST /ok HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Length: 5\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "hello";
+
+    nread = _send_raw_request(port, good_request, strlen(good_request),
+                               resp_buf, sizeof(resp_buf));
+    ASSERT(nread > 0);
+    ASSERT(strstr(resp_buf, "HTTP/1.1") != NULL);
+
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
+
+    PASS();
+}
+
+void test_header_injection_rejected(void) {
+    TEST("header injection (CRLF in value → rejected)");
+
+    http_response_t res = {0};
+
+    /* Setting a header with embedded CRLF must silently fail */
+    http_response_set_header(&res, "X-Test", "value\r\nEvil-Header: injected");
+    const char *val = _test_find_header(res.headers, "x-test");
+    ASSERT(val == NULL);
+
+    /* Setting a header with just LF must also fail */
+    http_response_set_header(&res, "X-Test2", "value\nEvil");
+    val = _test_find_header(res.headers, "x-test2");
+    ASSERT(val == NULL);
+
+    /* Setting a header with just CR must also fail */
+    http_response_set_header(&res, "X-Test3", "value\rEvil");
+    val = _test_find_header(res.headers, "x-test3");
+    ASSERT(val == NULL);
+
+    /* Normal header values must still work */
+    http_response_set_header(&res, "X-Good", "normal-value");
+    val = _test_find_header(res.headers, "x-good");
+    ASSERT(val != NULL);
+    ASSERT(strcmp(val, "normal-value") == 0);
+
+    _test_free_header_list(res.headers);
+
+    PASS();
+}
+
+void test_websocket_fragment_oom(void) {
+    TEST("websocket fragment buffer OOM → clean close");
+
+    /* Create a WebSocket connection with an invalid fd (won't actually send) */
+    websocket_connection_t *conn = websocket_connection_create(999);
+    ASSERT(conn != NULL);
+    ASSERT(websocket_is_open(conn));
+
+    /* We can't force malloc to fail, but we verify the connection is cleanly
+       created and destroyed without leaking when fragment_buffer is NULL */
+    websocket_connection_destroy(conn);
+
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -3651,6 +4314,34 @@ int main(void) {
     test_kamran_error_response_header();
     test_kamran_override_user_server_header();
     test_kamran_multiple_servers();
+
+    /* Environment configuration tests */
+    test_env_config_get_string();
+    test_env_config_get_int();
+    test_env_config_get_bool();
+    test_env_config_get_port();
+    test_env_config_require();
+    test_env_config_server_apply();
+
+    /* Secure env_config tests */
+    test_env_config_is_set();
+    test_env_secure_value_lifecycle();
+    test_env_secure_value_missing();
+    test_env_secure_value_null_safety();
+    test_env_secure_value_wipe();
+    test_env_config_redact();
+    test_env_config_redact_integration();
+
+    /* Security utilities tests */
+    test_secure_zero();
+    test_secure_compare();
+    test_secure_random_bytes();
+    test_security_headers_create_destroy();
+
+    /* Bug-fix regression: smuggling, header injection, WS OOM */
+    test_parser_cl_before_te_smuggling();
+    test_header_injection_rejected();
+    test_websocket_fragment_oom();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

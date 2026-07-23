@@ -16,7 +16,7 @@
  * 3. Send messages and see them echoed back
  */
 
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,7 +110,8 @@ void handle_websocket(http_request_t *req, http_response_t *res) {
 void handle_index(http_request_t *req, http_response_t *res) {
     (void)req;
     
-    const char *html = 
+    /* Split HTML into two parts to stay within ISO C99 string literal limits */
+    static const char html_head[] =
         "<!DOCTYPE html>\n"
         "<html>\n"
         "<head>\n"
@@ -148,8 +149,9 @@ void handle_index(http_request_t *req, http_response_t *res) {
         "        let ws = null;\n"
         "        const status = document.getElementById('status');\n"
         "        const messages = document.getElementById('messages');\n"
-        "        const messageInput = document.getElementById('message');\n"
-        "        \n"
+        "        const messageInput = document.getElementById('message');\n";
+
+    static const char html_body[] =
         "        function addMessage(msg, className = '') {\n"
         "            const div = document.createElement('div');\n"
         "            div.className = 'message ' + className;\n"
@@ -173,14 +175,14 @@ void handle_index(http_request_t *req, http_response_t *res) {
         "                document.getElementById('send').disabled = false;\n"
         "                document.getElementById('sendBin').disabled = false;\n"
         "                document.getElementById('ping').disabled = false;\n"
-        "                addMessage('✓ Connected to server', 'success');\n"
+        "                addMessage('Connected to server', 'success');\n"
         "            };\n"
         "            \n"
         "            ws.onmessage = function(event) {\n"
         "                if (event.data instanceof Blob) {\n"
-        "                    addMessage('← Received binary: ' + event.data.size + ' bytes');\n"
+        "                    addMessage('Received binary: ' + event.data.size + ' bytes');\n"
         "                } else {\n"
-        "                    addMessage('← ' + event.data);\n"
+        "                    addMessage('Server: ' + event.data);\n"
         "                }\n"
         "            };\n"
         "            \n"
@@ -193,12 +195,12 @@ void handle_index(http_request_t *req, http_response_t *res) {
         "                document.getElementById('send').disabled = true;\n"
         "                document.getElementById('sendBin').disabled = true;\n"
         "                document.getElementById('ping').disabled = true;\n"
-        "                addMessage('✗ Connection closed', 'error');\n"
+        "                addMessage('Connection closed', 'error');\n"
         "                ws = null;\n"
         "            };\n"
         "            \n"
         "            ws.onerror = function(error) {\n"
-        "                addMessage('✗ Error occurred', 'error');\n"
+        "                addMessage('Error occurred', 'error');\n"
         "            };\n"
         "        }\n"
         "        \n"
@@ -212,23 +214,21 @@ void handle_index(http_request_t *req, http_response_t *res) {
         "            const msg = messageInput.value;\n"
         "            if (ws && msg) {\n"
         "                ws.send(msg);\n"
-        "                addMessage('→ ' + msg);\n"
+        "                addMessage('Sent: ' + msg);\n"
         "                messageInput.value = '';\n"
         "            }\n"
         "        }\n"
         "        \n"
         "        function sendBinary() {\n"
         "            if (ws) {\n"
-        "                const data = new Uint8Array([72, 101, 108, 108, 111]); // 'Hello' in ASCII\n"
+        "                const data = new Uint8Array([72, 101, 108, 108, 111]);\n"
         "                ws.send(data.buffer);\n"
-        "                addMessage('→ Sent binary: ' + data.length + ' bytes');\n"
+        "                addMessage('Sent binary: ' + data.length + ' bytes');\n"
         "            }\n"
         "        }\n"
         "        \n"
         "        function sendPing() {\n"
         "            if (ws) {\n"
-        "                // Note: Browser WebSocket API doesn't expose ping/pong directly\n"
-        "                // This is handled automatically by the browser\n"
         "                addMessage('Ping/pong is handled automatically by the browser', 'status');\n"
         "            }\n"
         "        }\n"
@@ -241,7 +241,11 @@ void handle_index(http_request_t *req, http_response_t *res) {
         "    </script>\n"
         "</body>\n"
         "</html>";
-    
+
+    char html[sizeof(html_head) + sizeof(html_body) - 1];
+    memcpy(html, html_head, sizeof(html_head) - 1);
+    memcpy(html + sizeof(html_head) - 1, html_body, sizeof(html_body));
+
     http_response_set_header(res, "Content-Type", "text/html");
     http_response_send_text(res, HTTP_OK, html);
 }

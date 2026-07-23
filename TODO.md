@@ -175,6 +175,74 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - HTML sanitization (XSS prevention)
   - Alphanumeric check
 
+- [x] ✅ **Security Headers Middleware** - Defense-in-depth HTTP headers
+  - Content-Security-Policy (XSS prevention)
+  - X-Content-Type-Options: nosniff (MIME sniffing prevention)
+  - X-Frame-Options (clickjacking protection)
+  - Strict-Transport-Security / HSTS (opt-in HTTPS enforcement)
+  - Referrer-Policy (referrer leakage control)
+  - Permissions-Policy (browser feature restriction)
+  - Configurable per-header overrides
+
+- [x] ✅ **Security Utilities** - Core cryptographic primitives
+  - `secure_zero()` — compiler-barrier memory wipe (volatile / memset_s)
+  - `secure_compare()` — constant-time comparison (timing attack prevention)
+  - `secure_random_bytes()` — CSPRNG via /dev/urandom or BCryptGenRandom
+
+- [x] ✅ **Secure Secret Handling** - Protect keys in memory
+  - `env_config_get_secure()` — heap-isolated secret buffers
+  - `env_secure_value_free()` — scrubs memory before free
+  - `env_config_redact()` — log-safe masking of secrets
+  - `env_config_is_set()` — presence check without value exposure
+
+### Security — Phase 11 (Planned)
+
+- [ ] 🎯 **SSL/TLS 1.2+ Support** - Pure C transport encryption
+  - Custom TLS implementation (zero external dependencies)
+  - AES-128/256-GCM cipher suites
+  - RSA and ECDSA certificate support
+  - PEM certificate/key parsing
+  - SNI (Server Name Indication)
+  - `http_server_enable_tls(server, cert_path, key_path)` API
+  - TLS private key memory protection (`mlock()` + `secure_zero()`)
+
+- [ ] 🎯 **Password Hashing** - Secure credential storage (pure C)
+  - PBKDF2-HMAC-SHA256 (RFC 2898) with configurable iterations
+  - `password_hash_create()` / `password_hash_verify()` API
+  - Automatic salt generation via `secure_random_bytes()`
+  - Timing-safe verification via `secure_compare()`
+  - Tunable work factor for future-proofing
+
+- [ ] 🎯 **Key Derivation Functions** - Derive keys from secrets
+  - HKDF (RFC 5869) — extract-then-expand key derivation
+  - PBKDF2 (RFC 2898) — password-based key derivation
+  - Used internally by TLS and password hashing modules
+
+- [ ] 🔧 **Request ID Middleware** - Trace correlation
+  - Generate unique request ID per request (UUID v4 or random hex)
+  - Set `X-Request-Id` response header
+  - Propagate incoming `X-Request-Id` if present
+  - Integrate with logging middleware
+
+- [ ] 🔧 **IP Allowlist / Denylist Middleware** - Network-level access control
+  - Configurable IP allowlists and denylists
+  - CIDR range support
+  - Per-route or global application
+
+- [ ] 🔧 **Content-Length Enforcement** - Body size hardening
+  - Per-route maximum body size configuration
+  - Reject oversized payloads before buffering
+  - Streaming rejection (close connection early)
+
+- [ ] 💡 **Certificate Pinning** - Advanced TLS verification
+  - Pin expected server certificate fingerprints
+  - Detect MITM attacks on outbound connections
+
+- [ ] 💡 **Security Audit Tooling** - Automated vulnerability detection
+  - Built-in fuzz testing harness for HTTP parser
+  - Memory sanitizer (ASan/MSan) CI integration
+  - Static analysis rules for common C vulnerabilities
+
 ### Server Lifecycle
 
 - [x] ✅ **Graceful Shutdown & Thread Management** - Reliable server teardown
@@ -342,6 +410,9 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - ✅ **Response Compression** - Pure C gzip (RFC 1952) with DEFLATE (RFC 1951), Accept-Encoding negotiation
 - ✅ **Async WebSocket** - Event loop integration, non-blocking I/O, write queue, connection manager
 - ✅ **Benchmarking Suite** - High-resolution timing, throughput/latency measurement, percentile statistics
+- ✅ **Security Headers Middleware** - CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy
+- ✅ **Security Utilities** - `secure_zero()`, `secure_compare()`, `secure_random_bytes()` — core crypto primitives
+- ✅ **Secure Secret Handling** - Heap-isolated secrets with memory wipe, log-safe redaction, presence checks
 
 ## Community Requests
 
@@ -365,6 +436,7 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 - **Phase 8 (v0.8.0)**: ✅ Security & Observability — CSRF middleware ✅, logging ✅, error handler ✅, input validation ✅, health check ✅
 - **Phase 9 (v0.9.0)**: ✅ Performance & Observability — caching layer ✅, metrics middleware ✅, response compression ✅, async WebSocket ✅, benchmarking suite ✅
 - **Phase 10 (v1.0.0)**: ✅ Release Readiness — REST API example ✅, tutorials ✅, documentation ✅, CHANGELOG ✅, semantic versioning ✅
+- **Phase 11 (v1.1.0)**: 🚧 Advanced Security — TLS 1.2+ (pure C) 🎯, password hashing (PBKDF2) 🎯, key derivation (HKDF) 🎯, request ID 🔧, IP allowlist/denylist 🔧, fuzz testing 💡
 
 ### v2.0.0 Planned Phases
 
@@ -403,5 +475,5 @@ Priorities may change based on community feedback and project direction.
 
 ---
 
-**Last Updated**: 2026-02-22  
+**Last Updated**: 2026-03-02  
 **Maintainer**: [@kamrankhan78694](https://github.com/kamrankhan78694)

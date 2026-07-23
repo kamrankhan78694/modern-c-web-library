@@ -1,5 +1,5 @@
-#ifndef WEBLIB_H
-#define WEBLIB_H
+#ifndef KAMRAN_K_H
+#define KAMRAN_K_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -10,15 +10,65 @@ extern "C" {
 #include <stdbool.h>
 #include <stdio.h>
 
+/* ===== WebAssembly Support ===== */
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#define WASM_EXPORT EMSCRIPTEN_KEEPALIVE
+#define WEBLIB_WASM 1
+#else
+#define WASM_EXPORT
+#define WEBLIB_WASM 0
+#endif
+
 /* ===== Library Identity ===== */
 #define WEBLIB_AUTHOR_KAMRAN "kamran"
-#define WEBLIB_VERSION_STRING "weblib/1.0 (author:" WEBLIB_AUTHOR_KAMRAN ")"
+
+/* ===== Semantic Versioning (https://semver.org/) ===== */
+/**
+ * Version components follow Semantic Versioning 2.0.0:
+ *   MAJOR — incremented for incompatible API changes
+ *   MINOR — incremented for backwards-compatible new functionality
+ *   PATCH — incremented for backwards-compatible bug fixes
+ *
+ * Update these macros (and CMakeLists.txt project VERSION) when releasing.
+ */
+#define WEBLIB_VERSION_MAJOR 1
+#define WEBLIB_VERSION_MINOR 0
+#define WEBLIB_VERSION_PATCH 0
+
+/** Full version string in "MAJOR.MINOR.PATCH" form. */
+#define WEBLIB_VERSION "1.0.0"
+
+/** Server identity string embedded in HTTP Server header. */
+#define WEBLIB_VERSION_STRING "weblib/" WEBLIB_VERSION " (author:" WEBLIB_AUTHOR_KAMRAN ")"
+
+/**
+ * Encode a version triplet as a single integer for compile-time comparison.
+ * Example: WEBLIB_VERSION_ENCODE(1, 2, 3) → 10203
+ */
+#define WEBLIB_VERSION_ENCODE(major, minor, patch) \
+    (((major) * 10000) + ((minor) * 100) + (patch))
+
+/** Current library version as an encoded integer. */
+#define WEBLIB_VERSION_NUMBER \
+    WEBLIB_VERSION_ENCODE(WEBLIB_VERSION_MAJOR, WEBLIB_VERSION_MINOR, WEBLIB_VERSION_PATCH)
 
 /**
  * Return the library signature string (contains author watermark).
  * This is embedded in every HTTP response as the Server header.
  */
 const char *weblib_kamran_signature(void);
+
+/**
+ * Return the library version string (e.g. "1.0.0").
+ */
+const char *weblib_version(void);
+
+/**
+ * Return the library version as individual numeric components.
+ * Any pointer may be NULL if the caller does not need that component.
+ */
+void weblib_version_components(int *major, int *minor, int *patch);
 
 /* HTTP Methods */
 typedef enum {
@@ -94,6 +144,7 @@ struct http_form_field {
 
 /* Body parser context stored in request */
 struct body_parser_data {
+    unsigned int magic;  /* Type tag: BODY_PARSER_MAGIC */
     http_form_field_t *fields;
     http_uploaded_file_t *files;
     bool parsed;
@@ -1619,8 +1670,679 @@ int benchmark_run(uint16_t port, const char *path,
  */
 void benchmark_print(FILE *fp, const benchmark_stats_t *stats);
 
+/* ===== Environment Configuration API ===== */
+
+/*
+ * Type-safe helpers for reading environment variables.
+ *
+ * Designed for library consumers who configure their applications via
+ * environment variables – the standard mechanism used by GitHub Secrets,
+ * GitHub Variables, Docker, Kubernetes, and all major CI/CD systems.
+ *
+ * You choose the variable names.  The library just provides typed accessors
+ * so there is zero learning curve:
+ *
+ *   const char *db  = env_config_get("DB_URL", "postgres://localhost/mydb");
+ *   int         port = env_config_get_int("PORT", 8080);
+ *   bool        debug = env_config_get_bool("DEBUG", false);
+ *   const char *key  = env_config_require("API_KEY");   // NULL if missing
+ */
+
+/**
+ * Get a string environment variable with a fallback default.
+ * Works with any env var name – use your own GitHub Secret / Variable names.
+ * @param key           Environment variable name (e.g. "DATABASE_URL")
+ * @param default_value Value returned when key is unset or empty
+ * @return The env value or default_value (never NULL when default_value != NULL)
+ */
+const char *env_config_get(const char *key, const char *default_value);
+
+/**
+ * Get an integer environment variable with a fallback default.
+ * Returns default_value when the key is unset, empty, or not a valid integer.
+ * @param key           Environment variable name (e.g. "PORT", "TIMEOUT")
+ * @param default_value Value returned on missing/invalid input
+ * @return Parsed integer or default_value
+ */
+int env_config_get_int(const char *key, int default_value);
+
+/**
+ * Get a boolean environment variable with a fallback default.
+ * Truthy values: "1", "true", "yes", "on" (case-insensitive).
+ * Falsy  values: "0", "false", "no", "off" (case-insensitive).
+ * @param key           Environment variable name (e.g. "DEBUG", "ENABLE_TLS")
+ * @param default_value Value returned on missing/unrecognized input
+ * @return Parsed boolean or default_value
+ */
+bool env_config_get_bool(const char *key, bool default_value);
+
+/**
+ * Get a port number (uint16_t) environment variable with a fallback default.
+ * Returns default_value when the key is unset, empty, or outside 0-65535.
+ * @param key           Environment variable name (e.g. "PORT", "LISTEN_PORT")
+ * @param default_value Value returned on missing/invalid input
+ * @return Parsed port or default_value
+ */
+uint16_t env_config_get_port(const char *key, uint16_t default_value);
+
+/**
+ * Require an environment variable – returns NULL if unset or empty.
+ * Ideal for secrets that must be present (e.g. GitHub Secrets injected
+ * as env vars).  Callers can check for NULL and abort with a clear error.
+ * @param key Environment variable name (e.g. "API_KEY", "DB_PASSWORD")
+ * @return The value, or NULL when the variable is missing/empty
+ */
+const char *env_config_require(const char *key);
+
+/**
+ * Check whether an environment variable is set and non-empty.
+ * Useful for checking secret presence without touching the value itself.
+ * @param key Environment variable name
+ * @return true when the variable exists and is non-empty
+ */
+bool env_config_is_set(const char *key);
+
+/* ---- Secure secret handling ------------------------------------------ */
+
+/*
+ * For sensitive values (API keys, passwords, tokens) loaded from GitHub
+ * Secrets or any environment variable, use the secure value API below.
+ *
+ * Why?
+ *  - The secret is copied into a dedicated heap buffer.
+ *  - env_secure_value_free() scrubs that buffer with zeros before freeing,
+ *    using a compiler-barrier technique so the wipe cannot be optimised away.
+ *  - env_config_redact() produces a masked version safe for logging.
+ *  - This limits the window during which the plaintext secret resides in
+ *    process memory and prevents accidental exposure in logs or core dumps.
+ *
+ * Usage:
+ *   env_secure_value_t *key = env_config_get_secure("API_KEY");
+ *   if (!key) { fprintf(stderr, "API_KEY required\n"); exit(1); }
+ *   use_secret(env_secure_value_get(key));
+ *   env_secure_value_free(key);   // secret wiped from memory
+ */
+
+/** Opaque handle to a securely-held secret value. */
+typedef struct env_secure_value env_secure_value_t;
+
+/**
+ * Load a secret from an environment variable into a secure buffer.
+ * The caller must free the result with env_secure_value_free().
+ * @param key Environment variable name (e.g. "API_KEY")
+ * @return Opaque handle, or NULL if the variable is missing/empty
+ */
+env_secure_value_t *env_config_get_secure(const char *key);
+
+/**
+ * Access the raw secret string held by a secure value.
+ * @param sv Secure value handle (NULL-safe → returns NULL)
+ * @return NUL-terminated secret string
+ */
+const char *env_secure_value_get(const env_secure_value_t *sv);
+
+/**
+ * Return the length of the secret (excluding NUL terminator).
+ * @param sv Secure value handle (NULL-safe → returns 0)
+ */
+size_t env_secure_value_len(const env_secure_value_t *sv);
+
+/**
+ * Securely destroy a secret value – wipes memory with zeros before freeing.
+ * Safe to call with NULL.
+ * @param sv Secure value handle
+ */
+void env_secure_value_free(env_secure_value_t *sv);
+
+/**
+ * Return a heap-allocated redacted version of a value, safe for logging.
+ * Short values (≤4 chars) become "***"; longer values show the first and
+ * last character with asterisks in between (e.g. "s**********z").
+ * Caller must free() the returned string.
+ * @param value Raw secret string (NULL → returns NULL)
+ * @return Redacted string, or NULL on error
+ */
+char *env_config_redact(const char *value);
+
+/**
+ * Convenience: apply standard WEBLIB_* environment variables to a server.
+ * Reads WEBLIB_READ_TIMEOUT, WEBLIB_WRITE_TIMEOUT, WEBLIB_THREAD_COUNT,
+ * WEBLIB_MAX_CONNECTIONS, and WEBLIB_ASYNC_MODE.  Unset variables are
+ * silently skipped, so existing programmatic configuration is preserved.
+ * @param server Server instance
+ * @return 0 on success, -1 if server is NULL
+ */
+int http_server_apply_env(http_server_t *server);
+
+/* ===== Security Utilities ===== */
+
+/*
+ * Core security primitives for building secure applications.
+ * All functions are safe to call from any thread.
+ */
+
+/**
+ * Securely wipe memory with zeros using a compiler-barrier technique.
+ * The compiler cannot optimise this away (volatile pointer or memset_s).
+ * Use to scrub secrets (passwords, keys, tokens) before freeing buffers.
+ * @param ptr   Pointer to memory to wipe (NULL-safe → no-op)
+ * @param len   Number of bytes to wipe
+ */
+void secure_zero(void *ptr, size_t len);
+
+/**
+ * Constant-time memory comparison – prevents timing side-channel attacks.
+ * Always compares all bytes regardless of where the first difference is,
+ * so an attacker cannot deduce partial matches from response time.
+ * @param a   First buffer  (NULL → returns false)
+ * @param b   Second buffer (NULL → returns false)
+ * @param len Number of bytes to compare
+ * @return true when all bytes are equal
+ */
+bool secure_compare(const void *a, const void *b, size_t len);
+
+/**
+ * Fill a buffer with cryptographically secure random bytes.
+ * Uses /dev/urandom on POSIX or BCryptGenRandom on Windows.
+ * Suitable for generating session IDs, CSRF tokens, nonces, etc.
+ * @param buf  Destination buffer (must not be NULL)
+ * @param len  Number of random bytes to generate (must be > 0)
+ * @return 0 on success, -1 on failure
+ */
+int secure_random_bytes(void *buf, size_t len);
+
+/* ===== Security Headers Middleware ===== */
+
+/*
+ * Automatically sets industry-standard security headers on every response:
+ *
+ *   Content-Security-Policy    — Restricts resource loading (XSS prevention)
+ *   X-Content-Type-Options     — Prevents MIME type sniffing
+ *   X-Frame-Options            — Clickjacking protection
+ *   Referrer-Policy            — Controls referrer header leakage
+ *   Permissions-Policy         — Disables dangerous browser features
+ *   Strict-Transport-Security  — Forces HTTPS (opt-in via enable_hsts)
+ *   X-XSS-Protection: 0       — Disables legacy XSS filter (CSP is preferred)
+ *
+ * Usage:
+ *   security_headers_config_t cfg = {0};
+ *   cfg.enable_hsts = true;
+ *   cfg.content_security_policy = "default-src 'self'; script-src 'self'";
+ *   middleware_fn_t sec = security_headers_middleware_create(&cfg);
+ *   router_use_middleware(router, sec);
+ *   // ... at shutdown:
+ *   security_headers_middleware_destroy();
+ */
+
+/** Configuration for the security headers middleware. */
+typedef struct security_headers_config {
+    const char *content_security_policy; /**< CSP directive (NULL → "default-src 'self'") */
+    const char *frame_options;           /**< X-Frame-Options value (NULL → "DENY") */
+    const char *referrer_policy;         /**< Referrer-Policy value (NULL → "strict-origin-when-cross-origin") */
+    const char *permissions_policy;      /**< Permissions-Policy value (NULL → "geolocation=(), camera=(), microphone=()") */
+    bool   enable_hsts;                  /**< Set Strict-Transport-Security header */
+    int    hsts_max_age;                 /**< HSTS max-age in seconds (0 → 31536000 = 1 year) */
+    bool   hsts_include_subdomains;      /**< Add includeSubDomains to HSTS */
+} security_headers_config_t;
+
+/**
+ * Create the security headers middleware.
+ * Pass NULL config to use all defaults (CSP: default-src 'self', etc.).
+ * @param config Configuration (NULL for safe defaults)
+ * @return Middleware function pointer, or NULL on allocation failure
+ */
+middleware_fn_t security_headers_middleware_create(
+        const security_headers_config_t *config);
+
+/**
+ * Destroy the security headers middleware and free its configuration.
+ * Safe to call when the middleware was never created (no-op).
+ */
+void security_headers_middleware_destroy(void);
+
+/* ===== Cloudflare Worker Runtime API ===== */
+
+/**
+ * Cloudflare Worker environment binding types.
+ * Each binding corresponds to a Cloudflare service accessible
+ * from the Worker's env object (env.MY_KV, env.MY_BUCKET, etc.).
+ */
+typedef enum {
+    WORKER_BINDING_KV,          /**< KV Namespace           */
+    WORKER_BINDING_R2,          /**< R2 Object Storage      */
+    WORKER_BINDING_D1,          /**< D1 SQL Database         */
+    WORKER_BINDING_QUEUE,       /**< Queue (producer/consumer) */
+    WORKER_BINDING_SECRET,      /**< Secret / env variable   */
+    WORKER_BINDING_SERVICE      /**< Service binding (Worker-to-Worker) */
+} worker_binding_type_t;
+
+/* Forward declarations — Worker types */
+typedef struct worker_request    worker_request_t;
+typedef struct worker_response   worker_response_t;
+typedef struct worker_env        worker_env_t;
+typedef struct worker_kv         worker_kv_t;
+typedef struct worker_r2_bucket  worker_r2_bucket_t;
+typedef struct worker_d1         worker_d1_t;
+typedef struct worker_d1_stmt    worker_d1_stmt_t;
+typedef struct worker_queue      worker_queue_t;
+
+/**
+ * Fetch handler signature for a Cloudflare Worker.
+ * Called by the JS glue layer when the Worker receives a request.
+ */
+typedef worker_response_t *(*worker_fetch_handler_t)(
+    worker_request_t *req, worker_env_t *env);
+
+/* ----- Worker Request ----- */
+
+/** Create a new Worker request with the given HTTP method and URL. */
+worker_request_t *worker_request_create(const char *method, const char *url);
+
+/** Destroy a Worker request and free all associated memory. */
+void worker_request_destroy(worker_request_t *req);
+
+/** Set a header on the Worker request. */
+int worker_request_set_header(worker_request_t *req, const char *name,
+                              const char *value);
+
+/** Get a header value by name (case-insensitive). Returns NULL if absent. */
+const char *worker_request_get_header(const worker_request_t *req,
+                                      const char *name);
+
+/** Set the request body. Pass NULL/0 to clear. */
+int worker_request_set_body(worker_request_t *req, const char *body,
+                            size_t len);
+
+/** Get the HTTP method string (e.g. "GET", "POST"). */
+const char *worker_request_get_method(const worker_request_t *req);
+
+/** Get the request URL string. */
+const char *worker_request_get_url(const worker_request_t *req);
+
+/** Get the request body. If out_len is non-NULL, writes the body length. */
+const char *worker_request_get_body(const worker_request_t *req,
+                                    size_t *out_len);
+
+/* ----- Worker Response ----- */
+
+/** Create a new Worker response with the given HTTP status code. */
+worker_response_t *worker_response_create(int status);
+
+/** Destroy a Worker response and free all associated memory. */
+void worker_response_destroy(worker_response_t *res);
+
+/** Set a header on the Worker response. */
+int worker_response_set_header(worker_response_t *res, const char *name,
+                               const char *value);
+
+/** Get a response header value by name (case-insensitive). */
+const char *worker_response_get_header(const worker_response_t *res,
+                                       const char *name);
+
+/** Set the response body (binary). */
+int worker_response_set_body(worker_response_t *res, const char *body,
+                             size_t len);
+
+/** Set the response body from a NUL-terminated string. */
+int worker_response_set_body_text(worker_response_t *res, const char *text);
+
+/** Set the response body to a JSON-serialised value (sets Content-Type). */
+int worker_response_set_json(worker_response_t *res, json_value_t *json);
+
+/** Get the response HTTP status code. */
+int worker_response_get_status(const worker_response_t *res);
+
+/** Get the response body. If out_len is non-NULL, writes the body length. */
+const char *worker_response_get_body(const worker_response_t *res,
+                                     size_t *out_len);
+
+/* ----- Worker Environment ----- */
+
+/** Create a new Worker environment container for service bindings. */
+worker_env_t *worker_env_create(void);
+
+/** Destroy the Worker environment (does NOT destroy bound handles). */
+void worker_env_destroy(worker_env_t *env);
+
+/** Register a named binding of the given type in the environment. */
+int worker_env_add_binding(worker_env_t *env, const char *name,
+                           worker_binding_type_t type, void *handle);
+
+/** Look up a binding by name and expected type. Returns NULL if absent. */
+void *worker_env_get_binding(const worker_env_t *env, const char *name,
+                             worker_binding_type_t type);
+
+/** Return the number of registered bindings. */
+int worker_env_binding_count(const worker_env_t *env);
+
+/* ----- Fetch Handler ----- */
+
+/** Register a custom fetch handler for the Worker. */
+void worker_set_fetch_handler(worker_fetch_handler_t handler);
+
+/** Set the library router for automatic route matching in Workers. */
+void worker_set_router(router_t *router);
+
+/**
+ * Handle an incoming Worker fetch event.  WASM-exported entry point.
+ * If a custom handler is set, delegates to it; otherwise uses the
+ * library router for route matching.
+ */
+WASM_EXPORT
+worker_response_t *worker_handle_fetch(worker_request_t *req,
+                                       worker_env_t *env);
+
+/* ===== Cloudflare KV Namespace API ===== */
+
+/** Options for worker_kv_put(). All fields optional (zero-init for defaults). */
+typedef struct {
+    int64_t  expiration;       /**< Unix timestamp for absolute expiration. */
+    int      expiration_ttl;   /**< Seconds from now until expiration. */
+    const char *metadata;      /**< Optional JSON metadata string (max 1024 B). */
+} worker_kv_put_options_t;
+
+/** Options for worker_kv_list(). All fields optional. */
+typedef struct {
+    const char *prefix;   /**< Only return keys starting with this prefix. */
+    int         limit;    /**< Max keys to return (default 1000, max 1000). */
+    int         cursor;   /**< Pagination cursor (from previous result). */
+} worker_kv_list_options_t;
+
+/** Result of worker_kv_list(). */
+typedef struct {
+    char **keys;          /**< Array of key strings (caller frees). */
+    int    count;         /**< Number of keys returned. */
+    bool   list_complete; /**< true if all matching keys returned. */
+    int    cursor;        /**< Cursor for next page (0 if complete). */
+} worker_kv_list_result_t;
+
+/** Create a KV namespace handle (simulated in native builds). */
+worker_kv_t *worker_kv_create(const char *namespace_name);
+
+/** Destroy a KV namespace and free all stored entries. */
+void worker_kv_destroy(worker_kv_t *kv);
+
+/** Get the namespace name. */
+const char *worker_kv_get_namespace(const worker_kv_t *kv);
+
+/**
+ * Get a value by key.  Returns a newly-allocated string the caller must
+ * free, or NULL if the key does not exist or is expired.
+ */
+char *worker_kv_get(worker_kv_t *kv, const char *key);
+
+/**
+ * Get a value with its metadata.  Writes a newly-allocated metadata
+ * JSON string to *out_metadata (or NULL).  Caller frees both.
+ */
+char *worker_kv_get_with_metadata(worker_kv_t *kv, const char *key,
+                                  char **out_metadata);
+
+/** Store a key-value pair with optional put options. */
+int worker_kv_put(worker_kv_t *kv, const char *key, const char *value,
+                  const worker_kv_put_options_t *opts);
+
+/** Delete a key. Returns 0 on success, -1 if not found. */
+int worker_kv_delete(worker_kv_t *kv, const char *key);
+
+/** List keys with optional prefix/limit/cursor filtering. */
+worker_kv_list_result_t *worker_kv_list(worker_kv_t *kv,
+                                        const worker_kv_list_options_t *opts);
+
+/** Free a KV list result (including all key strings). */
+void worker_kv_list_result_destroy(worker_kv_list_result_t *result);
+
+/* ===== Cloudflare R2 Object Storage API ===== */
+
+/** An R2 object (returned by get/head/list). */
+typedef struct {
+    char    *key;           /**< Object key. */
+    uint8_t *body;          /**< Object body (NULL for head/list). */
+    size_t   body_len;      /**< Body length. */
+    size_t   size;          /**< Total object size (available even without body). */
+    char    *etag;          /**< ETag string. */
+    char    *content_type;  /**< Content-Type header. */
+    int64_t  uploaded;      /**< Upload timestamp (Unix epoch). */
+} worker_r2_object_t;
+
+/** Options for worker_r2_put(). */
+typedef struct {
+    const char *content_type;   /**< MIME type for the object. */
+} worker_r2_put_options_t;
+
+/** Options for worker_r2_list(). */
+typedef struct {
+    const char *prefix;   /**< Prefix filter. */
+    int         limit;    /**< Max results (default 1000). */
+    int         cursor;   /**< Pagination cursor. */
+} worker_r2_list_options_t;
+
+/** Result of worker_r2_list(). */
+typedef struct {
+    worker_r2_object_t **objects;   /**< Array of object pointers (metadata only). */
+    int    count;                   /**< Number of objects returned. */
+    bool   truncated;               /**< true if more results available. */
+    int    cursor;                  /**< Cursor for next page. */
+} worker_r2_list_result_t;
+
+/** Create an R2 bucket handle. */
+worker_r2_bucket_t *worker_r2_bucket_create(const char *bucket_name);
+
+/** Destroy an R2 bucket and free all stored objects. */
+void worker_r2_bucket_destroy(worker_r2_bucket_t *bucket);
+
+/** Get the bucket name. */
+const char *worker_r2_bucket_get_name(const worker_r2_bucket_t *bucket);
+
+/** Get an object with body. Returns NULL if not found. Caller frees. */
+worker_r2_object_t *worker_r2_get(worker_r2_bucket_t *bucket, const char *key);
+
+/** Get object metadata only (no body). Returns NULL if not found. */
+worker_r2_object_t *worker_r2_head(worker_r2_bucket_t *bucket, const char *key);
+
+/** Store an object. Returns 0 on success. */
+int worker_r2_put(worker_r2_bucket_t *bucket, const char *key,
+                  const uint8_t *body, size_t body_len,
+                  const worker_r2_put_options_t *opts);
+
+/** Delete an object. Returns 0 on success, -1 if not found. */
+int worker_r2_delete(worker_r2_bucket_t *bucket, const char *key);
+
+/** List objects with optional prefix/limit/cursor filtering. */
+worker_r2_list_result_t *worker_r2_list(worker_r2_bucket_t *bucket,
+                                        const worker_r2_list_options_t *opts);
+
+/** Free an R2 object. */
+void worker_r2_object_destroy(worker_r2_object_t *obj);
+
+/** Free an R2 list result (including all contained objects). */
+void worker_r2_list_result_destroy(worker_r2_list_result_t *result);
+
+/* ===== Cloudflare D1 Database API ===== */
+
+/** Result of a D1 query execution. */
+typedef struct {
+    bool          success;        /**< Whether the statement succeeded. */
+    json_value_t *results;        /**< JSON array of row objects (for SELECT). */
+    int           meta_changes;   /**< Number of rows affected (INSERT/DELETE). */
+} worker_d1_result_t;
+
+/** Create a D1 database handle. */
+worker_d1_t *worker_d1_create(const char *database_name);
+
+/** Destroy a D1 database and free all in-memory tables. */
+void worker_d1_destroy(worker_d1_t *db);
+
+/** Get the database name. */
+const char *worker_d1_get_name(const worker_d1_t *db);
+
+/** Prepare a SQL statement.  Returns a statement handle. */
+worker_d1_stmt_t *worker_d1_prepare(worker_d1_t *db, const char *sql);
+
+/** Destroy a prepared statement. */
+void worker_d1_stmt_destroy(worker_d1_stmt_t *stmt);
+
+/** Bind a parameter (1-based index) to a statement. Pass NULL for SQL NULL. */
+int worker_d1_stmt_bind(worker_d1_stmt_t *stmt, int index, const char *value);
+
+/** Execute a prepared statement and return full result with metadata. */
+worker_d1_result_t *worker_d1_stmt_run(worker_d1_stmt_t *stmt);
+
+/** Execute a statement and return only the first row as a JSON object. */
+json_value_t *worker_d1_stmt_first(worker_d1_stmt_t *stmt);
+
+/** Execute a statement and return all rows as a JSON array. */
+json_value_t *worker_d1_stmt_all(worker_d1_stmt_t *stmt);
+
+/**
+ * Execute raw SQL (no parameter binding).
+ * Useful for DDL statements like CREATE TABLE.
+ */
+worker_d1_result_t *worker_d1_exec(worker_d1_t *db, const char *sql);
+
+/**
+ * Execute a batch of prepared statements in sequence.
+ * Returns an array of results on success.
+ * On failure returns NULL; statements executed before the failure are not
+ * guaranteed to be rolled back.
+ */
+worker_d1_result_t **worker_d1_batch(worker_d1_t *db,
+                                     worker_d1_stmt_t **stmts, int count,
+                                     int *out_count);
+
+/** Destroy a D1 result. */
+void worker_d1_result_destroy(worker_d1_result_t *result);
+
+/* ===== Cloudflare Queues API ===== */
+
+/** A single queue message. */
+typedef struct {
+    char   *id;         /**< Unique message ID. */
+    char   *body;       /**< Message body. */
+    size_t  body_len;   /**< Body length. */
+    int64_t timestamp;  /**< Enqueue timestamp (Unix epoch). */
+    int     attempts;   /**< Delivery attempt count. */
+    bool    acked;      /**< Whether message has been acknowledged. */
+} worker_queue_message_t;
+
+/** A batch of consumed messages. */
+typedef struct {
+    worker_queue_message_t **messages;  /**< Array of message pointers. */
+    int                      count;     /**< Number of messages in batch. */
+    char                    *queue_name;/**< Owned copy of the source queue name. */
+} worker_queue_batch_t;
+
+/** Create a queue handle. */
+worker_queue_t *worker_queue_create(const char *queue_name);
+
+/** Destroy a queue and free all pending messages. */
+void worker_queue_destroy(worker_queue_t *q);
+
+/** Get the queue name. */
+const char *worker_queue_get_name(const worker_queue_t *q);
+
+/** Get the current queue depth (pending messages). */
+int worker_queue_get_depth(const worker_queue_t *q);
+
+/** Enqueue a single message (binary body). */
+int worker_queue_send(worker_queue_t *q, const char *body, size_t body_len);
+
+/** Enqueue a text message. */
+int worker_queue_send_text(worker_queue_t *q, const char *text);
+
+/** Enqueue a JSON value (serialised automatically). */
+int worker_queue_send_json(worker_queue_t *q, json_value_t *json);
+
+/** Enqueue a batch of messages (up to 100). Atomic: all or none. */
+int worker_queue_send_batch(worker_queue_t *q, const char **bodies,
+                            const size_t *lengths, int count);
+
+/**
+ * Consume messages from the queue in a batch.
+ * @param max_batch       Max messages to dequeue (1–100).
+ * @param max_wait_seconds Ignored in in-memory impl.
+ * @return Batch of messages.  Caller must destroy with
+ *         worker_queue_batch_destroy().
+ */
+worker_queue_batch_t *worker_queue_consume(worker_queue_t *q, int max_batch,
+                                           int max_wait_seconds);
+
+/** Acknowledge a consumed message (marks as processed). */
+void worker_queue_message_ack(worker_queue_message_t *msg);
+
+/** Destroy a single queue message. */
+void worker_queue_message_destroy(worker_queue_message_t *msg);
+
+/** Destroy a consumed batch (and all messages within). */
+void worker_queue_batch_destroy(worker_queue_batch_t *batch);
+
+/* ===== WebAssembly Runtime API ===== */
+
+/**
+ * Get library version string (WASM-exported).
+ */
+WASM_EXPORT const char *wasm_weblib_version(void);
+
+/**
+ * Get WASM capability descriptor string.
+ * Returns a versioned identifier with parenthesized capability list,
+ * e.g. "weblib-wasm/1.0 (json,router,template,validation,cookie,body_parser,compression)"
+ */
+WASM_EXPORT const char *wasm_weblib_capabilities(void);
+
+/**
+ * Check whether a named capability is available in WASM builds.
+ * @param name  Capability name (e.g. "json", "router")
+ * @return true if the capability is available
+ */
+WASM_EXPORT bool wasm_weblib_has_capability(const char *name);
+
+/* WASM JSON wrappers */
+WASM_EXPORT json_value_t *wasm_json_parse(const char *input);
+WASM_EXPORT char         *wasm_json_stringify(json_value_t *value);
+WASM_EXPORT json_value_t *wasm_json_object_create(void);
+WASM_EXPORT json_value_t *wasm_json_array_create(void);
+WASM_EXPORT json_value_t *wasm_json_string_create(const char *value);
+WASM_EXPORT json_value_t *wasm_json_number_create(double value);
+WASM_EXPORT json_value_t *wasm_json_bool_create(bool value);
+WASM_EXPORT json_value_t *wasm_json_null_create(void);
+WASM_EXPORT void          wasm_json_object_set(json_value_t *obj,
+                                               const char *key,
+                                               json_value_t *value);
+WASM_EXPORT json_value_t *wasm_json_object_get(json_value_t *obj,
+                                               const char *key);
+WASM_EXPORT void          wasm_json_array_push(json_value_t *arr,
+                                               json_value_t *value);
+WASM_EXPORT void          wasm_json_free(json_value_t *value);
+
+/* WASM Router wrappers */
+WASM_EXPORT router_t *wasm_router_create(void);
+WASM_EXPORT void      wasm_router_destroy(router_t *router);
+WASM_EXPORT int       wasm_router_add_route(router_t *router,
+                                            http_method_t method,
+                                            const char *path,
+                                            route_handler_t handler);
+
+/* WASM Input Validation wrappers */
+WASM_EXPORT bool wasm_validate_email(const char *email);
+WASM_EXPORT bool wasm_validate_integer(const char *str, int *out);
+WASM_EXPORT bool wasm_validate_string_length(const char *str,
+                                             size_t min, size_t max);
+
+/* WASM Template wrappers */
+WASM_EXPORT template_context_t *wasm_template_context_create(void);
+WASM_EXPORT void  wasm_template_context_set(template_context_t *ctx,
+                                            const char *name,
+                                            const char *value);
+WASM_EXPORT char *wasm_template_render(const char *tmpl,
+                                       template_context_t *ctx);
+WASM_EXPORT void  wasm_template_context_destroy(template_context_t *ctx);
+
+/* WASM Memory helper (free strings returned by wasm_json_stringify, etc.) */
+WASM_EXPORT void wasm_free(void *ptr);
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* WEBLIB_H */
+#endif /* KAMRAN_K_H */

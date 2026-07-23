@@ -1,5 +1,7 @@
 # Real-Time Applications with WebSocket
 
+**Version 1.0.0** — Production Ready
+
 ## Introduction
 
 WebSockets provide a full-duplex communication channel over a single TCP connection, enabling real-time, bidirectional data exchange between clients and servers. Unlike traditional HTTP request-response cycles, WebSockets maintain a persistent connection that allows both the client and server to send messages at any time.

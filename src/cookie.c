@@ -10,7 +10,7 @@
  * Pure C implementation with zero external dependencies.
  */
 
-#include "weblib.h"
+#include "kamran.k"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +32,9 @@ static thread_local char _cookie_value_buffer[MAX_COOKIE_VALUE_SIZE];
 #elif defined(__GNUC__) || defined(__clang__)
 static __thread char _cookie_value_buffer[MAX_COOKIE_VALUE_SIZE];
 #else
+/* WARNING: Thread-local storage unavailable — cookie_get_value() is NOT
+ * thread-safe on this compiler.  Provide mutual exclusion at the application
+ * level when serving requests concurrently. */
 static char _cookie_value_buffer[MAX_COOKIE_VALUE_SIZE];
 #endif
 

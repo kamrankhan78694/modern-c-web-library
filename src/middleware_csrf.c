@@ -16,16 +16,10 @@
  * Copyright (c) 2024 Modern C Web Library — Licensed under MIT
  */
 
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-
-#ifndef _WIN32
-#  include <fcntl.h>
-#  include <unistd.h>
-#endif
 
 /* ── Defaults ────────────────────────────────────────────────────────────── */
 #define CSRF_DEFAULT_COOKIE_NAME "csrf_token"
@@ -46,44 +40,6 @@ static csrf_state_t g_csrf_state;
 /* ── Random token generation ─────────────────────────────────────────────── */
 
 /**
- * @brief Fill buf with len cryptographically random bytes.
- *        POSIX: /dev/urandom.  Windows: BCryptGenRandom.
- *        Falls back to seeded rand() only when no OS CSPRNG is available.
- */
-static void _fill_random(unsigned char *buf, size_t len) {
-#ifdef _WIN32
-    /* Windows: use BCryptGenRandom (available since Vista / Server 2008) */
-#   include <bcrypt.h>  /* requires linking with bcrypt.lib */
-    if (BCryptGenRandom(NULL, buf, (ULONG)len,
-                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0) {
-        return; /* STATUS_SUCCESS == 0 */
-    }
-#else
-    int fd = open("/dev/urandom", O_RDONLY);
-    if (fd >= 0) {
-        size_t got = 0;
-        while (got < len) {
-            ssize_t n = read(fd, buf + got, len - got);
-            if (n <= 0) break;
-            got += (size_t)n;
-        }
-        close(fd);
-        if (got == len) return;
-    }
-#endif
-    /* Last-resort fallback: weak PRNG — only when no OS CSPRNG is available.
-       This path should never be reached on modern Linux/macOS/Windows.
-       Uses rand_r() with thread-local seed for thread safety. */
-    static __thread unsigned int seed_state = 0;
-    if (seed_state == 0) {
-        seed_state = (unsigned int)time(NULL) ^ (unsigned int)(size_t)buf;
-    }
-    for (size_t i = 0; i < len; i++) {
-        buf[i] = (unsigned char)(rand_r(&seed_state) & 0xFF);
-    }
-}
-
-/**
  * @brief Generate a hex-encoded CSRF token string.
  * @param token_bytes Number of raw bytes (result string is 2*token_bytes + 1)
  * @return Newly allocated hex string or NULL on failure
@@ -93,7 +49,10 @@ static char *_generate_token(int token_bytes) {
     size_t nb = (size_t)token_bytes;
     if (nb > sizeof(raw)) nb = sizeof(raw);
 
-    _fill_random(raw, nb);
+    if (secure_random_bytes(raw, nb) != 0) {
+        fprintf(stderr, "CSRF: secure_random_bytes() failed — cannot generate token\n");
+        return NULL;
+    }
 
     char *hex = (char *)malloc(nb * 2 + 1);
     if (!hex) return NULL;
@@ -105,26 +64,6 @@ static char *_generate_token(int token_bytes) {
     }
     hex[nb * 2] = '\0';
     return hex;
-}
-
-/* ── Constant-time comparison ────────────────────────────────────────────── */
-
-/**
- * @brief Compare two strings in constant time (length-independent timing).
- * @return true if equal
- */
-static bool _ct_strcmp(const char *a, const char *b) {
-    size_t la = strlen(a);
-    size_t lb = strlen(b);
-    /* Use the longer length to avoid short-circuit on first mismatch */
-    size_t max_len = la > lb ? la : lb;
-    unsigned char diff = 0;
-    for (size_t i = 0; i < max_len; i++) {
-        unsigned char ca = (i < la) ? (unsigned char)a[i] : 0;
-        unsigned char cb = (i < lb) ? (unsigned char)b[i] : 0;
-        diff |= ca ^ cb;
-    }
-    return (diff == 0) && (la == lb);
 }
 
 /* ── Middleware handler ───────────────────────────────────────────────────── */
@@ -175,7 +114,18 @@ static bool _csrf_middleware_handler(http_request_t *req, http_response_t *res, 
         return false;
     }
 
-    if (!_ct_strcmp(cookie_token, header_token)) {
+    size_t cookie_len = strlen(cookie_token);
+    size_t header_len = strlen(header_token);
+    /* Reject length mismatch first, then compare exactly cookie_len bytes.
+     * Both tokens are NUL-terminated C strings, so reading cookie_len bytes
+     * from each is safe as long as we check lengths first. When lengths
+     * differ, we still do a constant-time compare over the shorter length
+     * to avoid leaking length info via timing. */
+    bool length_match = (cookie_len == header_len);
+    size_t cmp_len = cookie_len < header_len ? cookie_len : header_len;
+    bool match = secure_compare(cookie_token, header_token, cmp_len)
+                 && length_match;
+    if (!match) {
         http_response_send_text(res, HTTP_FORBIDDEN, "CSRF token mismatch");
         return false;
     }
@@ -218,6 +168,6 @@ middleware_fn_t csrf_middleware_create(const csrf_config_t *config) {
 }
 
 void csrf_middleware_destroy(void) {
-    memset(&g_csrf_state, 0, sizeof(g_csrf_state));
+    secure_zero(&g_csrf_state, sizeof(g_csrf_state));
 
 }

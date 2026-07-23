@@ -2,8 +2,8 @@
 
 **Modern C Web Library — Production Stress Test Findings**
 
-*Last Updated: 2026-02-20*
-*Discovered during Phase 10 production-level stress testing*
+*Last Updated: 2026-03-03*
+*Discovered during Phase 10 production-level stress testing and Phase 10.1 security code review*
 
 ---
 
@@ -17,6 +17,10 @@
 | 4 | **Low** | Middleware | **Fixed** | All middleware types use global singletons — only one instance per type |
 | 5 | **Low** | Event Loop | **Fixed** | Timer limit of 64 is hard-coded with no runtime feedback beyond -1 return |
 | 6 | **Info** | HTTP Server | **Fixed** | No HTTP keep-alive connection limit — could exhaust file descriptors |
+| 7 | **Medium** | env_config / security_utils | **Fixed** | Duplicate `_secure_wipe()` — private copy of public `secure_zero()` |
+| 8 | **Medium** | Security Headers Middleware | **Fixed** | Shallow `memcpy` of config struct containing string pointers (dangling pointer risk) |
+| 9 | **Medium** | CSRF / Session / Auth | **Fixed** | Private functions duplicate public security APIs (`secure_random_bytes`, `secure_compare`) |
+| 10 | **Low** | Auth / CSRF Middleware | **Fixed** | `memset()` used instead of `secure_zero()` to wipe sensitive data — compiler may optimize away |
 
 ---
 
@@ -159,6 +163,101 @@ The `MAX_CONNECTIONS=128` backlog limit only applies to the `listen()` queue, no
 
 **Recommended Fix:**
 Track active connection count and reject new connections when a configurable maximum is reached.
+
+---
+
+### BUG-7: Duplicate `_secure_wipe()` in env_config.c (Medium) — ✅ FIXED
+
+**Component:** `src/env_config.c`
+**Severity:** Medium — code duplication of security-critical function
+**Discovered:** Code review of PR #61
+**Fixed:** Removed `_secure_wipe()` and replaced calls with public `secure_zero()`.
+
+**Description:**
+`env_config.c` contained a private `_secure_wipe()` function that was an exact reimplementation of the public `secure_zero()` from `security_utils.c`. The `env_secure_value_free()` function called this internal duplicate instead of the public API.
+
+**Risk:**
+If one implementation is updated (e.g., to use a platform-specific intrinsic) while the other is not, sensitive data may not be properly wiped in one code path.
+
+**Root Cause:**
+The secure value API was developed before or alongside `secure_zero()`, and the author did not refactor to reuse the public function.
+
+---
+
+### BUG-8: Shallow Config Copy in Security Headers Middleware (Medium) — ✅ FIXED
+
+**Component:** `src/middleware_security_headers.c`
+**Severity:** Medium — potential use-after-free / dangling pointer
+**Discovered:** Code review of PR #61
+**Fixed:** Deep-copy all string fields with `strdup()` in `security_headers_middleware_create()` and free them in `security_headers_middleware_destroy()`, with per-field allocation failure handling.
+
+**Description:**
+`security_headers_middleware_create()` used `memcpy()` to copy the entire `security_headers_config_t` struct, which only copies string pointers, not the string data. If the caller provides strings from local/dynamic storage that is later freed or goes out of scope, the middleware holds dangling pointers.
+
+**Comparison with other middleware:**
+- `middleware_cors.c` — deep-copies strings with `strdup()` ✓
+- `middleware_auth.c` — deep-copies strings with `strdup()` ✓
+- `middleware_static.c` — deep-copies strings with `strdup()` ✓
+- `middleware_security_headers.c` — **shallow `memcpy`** ✗ (now fixed)
+
+---
+
+### BUG-9: Private Functions Duplicate Public Security APIs (Medium) — ✅ FIXED
+
+**Component:** `src/middleware_csrf.c`, `src/session.c`, `src/middleware_auth.c`
+**Severity:** Medium — code duplication of security-critical functions
+**Discovered:** Codebase-wide audit following PR #61 bug fixes
+**Fixed:** Removed all private reimplementations and replaced with calls to the public APIs: `_fill_random()` → `secure_random_bytes()`, `generate_session_id()` → `secure_random_bytes()`, `_ct_strcmp()` → `secure_compare()`, `_auth_secure_compare()` → `secure_compare()`.
+
+**Description:**
+Three security-critical operations have public APIs in `security_utils.c`, but multiple modules reimplement them privately:
+
+**1. Random byte generation (`secure_random_bytes` duplicated):**
+- `src/middleware_csrf.c:53-84` — `_fill_random()` reimplements `/dev/urandom` reading + fallback
+- `src/session.c:38-80` — `generate_session_id()` reimplements `/dev/urandom` reading + fallback
+
+**2. Constant-time comparison (`secure_compare` duplicated):**
+- `src/middleware_csrf.c:116-128` — `_ct_strcmp()` reimplements XOR-based comparison
+- `src/middleware_auth.c:452-462` — `_auth_secure_compare()` reimplements XOR-based comparison
+
+**Risk:**
+- If a bug is found in one implementation, the duplicates may not be fixed
+- Subtle differences between implementations (e.g., `_ct_strcmp` handles unequal-length strings differently than `secure_compare`) can introduce security inconsistencies
+- Increases maintenance burden and code review surface
+
+**Recommended Fix:**
+Refactor all private implementations to call the public API:
+- `_fill_random()` → call `secure_random_bytes()`
+- `generate_session_id()` → call `secure_random_bytes()`
+- `_ct_strcmp()` → call `secure_compare()`
+- `_auth_secure_compare()` → call `secure_compare()`
+
+---
+
+### BUG-10: `memset()` Used to Wipe Sensitive Data (Low) — ✅ FIXED
+
+**Component:** `src/middleware_auth.c`, `src/middleware_csrf.c`
+**Severity:** Low — compiler may optimize away the wipe
+**Discovered:** Codebase-wide audit following PR #61 bug fixes
+**Fixed:** Replaced all `memset()` calls on sensitive data with `secure_zero()` which uses `volatile` pointers to prevent dead-store elimination.
+
+**Description:**
+Several locations use `memset(ptr, 0, len)` to wipe sensitive data before freeing. The C standard permits compilers to optimize away `memset()` calls on memory that is not subsequently read ("dead store elimination"). The public `secure_zero()` function exists specifically to prevent this optimization using `volatile` pointers.
+
+**Affected Locations:**
+- `src/middleware_auth.c:527` — `memset(decoded, 0, sizeof(decoded))` — wipes Base64-decoded credentials
+- `src/middleware_auth.c:935` — `memset((void *)g_jwt_auth_config->secret, 0, ...)` — wipes JWT secret before free
+- `src/middleware_csrf.c:221` — `memset(&g_csrf_state, 0, sizeof(g_csrf_state))` — wipes CSRF state
+
+**Recommended Fix:**
+Replace `memset()` with `secure_zero()` for all security-sensitive wipe operations:
+```c
+// Before (may be optimized away):
+memset(decoded, 0, sizeof(decoded));
+
+// After (guaranteed wipe):
+secure_zero(decoded, sizeof(decoded));
+```
 
 ---
 

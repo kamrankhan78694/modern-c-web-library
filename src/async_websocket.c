@@ -1,4 +1,4 @@
-#include "weblib.h"
+#include "kamran.k"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -310,25 +310,33 @@ static void _async_ws_event_handler(int fd, int events, void *user_data) {
         ssize_t nread = recv(fd, buf, sizeof(buf), 0);
         
         if (nread > 0) {
-            /* Process received data */
+            /* Process received data — callbacks may free conn via async_ws_manager_remove().
+             * Capture the registered flag before the call so we don't touch conn afterwards
+             * if it was freed. */
             if (websocket_process_data(ws, buf, (size_t)nread) < 0) {
-                /* Error processing data */
-                if (on_error) {
-                    on_error(ws, "Error processing WebSocket data");
-                }
-                /* Connection will be cleaned up by user */
+                /* Error processing data — conn may already be freed by on_close callback */
+                /* Do NOT access conn after this point */
+                return;
             }
+            /* After processing, conn may have been freed by a callback.
+             * We cannot safely access conn any more, so return. The event loop
+             * will call us again for subsequent events if conn is still alive. */
+            return;
         } else if (nread == 0) {
             /* Connection closed by peer */
             if (on_close) {
                 on_close(ws, 1006); /* Abnormal closure */
             }
+            /* conn may have been freed by on_close callback — do not access */
+            return;
         } else {
             /* Error on recv */
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 if (on_error) {
                     on_error(ws, "Socket read error");
                 }
+                /* conn may have been freed by on_error callback — do not access */
+                return;
             }
         }
     }
@@ -340,6 +348,8 @@ static void _async_ws_event_handler(int fd, int events, void *user_data) {
             if (on_error) {
                 on_error(ws, "Socket write error");
             }
+            /* conn may have been freed — do not access */
+            return;
         } else if (conn->write_head == NULL) {
             /* Write queue is now empty, switch back to read-only */
             if (conn->registered) {
@@ -353,6 +363,7 @@ static void _async_ws_event_handler(int fd, int events, void *user_data) {
         if (on_error) {
             on_error(ws, "Socket error");
         }
+        /* conn may have been freed — do not access */
     }
 }
 
@@ -405,7 +416,13 @@ static int _write_queue_drain(async_ws_conn_t *conn) {
         ws_write_node_t *node = conn->write_head;
         size_t remaining = node->len - node->sent;
         
-        ssize_t nsent = send(fd, node->data + node->sent, remaining, 0);
+        ssize_t nsent = send(fd, node->data + node->sent, remaining, 
+#ifdef MSG_NOSIGNAL
+                            MSG_NOSIGNAL
+#else
+                            0
+#endif
+                           );
         
         if (nsent < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {

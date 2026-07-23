@@ -46,9 +46,18 @@
 
 ## 3. Grounded First-Principles Design
 
-### What separates a v1 library from a v2 platform?
+| Phase | Version | Status | Highlights |
+|-------|---------|--------|------------|
+| Phase 4 | v0.4.0 | ✅ Complete | HTTP parser hardening, header storage, JSON arrays, connection handling |
+| Phase 5 | v0.5.0 | ✅ Complete | Body parsing, cookies, CORS, rate limiting, static file serving |
+| Phase 6 | v0.6.0 | ✅ Complete | Sessions, template engine, auth middleware (Basic/JWT/API-Key), DB pooling, API docs |
+| Phase 7 | v0.7.0 | ✅ Complete | Socket timeouts, thread pool, graceful shutdown, GitHub Actions CI, integration tests |
+| Phase 8 | v0.8.0 | ✅ Complete | CSRF middleware, logging, error handler, input validation, health check |
+| Phase 9 | v0.9.0 | ✅ Complete | Response compression, caching layer, metrics middleware, async WebSocket, benchmarking suite |
+| Phase 10 | v1.0.0 | ✅ Complete | REST API example, tutorials, release engineering |
+| Phase 10.1 | v1.0.1 | ✅ Complete | Security utilities, security headers middleware, secure secret handling |
 
-Working from network fundamentals upward:
+**Current state**: 146/146 unit tests passing · zero compiler warnings · 28 source modules · 5 example servers
 
 1. **Transport encryption is non-negotiable** — Every production deployment requires HTTPS. Without TLS, browsers refuse connections, load balancers reject backends, and credentials travel in plaintext. Pure C TLS (not OpenSSL) is the single highest-impact v2 feature.
 
@@ -358,72 +367,29 @@ Phase 20 (v2.0.0): Release Engineering & Ecosystem
 #### 12.2 Handshake State Machine
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 12.2.1 | ClientHello parsing | `src/tls/tls_handshake.c` | Parse extensions: supported_versions, key_share, signature_algorithms, server_name | 6h |
-| 12.2.2 | ServerHello generation | `src/tls/tls_handshake.c` | Select cipher suite; include key_share with X25519 public key | 4h |
-| 12.2.3 | Key schedule computation | `src/tls/tls_handshake.c` | Derive handshake_secret, client/server handshake keys | 4h |
-| 12.2.4 | EncryptedExtensions + Certificate | `src/tls/tls_handshake.c` | Send EncryptedExtensions (ALPN); send Certificate chain | 4h |
-| 12.2.5 | CertificateVerify + Finished | `src/tls/tls_handshake.c` | RSA-PSS or ECDSA signature over transcript; verify client Finished | 4h |
-| 12.2.6 | Application data key derivation | `src/tls/tls_handshake.c` | Derive application traffic keys; transition record layer to app data | 3h |
-
-#### 12.3 Certificate & Key Management
-| # | Task | File(s) | Acceptance Criteria | Est. |
-|---|------|---------|-------------------|------|
-| 12.3.1 | PEM parser (certificate + key) | `src/tls/pem.c` | Load PEM files with `-----BEGIN CERTIFICATE-----` markers; Base64 decode | 3h |
-| 12.3.2 | DER/ASN.1 parser for X.509 | `src/tls/x509.c` | Parse tbsCertificate, issuer, subject, validity, public key | 6h |
-| 12.3.3 | RSA public key operations | `src/tls/rsa.c` | RSA-PSS signature verification; PKCS#1 v1.5 for legacy certificates | 6h |
-| 12.3.4 | ECDSA P-256 signature verification | `src/tls/ecdsa.c` | Verify ECDSA-P256-SHA256 signatures on certificates | 6h |
+| 7.1.1 | Add `setsockopt(SO_RCVTIMEO)` on accepted client sockets | `src/http_server.c` | Read timeout triggers after configurable seconds (default 30s) | 2h |
+| 7.1.2 | Add `setsockopt(SO_SNDTIMEO)` on accepted client sockets | `src/http_server.c` | Write timeout triggers after configurable seconds (default 30s) | 1h |
+| 7.1.3 | Add `http_server_set_timeout(server, read_sec, write_sec)` API | `include/kamran.k`, `src/http_server.c` | API documented, validated (rejects negative values) | 2h |
+| 7.1.4 | Handle `EAGAIN`/`EWOULDBLOCK` in recv/send loops | `src/http_server.c` | Partial reads/writes retried; timeout returns error code | 3h |
+| 7.1.5 | Unit tests for timeout behavior | `tests/test_weblib.c` | Test verifies server rejects slow client simulation | 2h |
 
 #### 12.4 HTTPS Integration
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 12.4.1 | `http_server_enable_tls()` API | `include/weblib.h`, `src/http_server.c` | Accepts cert_path + key_path; wraps accepted sockets in TLS | 4h |
-| 12.4.2 | TLS I/O wrapper (read/write) | `src/tls/tls_io.c` | Transparent encryption/decryption; integrates with event loop | 4h |
-| 12.4.3 | ALPN negotiation | `src/tls/tls_handshake.c` | Advertise `h2` and `http/1.1`; select based on client preference | 2h |
-| 12.4.4 | SNI callback | `src/tls/tls_handshake.c` | `http_server_set_sni_callback()` for virtual hosting | 2h |
-| 12.4.5 | HTTPS example server | `examples/https_server.c` | Self-signed cert generation instructions; curl validation | 3h |
-
----
-
-### Phase 13 — HTTP/2 Protocol
-
-#### 13.1 Binary Framing
-| # | Task | File(s) | Acceptance Criteria | Est. |
-|---|------|---------|-------------------|------|
-| 13.1.1 | Frame parser (9-byte header + payload) | `src/http2/frame.c` | Parse all 10 frame types; reject oversized frames | 4h |
-| 13.1.2 | Frame serializer | `src/http2/frame.c` | Serialize DATA, HEADERS, SETTINGS, PING, GOAWAY, WINDOW_UPDATE | 3h |
-| 13.1.3 | Connection preface handling | `src/http2/connection.c` | Validate client magic string `PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n` | 2h |
-| 13.1.4 | Settings negotiation | `src/http2/connection.c` | Exchange SETTINGS frames; acknowledge with ACK; enforce limits | 3h |
-
-#### 13.2 HPACK Compression
-| # | Task | File(s) | Acceptance Criteria | Est. |
-|---|------|---------|-------------------|------|
-| 13.2.1 | Static table (61 entries) | `src/http2/hpack.c` | Lookup by index; reverse lookup by name+value | 2h |
-| 13.2.2 | Integer encoding/decoding | `src/http2/hpack.c` | RFC 7541 §5.1 prefix encoding; test vectors pass | 2h |
-| 13.2.3 | Huffman encoding/decoding | `src/http2/hpack.c` | RFC 7541 Appendix B Huffman table; encode/decode test vectors | 4h |
-| 13.2.4 | Header block decoding | `src/http2/hpack.c` | Decode indexed, literal w/o indexing, literal never indexed | 4h |
-| 13.2.5 | Dynamic table with size limit | `src/http2/hpack.c` | SETTINGS_HEADER_TABLE_SIZE enforcement; eviction on overflow | 3h |
-
-#### 13.3 Stream Multiplexing
-| # | Task | File(s) | Acceptance Criteria | Est. |
-|---|------|---------|-------------------|------|
-| 13.3.1 | Stream state machine | `src/http2/stream.c` | idle→open→half-closed→closed transitions per RFC 7540 §5.1 | 4h |
-| 13.3.2 | Stream priority (weight + dependency) | `src/http2/stream.c` | Priority tree; weighted fair queueing for data frames | 4h |
-| 13.3.3 | Flow control (window update) | `src/http2/stream.c` | Connection-level + stream-level windows; WINDOW_UPDATE frames | 3h |
-| 13.3.4 | MAX_CONCURRENT_STREAMS enforcement | `src/http2/connection.c` | Reject new streams above limit with REFUSED_STREAM | 2h |
-| 13.3.5 | Server push | `src/http2/stream.c` | PUSH_PROMISE frame; push response on server-initiated stream | 4h |
-
----
-
-### Phase 14 — Persistent Storage Engine
+| 7.2.1 | Implement `thread_pool_t` with work queue | `src/thread_pool.c` (new), `src/thread_pool.h` (new) | Create/destroy; submit work items; bounded queue (default 256) | 4h |
+| 7.2.2 | Mutex + condition variable synchronization | `src/thread_pool.c` | No data races under concurrent submit; Valgrind clean | 3h |
+| 7.2.3 | Integrate thread pool into `http_server_t` | `src/http_server.c` | Threaded mode uses pool instead of thread-per-connection | 3h |
+| 7.2.4 | Add `http_server_set_thread_count(server, n)` API | `include/kamran.k`, `src/http_server.c` | Configurable thread count; default 16; min 1, max 256 | 1h |
+| 7.2.5 | Unit tests for thread pool | `tests/test_weblib.c` | Create/destroy; submit 100 items; all complete; no leaks | 2h |
 
 #### 14.1 B-tree Core
 | # | Task | File(s) | Acceptance Criteria | Est. |
 |---|------|---------|-------------------|------|
-| 14.1.1 | Page allocator (4KB pages) | `src/storage/pager.c` | Allocate/free pages; memory-mapped file backing; page cache | 4h |
-| 14.1.2 | B-tree node structure | `src/storage/btree.c` | Internal nodes (keys + child pointers); leaf nodes (keys + values) | 4h |
-| 14.1.3 | Insert with split | `src/storage/btree.c` | Insert key-value; split full nodes; maintain balance | 6h |
-| 14.1.4 | Lookup | `src/storage/btree.c` | Binary search within nodes; O(log n) key lookup | 2h |
-| 14.1.5 | Delete with merge/redistribute | `src/storage/btree.c` | Remove key; merge underfull nodes; maintain balance | 6h |
+| 7.3.1 | Add server state enum (RUNNING, DRAINING, STOPPED) | `include/kamran.k`, `src/http_server.c` | State transitions are atomic (`sig_atomic_t`) | 1h |
+| 7.3.2 | Implement `http_server_shutdown(server, timeout_sec)` | `src/http_server.c`, `include/kamran.k` | Closes listening socket; waits for in-flight requests up to timeout | 3h |
+| 7.3.3 | SIGTERM/SIGINT handler (POSIX) | `src/http_server.c` | Signal triggers state → DRAINING; second signal → immediate exit | 2h |
+| 7.3.4 | Thread pool drain on shutdown | `src/thread_pool.c` | All queued work items complete or are cancelled; threads join | 2h |
+| 7.3.5 | Unit test: shutdown with active connections | `tests/test_weblib.c` | Server shuts down cleanly; no leaked sockets; Valgrind clean | 3h |
 
 #### 14.2 Write-Ahead Log
 | # | Task | File(s) | Acceptance Criteria | Est. |
@@ -512,6 +478,78 @@ Phase 20 (v2.0.0): Release Engineering & Ecosystem
 | 20.4.1–20.4.3 | Fuzz testing suite (HTTP, JSON, TLS, HPACK, QUIC parsers) | 3d |
 | 20.5.1–20.5.2 | Performance regression CI gate (benchmark baseline ±10%) | 1d |
 | 20.6.1–20.6.3 | v2.0.0 release (CHANGELOG, migration guide, API docs, release automation) | 2d |
+
+### Phase 11 — Advanced Security Hardening — v1.1.0 (6 weeks)
+
+> **Vision**: No one should ever worry about compromising their keys.
+> Phase 11 closes every remaining security gap identified in the threat model,
+> bringing the library to state-of-the-art security without a single external dependency.
+
+| Week | Milestone | Deliverables | Dependencies |
+|------|-----------|-------------|--------------|
+| **W18** | Crypto Primitives (Foundation) | `src/crypto/sha256.c` (NIST FIPS 180-4 test vectors); `src/crypto/hmac_sha256.c` (RFC 2104); `src/crypto/aes_gcm.c` (NIST SP 800-38D, 128+256-bit keys) | None — standalone modules |
+| **W19** | Key Derivation & Password Hashing | `src/crypto/pbkdf2.c` (RFC 2898, HMAC-SHA256, configurable iterations); `src/crypto/hkdf.c` (RFC 5869 extract+expand); `password_hash_create()` / `password_hash_verify()` API; automatic salt via `secure_random_bytes()` | W18 (SHA-256, HMAC) |
+| **W20** | TLS Record Layer & Handshake (Part 1) | `src/tls/tls_record.c` (TLS 1.2 record framing); `src/tls/tls_handshake.c` (ClientHello/ServerHello state machine); PEM certificate parser; private key loader with `mlock()` + `secure_zero()` | W18 (AES-GCM, SHA-256) |
+| **W21** | TLS Handshake (Part 2) & Server Integration | Complete handshake; `http_server_enable_tls(server, cert, key)` API; HTTPS example; `curl --tlsv1.2 https://localhost:8443/` validation; TLS key material wiped on `http_server_destroy()` | W20 |
+| **W22** | Request ID & IP Access Control Middleware | `src/middleware_request_id.c` (UUID v4 / hex, `X-Request-Id` header, logging integration); `src/middleware_ip_access.c` (allowlist/denylist with CIDR support) | None |
+| **W23** | Security Audit Tooling & Hardening | Fuzz testing harness for HTTP parser (`tests/fuzz/`); ASan/MSan CI integration; per-route body size limits; `Content-Length` enforcement before buffering; full regression pass | All prior phases |
+
+#### Phase 11 — Atomic Task Breakdown
+
+##### 11.1 Crypto Primitives
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 11.1.1 | SHA-256 implementation | `src/crypto/sha256.c` | NIST FIPS 180-4 short/long/Monte Carlo test vectors pass | 2d |
+| 11.1.2 | HMAC-SHA256 implementation | `src/crypto/hmac_sha256.c` | RFC 4231 test vectors pass; constant-time via `secure_compare()` | 1d |
+| 11.1.3 | AES-128/256-GCM implementation | `src/crypto/aes_gcm.c` | NIST SP 800-38D test vectors pass (encrypt + decrypt + auth tag) | 3d |
+| 11.1.4 | Unit tests + CI gate | `tests/test_crypto.c` | All NIST vectors pass; Valgrind clean; key material zeroed after use | 1d |
+
+##### 11.2 Password Hashing & Key Derivation
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 11.2.1 | PBKDF2-HMAC-SHA256 | `src/crypto/pbkdf2.c` | RFC 6070 test vectors pass; configurable iteration count (default 600,000) | 2d |
+| 11.2.2 | HKDF (extract + expand) | `src/crypto/hkdf.c` | RFC 5869 Appendix A test vectors pass | 1d |
+| 11.2.3 | `password_hash_create/verify` API | `src/password.c`, `include/kamran.k` | Salt auto-generated; timing-safe verify; hash format includes iteration count | 2d |
+| 11.2.4 | Unit tests | `tests/test_weblib.c` | Round-trip hash/verify; wrong password fails; different salts produce different hashes | 1d |
+
+##### 11.3 TLS 1.2 Transport Encryption
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 11.3.1 | TLS record layer (framing) | `src/tls/tls_record.c` | Parse and serialize TLS records; handle fragmentation | 2d |
+| 11.3.2 | TLS handshake state machine | `src/tls/tls_handshake.c` | ClientHello → ServerHello → Certificate → KeyExchange → Finished | 3d |
+| 11.3.3 | PEM parser + key loader | `src/tls/pem_parser.c` | Load cert chain + private key from PEM files; `mlock()` key pages | 2d |
+| 11.3.4 | Server API integration | `src/http_server.c`, `include/kamran.k` | `http_server_enable_tls()` API; private key zeroed on destroy | 2d |
+| 11.3.5 | HTTPS example + tests | `examples/https_server.c`, `tests/test_tls.c` | `curl --tlsv1.2` returns 200; browser green lock | 2d |
+
+##### 11.4 Request ID & IP Access Control
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 11.4.1 | Request ID middleware | `src/middleware_request_id.c` | Generates unique ID; sets `X-Request-Id` header; propagates if present | 1d |
+| 11.4.2 | IP allowlist/denylist middleware | `src/middleware_ip_access.c` | Configurable lists; CIDR support; per-route or global | 2d |
+| 11.4.3 | Unit tests | `tests/test_weblib.c` | Request ID unique across requests; blocked IPs get 403 | 1d |
+
+##### 11.5 Security Audit Tooling
+| # | Task | File(s) | Acceptance Criteria | Est. |
+|---|------|---------|-------------------|------|
+| 11.5.1 | HTTP parser fuzz harness | `tests/fuzz/fuzz_http_parser.c` | AFL/libFuzzer compatible; runs 1M iterations without crash | 2d |
+| 11.5.2 | ASan/MSan CI integration | `.github/workflows/ci.yml` | Sanitizer builds run on every push; zero errors | 1d |
+| 11.5.3 | Per-route body size limits | `src/http_server.c`, `include/kamran.k` | `router_set_max_body(route, bytes)` API; reject before buffering | 1d |
+
+#### Phase 11 — Success Criteria
+
+| Module | Validation |
+|--------|-----------|
+| SHA-256 | NIST FIPS 180-4 test vectors pass (short msg, long msg, Monte Carlo) |
+| HMAC-SHA256 | RFC 4231 test vectors pass |
+| AES-GCM | NIST SP 800-38D test vectors pass (128+256-bit keys) |
+| PBKDF2 | RFC 6070 test vectors pass; 600K iterations in < 1s |
+| HKDF | RFC 5869 Appendix A test vectors pass |
+| Password hashing | Round-trip create/verify; wrong password → false; salts differ |
+| TLS 1.2 | `curl --tlsv1.2 https://localhost:8443/` → 200; browser connects |
+| TLS key safety | Private key in `mlock()`'d pages; `secure_zero()` on destroy; never logged |
+| Request ID | Unique per request; `X-Request-Id` in response; round-trip propagation |
+| IP access control | Allowlist passes; denylist blocks (403); CIDR ranges work |
+| Fuzz testing | 1M iterations, zero crashes; zero ASan/MSan errors |
 
 ---
 
@@ -846,13 +884,13 @@ Each phase release MUST pass all v1.0.0 checks plus:
 |---------|------|---------|
 | 1.0 | 2025-01-12 | Initial roadmap (Phases 4–6) |
 | 2.0 | 2026-02-19 | Complete rewrite for Phases 7–10: first-principles design, adversarial review, atomic task breakdown, security threat model |
-| 3.0 | 2026-02-22 | v2.0.0 roadmap: Phases 11–20 with TLS 1.3, HTTP/2, HTTP/3, persistent storage, multi-process, cross-platform, developer tooling |
+| 3.0 | 2026-03-02 | Phase 10.1 delivered (security utilities, headers middleware, secure secrets); Phase 11 planned (TLS, password hashing, HKDF, fuzz testing) |
 
 ---
 
 **Maintained by**: MCWL Core Team
-**Last Updated**: 2026-02-22
-**Status**: v1.0.0 released · v2.0.0 roadmap active
+**Last Updated**: 2026-03-02
+**Status**: Phase 11 planned — advanced security hardening
 **License**: MIT (see LICENSE file)
 
 For questions or discussions about this roadmap, please open an issue on GitHub or contact the maintainers.

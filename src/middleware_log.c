@@ -9,14 +9,16 @@
  * Zero external dependencies; pure C.
  */
 
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 /* Global configuration (one instance per process, same pattern as other middlewares) */
 static log_config_t g_log_config = {LOG_LEVEL_INFO, NULL};
+static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Level label strings — indexed by log_level_t */
 static const char *const LOG_LEVEL_LABELS[] = {
@@ -49,6 +51,12 @@ static bool _log_middleware_handler(http_request_t *req, http_response_t *res, v
     }
 
     log_config_t *config = user_data ? (log_config_t *)user_data : &g_log_config;
+
+    /* Take a snapshot of config under lock to avoid data race */
+    pthread_mutex_lock(&g_log_lock);
+    log_config_t config_snapshot = *config;
+    pthread_mutex_unlock(&g_log_lock);
+    config = &config_snapshot;
 
     /* Only emit if request-level >= configured minimum */
     if (LOG_LEVEL_INFO < config->level) {
@@ -89,6 +97,7 @@ static bool _log_middleware_handler(http_request_t *req, http_response_t *res, v
  * @brief Create a logging middleware with the given configuration
  */
 middleware_fn_t log_middleware_create(const log_config_t *config) {
+    pthread_mutex_lock(&g_log_lock);
     if (config != NULL) {
         g_log_config.level  = config->level;
         g_log_config.output = config->output;
@@ -96,6 +105,7 @@ middleware_fn_t log_middleware_create(const log_config_t *config) {
         g_log_config.level  = LOG_LEVEL_INFO;
         g_log_config.output = NULL; /* defaults to stderr in handler */
     }
+    pthread_mutex_unlock(&g_log_lock);
     return _log_middleware_handler;
 }
 

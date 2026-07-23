@@ -1,10 +1,14 @@
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
+#ifdef __EMSCRIPTEN__
+#include "wasm_compat.h"
+#else
 #include <pthread.h>
+#endif
 
 #define MAX_SESSIONS 1024
 #define SESSION_ID_LENGTH 32
@@ -25,6 +29,7 @@ struct session {
     int max_age;
     session_data_entry_t *data;
     bool in_use;
+    struct session_store *store; /* Back-reference for locking data operations */
 };
 
 /* Session store structure */
@@ -43,26 +48,30 @@ static void generate_session_id(char *buffer, size_t length) {
     
     size_t charset_len = sizeof(charset) - 1;
     unsigned char random_bytes[64]; /* Max SESSION_ID_LENGTH */
-    bool got_urandom = false;
 
     if (length > sizeof(random_bytes)) {
         length = sizeof(random_bytes);
     }
 
-#ifndef _WIN32
-    /* Try /dev/urandom for cryptographically secure randomness */
-    FILE *urand = fopen("/dev/urandom", "rb");
-    if (urand) {
-        if (fread(random_bytes, 1, length, urand) == length) {
-            got_urandom = true;
-        }
-        fclose(urand);
-    }
-#endif
-
-    if (got_urandom) {
-        for (size_t i = 0; i < length; i++) {
-            buffer[i] = charset[random_bytes[i] % charset_len];
+    if (secure_random_bytes(random_bytes, length) == 0) {
+        /* Rejection sampling to avoid modular bias.
+         * 256 / 62 = 4 remainder 8; threshold = 256 - 8 = 248 */
+        unsigned char threshold = (unsigned char)(256 - (256 % charset_len));
+        for (size_t i = 0; i < length; ) {
+            if (random_bytes[i] < threshold) {
+                buffer[i] = charset[random_bytes[i] % charset_len];
+                i++;
+            } else {
+                /* Re-sample this byte */
+                unsigned char replacement;
+                if (secure_random_bytes(&replacement, 1) != 0) {
+                    /* RNG failure — abort session ID generation entirely */
+                    memset(buffer, 0, length + 1);
+                    return;
+                }
+                random_bytes[i] = replacement;
+                /* loop will retry */
+            }
         }
     } else {
         /* Fallback: use rand_r() with thread-local seed for thread safety */
@@ -194,6 +203,7 @@ char *session_create(session_store_t *store, int max_age) {
     
     session->data = NULL;
     session->in_use = true;
+    session->store = store;
     store->session_count++;
     
     char *result = strdup(session->session_id);
@@ -254,7 +264,9 @@ void session_destroy(session_store_t *store, const char *session_id) {
             free_session_data(store->sessions[i].data);
             store->sessions[i].data = NULL;
             store->sessions[i].in_use = false;
-            store->session_count--;
+            if (store->session_count > 0) {
+                store->session_count--;
+            }
             break;
         }
     }
@@ -264,9 +276,11 @@ void session_destroy(session_store_t *store, const char *session_id) {
 
 /* Set session data */
 void session_set_data(session_t *session, const char *key, const char *value) {
-    if (!session || !key || !value) {
+    if (!session || !key || !value || !session->store) {
         return;
     }
+    
+    pthread_mutex_lock(&session->store->lock);
     
     /* Check if key already exists - update value */
     session_data_entry_t *current = session->data;
@@ -275,10 +289,12 @@ void session_set_data(session_t *session, const char *key, const char *value) {
             /* Update existing value */
             char *new_value = strdup(value);
             if (!new_value) {
+                pthread_mutex_unlock(&session->store->lock);
                 return; /* Keep old value if allocation fails */
             }
             free(current->value);
             current->value = new_value;
+            pthread_mutex_unlock(&session->store->lock);
             return;
         }
         current = current->next;
@@ -287,12 +303,14 @@ void session_set_data(session_t *session, const char *key, const char *value) {
     /* Create new entry */
     session_data_entry_t *entry = (session_data_entry_t *)malloc(sizeof(session_data_entry_t));
     if (!entry) {
+        pthread_mutex_unlock(&session->store->lock);
         return;
     }
     
     entry->key = strdup(key);
     if (!entry->key) {
         free(entry);
+        pthread_mutex_unlock(&session->store->lock);
         return;
     }
     
@@ -300,11 +318,14 @@ void session_set_data(session_t *session, const char *key, const char *value) {
     if (!entry->value) {
         free(entry->key);
         free(entry);
+        pthread_mutex_unlock(&session->store->lock);
         return;
     }
     
     entry->next = session->data;
     session->data = entry;
+    
+    pthread_mutex_unlock(&session->store->lock);
 }
 
 /* Get session data */
@@ -313,21 +334,36 @@ const char *session_get_data(session_t *session, const char *key) {
         return NULL;
     }
     
+    const char *result = NULL;
+    
+    if (session->store) {
+        pthread_mutex_lock(&session->store->lock);
+    }
+    
     session_data_entry_t *current = session->data;
     while (current) {
         if (strcmp(current->key, key) == 0) {
-            return current->value;
+            result = current->value;
+            break;
         }
         current = current->next;
     }
     
-    return NULL;
+    if (session->store) {
+        pthread_mutex_unlock(&session->store->lock);
+    }
+    
+    return result;
 }
 
 /* Remove session data */
 void session_remove_data(session_t *session, const char *key) {
     if (!session || !key) {
         return;
+    }
+    
+    if (session->store) {
+        pthread_mutex_lock(&session->store->lock);
     }
     
     session_data_entry_t *current = session->data;
@@ -345,11 +381,19 @@ void session_remove_data(session_t *session, const char *key) {
             free(current->key);
             free(current->value);
             free(current);
+            
+            if (session->store) {
+                pthread_mutex_unlock(&session->store->lock);
+            }
             return;
         }
         
         prev = current;
         current = current->next;
+    }
+    
+    if (session->store) {
+        pthread_mutex_unlock(&session->store->lock);
     }
 }
 
@@ -391,7 +435,9 @@ int session_cleanup_expired(session_store_t *store) {
             free_session_data(store->sessions[i].data);
             store->sessions[i].data = NULL;
             store->sessions[i].in_use = false;
-            store->session_count--;
+            if (store->session_count > 0) {
+                store->session_count--;
+            }
             cleaned++;
         }
     }

@@ -213,6 +213,160 @@ int HTTPServerCreate(uint16_t Port){
 - **No External Dependencies**: Never introduce dependencies on third-party libraries
 - **Pure C Implementation**: Implement features in C, not through external tools or languages
 
+### Common Bug Patterns to Avoid
+
+This section documents recurring bug patterns found during code review. **All contributors
+and reviewers should check for these patterns before merging.**
+
+#### 1. Do Not Duplicate Public Security APIs
+
+The library provides public security utility functions in `security_utils.c`. **Always use
+these instead of reimplementing the same logic privately:**
+
+| Need | Public API | Do NOT reimplement |
+|------|-----------|-------------------|
+| Wipe sensitive memory | `secure_zero(ptr, len)` | Private `_secure_wipe()`, `volatile` loops |
+| Constant-time comparison | `secure_compare(a, b, len)` | Private `_ct_strcmp()`, XOR loops |
+| Cryptographic random bytes | `secure_random_bytes(buf, len)` | Private `/dev/urandom` readers |
+
+```c
+// ✗ BAD — reimplements secure_zero() privately
+static void _secure_wipe(void *ptr, size_t len) {
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (len--) *p++ = 0;
+}
+
+// ✓ GOOD — uses the public API
+#include "kamran.k"
+secure_zero(buffer, sizeof(buffer));
+```
+
+**Why this matters:** If a bug is found in one private copy, the other copies may not be
+updated. All security-critical operations should have a single implementation.
+
+#### 2. Deep-Copy Strings in Middleware Config
+
+When a middleware `*_create()` function receives a config struct containing `const char *`
+string fields, it **must deep-copy them with `strdup()`** — never shallow-copy with
+`memcpy()`. The caller may free or reuse the original strings after `*_create()` returns.
+
+```c
+// ✗ BAD — shallow copy stores caller's pointers (dangling pointer risk)
+g_config = malloc(sizeof(*g_config));
+memcpy(g_config, user_config, sizeof(*g_config));
+
+// ✓ GOOD — deep copy owns its own strings
+g_config = calloc(1, sizeof(*g_config));
+if (user_config->policy) {
+    g_config->policy = strdup(user_config->policy);
+    if (!g_config->policy) { /* handle failure */ }
+}
+```
+
+The corresponding `*_destroy()` function must free each deep-copied string:
+
+```c
+void my_middleware_destroy(void) {
+    if (g_config) {
+        free((void *)g_config->policy);
+        free(g_config);
+        g_config = NULL;
+    }
+}
+```
+
+**Reference implementations:** `middleware_cors.c`, `middleware_auth.c`, `middleware_static.c`.
+
+#### 3. Use `secure_zero()` Instead of `memset()` for Sensitive Data
+
+The C standard allows compilers to optimize away `memset()` calls when the buffer is not
+read afterward ("dead store elimination"). This means `memset(secret, 0, len)` before
+`free(secret)` may be silently removed by the compiler, leaving sensitive data in memory.
+
+```c
+// ✗ BAD — compiler may optimize this away
+memset(decoded_password, 0, sizeof(decoded_password));
+free(jwt_secret);
+
+// ✓ GOOD — volatile pointer prevents optimization
+secure_zero(decoded_password, sizeof(decoded_password));
+secure_zero(jwt_secret, secret_len);
+free(jwt_secret);
+```
+
+**Applies to:** passwords, API keys, JWT secrets, CSRF tokens, session IDs, decoded
+credentials, and any buffer that held plaintext secrets.
+
+#### 4. Handle `strdup()` / `malloc()` Failures in `*_create()` Functions
+
+When a middleware `*_create()` function makes multiple allocations (e.g., `strdup()` for
+several string fields), each allocation must be checked. On failure, all previously
+successful allocations must be cleaned up — typically by calling the corresponding
+`*_destroy()` function.
+
+```c
+// ✗ BAD — ignores strdup failure, leaks earlier allocations
+g_config->field_a = strdup(config->field_a);
+g_config->field_b = strdup(config->field_b); // What if this fails?
+
+// ✓ GOOD — checks each allocation, cleans up on failure
+if (config->field_a) {
+    g_config->field_a = strdup(config->field_a);
+    if (!g_config->field_a) {
+        my_middleware_destroy();  // Frees g_config + any earlier strdup'd fields
+        return NULL;
+    }
+}
+```
+
+#### 5. Pull Request Checklist Additions for Security Code
+
+When your PR touches middleware configs or security-sensitive code, verify:
+
+- [ ] No private reimplementation of `secure_zero`, `secure_compare`, or `secure_random_bytes`
+- [ ] All `const char *` config fields are deep-copied with `strdup()` in `*_create()`
+- [ ] All deep-copied strings are freed in `*_destroy()`
+- [ ] All `strdup()` / `malloc()` calls are checked for `NULL` return
+- [ ] Sensitive data is wiped with `secure_zero()`, not `memset()`
+- [ ] No dangling pointers to caller-owned or stack-allocated strings
+
+## Versioning Policy
+
+This project follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+
+Given a version number **MAJOR.MINOR.PATCH**:
+
+- **MAJOR** is incremented for incompatible public API changes (e.g., removing a function,
+  changing a function signature, renaming a type in `include/kamran.k`)
+- **MINOR** is incremented for backwards-compatible new functionality (e.g., adding a new
+  middleware, a new route helper, or a new JSON utility)
+- **PATCH** is incremented for backwards-compatible bug fixes (e.g., fixing a memory leak,
+  correcting parser behavior, resolving a race condition)
+
+### Where Version Is Defined
+
+The version is declared in **two places** that must stay in sync:
+
+| Location | What to update |
+|----------|---------------|
+| `CMakeLists.txt` | `project(ModernCWebLibrary VERSION X.Y.Z ...)` |
+| `include/kamran.k` | `WEBLIB_VERSION_MAJOR`, `WEBLIB_VERSION_MINOR`, `WEBLIB_VERSION_PATCH`, and `WEBLIB_VERSION` |
+
+A compile-time static assertion in `src/http_server.c` will **fail the build** if the two
+sources disagree, so a mismatch is caught immediately.
+
+### When Bumping the Version
+
+1. Update both `CMakeLists.txt` and `include/kamran.k` in the same commit
+2. Add a new section to `CHANGELOG.md` following Keep a Changelog format
+3. Tag the release commit with `vMAJOR.MINOR.PATCH` (e.g., `v1.1.0`)
+
+### Pre-release and Build Metadata
+
+Pre-release versions may use a hyphen suffix per semver (e.g., `2.0.0-alpha.1`).
+Build metadata may use a plus suffix (e.g., `1.0.0+build.42`). These are currently
+not used but are reserved for future use.
+
 ## Branching Strategy
 
 - **main**: Stable production-ready code
@@ -306,7 +460,7 @@ docs/update-api-documentation
 
 ```c
 // tests/test_feature.c
-#include "weblib.h"
+#include "kamran.k"
 #include <assert.h>
 #include <stdio.h>
 

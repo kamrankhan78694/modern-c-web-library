@@ -1,7 +1,7 @@
 /* Enable POSIX features for strdup */
 #define _POSIX_C_SOURCE 200809L
 
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,8 +28,8 @@ typedef struct var_entry {
 /* Simple hash function */
 static unsigned int hash(const char *str) {
     unsigned int hash = 5381;
-    int c;
-    while ((c = *str++)) {
+    unsigned char c;
+    while ((c = (unsigned char)*str++)) {
         hash = ((hash << 5) + hash) + c;
     }
     return hash % HASH_SIZE;

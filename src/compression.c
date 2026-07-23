@@ -16,7 +16,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <ctype.h>
-#include "weblib.h"
+#include <pthread.h>
+#include "kamran.k"
 
 /* ============================================================================
  * Constants and Data Structures
@@ -52,7 +53,7 @@ static const uint8_t gzip_header[10] = {
 
 /* CRC32 lookup table */
 static uint32_t _crc32_table[256];
-static bool _crc32_table_initialized = false;
+static pthread_once_t _crc32_once = PTHREAD_ONCE_INIT;
 
 /* Minimum size for compression (bytes) */
 #define MIN_COMPRESS_SIZE 256
@@ -74,10 +75,6 @@ static bool _crc32_table_initialized = false;
  * Polynomial: 0xEDB88320 (reflected)
  */
 static void _crc32_init_table(void) {
-    if (_crc32_table_initialized) {
-        return;
-    }
-    
     for (uint32_t i = 0; i < 256; i++) {
         uint32_t crc = i;
         for (int j = 0; j < 8; j++) {
@@ -89,7 +86,6 @@ static void _crc32_init_table(void) {
         }
         _crc32_table[i] = crc;
     }
-    _crc32_table_initialized = true;
 }
 
 /**
@@ -103,7 +99,7 @@ uint32_t crc32_compute(const uint8_t *data, size_t len) {
         return 0;
     }
     
-    _crc32_init_table();
+    pthread_once(&_crc32_once, _crc32_init_table);
     
     uint32_t crc = 0xFFFFFFFF;
     for (size_t i = 0; i < len; i++) {
@@ -521,7 +517,7 @@ static double _parse_quality(const char *param) {
     }
     
     /* Skip whitespace */
-    while (*param && isspace(*param)) {
+    while (*param && isspace((unsigned char)*param)) {
         param++;
     }
     

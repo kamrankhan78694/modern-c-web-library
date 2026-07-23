@@ -13,7 +13,11 @@ else()
 endif()
 
 # Platform-specific settings
-if(WIN32)
+if(EMSCRIPTEN)
+    # WebAssembly (Emscripten) settings
+    set(PLATFORM_LIBS "")
+    add_compile_options(-sWASM=1)
+elseif(WIN32)
     # Windows-specific settings
     add_definitions(-D_WIN32_WINNT=0x0600)
     set(PLATFORM_LIBS ws2_32)
@@ -25,17 +29,12 @@ elseif(APPLE)
     set(PLATFORM_LIBS pthread)
 endif()
 
-# Include directories
-include_directories(${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
-
-# Library source files
-set(WEBLIB_SOURCES
+# Library source files -- WASM-safe subset (pure logic, no OS I/O)
+set(WEBLIB_SOURCES_WASM_SAFE
     src/http_server.c
     src/router.c
     src/json.c
     src/event_loop.c
-    src/websocket.c
-    src/async_websocket.c
     src/body_parser.c
     src/cookie.c
     src/middleware_cors.c
@@ -54,16 +53,62 @@ set(WEBLIB_SOURCES
     src/cache.c
     src/middleware_metrics.c
     src/compression.c
+    src/env_config.c
+    src/security_utils.c
+    src/middleware_security_headers.c
+    src/wasm_runtime.c
+    src/worker_runtime.c
+    src/worker_kv.c
+    src/worker_r2.c
+    src/worker_d1.c
+    src/worker_queues.c
+)
+
+# OS-dependent modules (sockets, real benchmarking) -- excluded from WASM builds
+set(WEBLIB_SOURCES_NATIVE_ONLY
+    src/websocket.c
+    src/async_websocket.c
     src/benchmark.c
 )
 
+if(EMSCRIPTEN)
+    set(WEBLIB_SOURCES ${WEBLIB_SOURCES_WASM_SAFE})
+else()
+    set(WEBLIB_SOURCES ${WEBLIB_SOURCES_WASM_SAFE} ${WEBLIB_SOURCES_NATIVE_ONLY})
+endif()
+
 # Create static library
 add_library(weblib STATIC ${WEBLIB_SOURCES})
+target_include_directories(weblib
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+           $<INSTALL_INTERFACE:include>
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 target_link_libraries(weblib ${PLATFORM_LIBS})
 
-# Create shared library (optional)
-add_library(weblib_shared SHARED ${WEBLIB_SOURCES})
-target_link_libraries(weblib_shared ${PLATFORM_LIBS})
+# Pass CMake project version to C code so a static assertion can verify that
+# the version in the header (kamran.k) matches the one in CMakeLists.txt.
+target_compile_definitions(weblib PRIVATE
+    CMAKE_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    CMAKE_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    CMAKE_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+)
+
+if(NOT EMSCRIPTEN)
+    # Create shared library (not supported for WASM)
+    add_library(weblib_shared SHARED ${WEBLIB_SOURCES})
+    target_include_directories(weblib_shared
+        PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+               $<INSTALL_INTERFACE:include>
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(weblib_shared ${PLATFORM_LIBS})
+    target_compile_definitions(weblib_shared PRIVATE
+        CMAKE_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+        CMAKE_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+        CMAKE_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+    )
+endif()
 
 # Build examples
 option(BUILD_EXAMPLES "Build example programs" ON)
@@ -79,12 +124,19 @@ if(BUILD_TESTS)
 endif()
 
 # Installation
-install(TARGETS weblib weblib_shared
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-)
+if(EMSCRIPTEN)
+    install(TARGETS weblib
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+    )
+else()
+    install(TARGETS weblib weblib_shared
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+    )
+endif()
 
-install(FILES include/weblib.h include/db_pool.h DESTINATION include)
+install(FILES include/kamran.k include/db_pool.h DESTINATION include)
 
 # Package configuration
 set(CPACK_PACKAGE_NAME "modern-c-web-library")

@@ -6,7 +6,7 @@
  * Pure C with zero external dependencies.
  */
 
-#include "weblib.h"
+#include "kamran.k"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +15,8 @@
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
+#elif defined(__EMSCRIPTEN__)
+    #include "wasm_compat.h"
 #else
     #include <sys/socket.h>
     #include <netinet/in.h>
