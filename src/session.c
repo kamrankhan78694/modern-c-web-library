@@ -39,13 +39,16 @@ struct session_store {
     pthread_mutex_t lock;
 };
 
-/* Generate random session ID */
-static void generate_session_id(char *buffer, size_t length) {
-    static const char charset[] = 
+/* Generate a random session ID.  Returns 0 on success, -1 on CSPRNG failure.
+ * Fails closed: it never falls back to a predictable PRNG (rand/rand_r) for a
+ * security token -- a caller that cannot obtain entropy must refuse the
+ * session rather than issue a guessable ID. */
+static int generate_session_id(char *buffer, size_t length) {
+    static const char charset[] =
         "0123456789"
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz";
-    
+
     size_t charset_len = sizeof(charset) - 1;
     unsigned char random_bytes[64]; /* Max SESSION_ID_LENGTH */
 
@@ -53,39 +56,33 @@ static void generate_session_id(char *buffer, size_t length) {
         length = sizeof(random_bytes);
     }
 
-    if (secure_random_bytes(random_bytes, length) == 0) {
-        /* Rejection sampling to avoid modular bias.
-         * 256 / 62 = 4 remainder 8; threshold = 256 - 8 = 248 */
-        unsigned char threshold = (unsigned char)(256 - (256 % charset_len));
-        for (size_t i = 0; i < length; ) {
-            if (random_bytes[i] < threshold) {
-                buffer[i] = charset[random_bytes[i] % charset_len];
-                i++;
-            } else {
-                /* Re-sample this byte */
-                unsigned char replacement;
-                if (secure_random_bytes(&replacement, 1) != 0) {
-                    /* RNG failure — abort session ID generation entirely */
-                    memset(buffer, 0, length + 1);
-                    return;
-                }
-                random_bytes[i] = replacement;
-                /* loop will retry */
+    if (secure_random_bytes(random_bytes, length) != 0) {
+        /* May hold partial CSPRNG output on failure: wipe it, leave no ID. */
+        secure_zero(random_bytes, sizeof(random_bytes));
+        buffer[0] = '\0';
+        return -1;
+    }
+
+    /* Rejection sampling to avoid modular bias.
+     * 256 / 62 = 4 remainder 8; threshold = 256 - 8 = 248 */
+    unsigned char threshold = (unsigned char)(256 - (256 % charset_len));
+    for (size_t i = 0; i < length; ) {
+        if (random_bytes[i] < threshold) {
+            buffer[i] = charset[random_bytes[i] % charset_len];
+            i++;
+        } else {
+            /* Re-sample this byte. */
+            unsigned char replacement;
+            if (secure_random_bytes(&replacement, 1) != 0) {
+                secure_zero(random_bytes, sizeof(random_bytes));
+                return -1;
             }
-        }
-    } else {
-        /* Fallback: use rand_r() with thread-local seed for thread safety */
-        static __thread unsigned int seed_state = 0;
-        if (seed_state == 0) {
-            seed_state = (unsigned int)time(NULL);
-            seed_state ^= (unsigned int)clock();
-            seed_state ^= (unsigned int)(size_t)&seed_state;
-        }
-        for (size_t i = 0; i < length; i++) {
-            buffer[i] = charset[rand_r(&seed_state) % charset_len];
+            random_bytes[i] = replacement;
         }
     }
     buffer[length] = '\0';
+    secure_zero(random_bytes, sizeof(random_bytes));   /* wipe raw entropy */
+    return 0;
 }
 
 /* Create session store */
@@ -172,8 +169,13 @@ char *session_create(session_store_t *store, int max_age) {
     bool unique = false;
     
     for (int attempt = 0; attempt < max_attempts && !unique; attempt++) {
-        generate_session_id(session->session_id, SESSION_ID_LENGTH);
-        
+        if (generate_session_id(session->session_id, SESSION_ID_LENGTH) != 0) {
+            /* CSPRNG unavailable: fail closed rather than issue a guessable ID. */
+            fprintf(stderr, "session_create: secure RNG unavailable — refusing to issue session ID\n");
+            pthread_mutex_unlock(&store->lock);
+            return NULL;
+        }
+
         /* Check for uniqueness */
         unique = true;
         for (size_t i = 0; i < MAX_SESSIONS; i++) {

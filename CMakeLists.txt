@@ -20,7 +20,8 @@ if(EMSCRIPTEN)
 elseif(WIN32)
     # Windows-specific settings
     add_definitions(-D_WIN32_WINNT=0x0600)
-    set(PLATFORM_LIBS ws2_32)
+    # bcrypt: BCryptGenRandom() used by secure_random_bytes()
+    set(PLATFORM_LIBS ws2_32 bcrypt)
 elseif(UNIX AND NOT APPLE)
     # Linux-specific settings
     set(PLATFORM_LIBS pthread)

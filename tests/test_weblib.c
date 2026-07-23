@@ -4087,6 +4087,26 @@ void test_secure_random_bytes(void) {
     }
     ASSERT(all_zero == 0);
 
+    /* A larger-than-256-byte fill exercises the getrandom() partial-read loop:
+     * on Linux getrandom() only guarantees full delivery for requests up to
+     * 256 bytes, so larger requests may return partial and must be looped. */
+    unsigned char big[300];
+    memset(big, 0, sizeof(big));
+    ASSERT(secure_random_bytes(big, sizeof(big)) == 0);
+    int big_all_zero = 1;
+    for (size_t i = 0; i < sizeof(big); i++) {
+        if (big[i] != 0) { big_all_zero = 0; break; }
+    }
+    ASSERT(big_all_zero == 0);
+
+    /* The tail past the first 256 bytes must also be randomized -- catches a
+     * getrandom() loop that stops after the first (<=256-byte) partial read. */
+    int big_tail_zero = 1;
+    for (size_t i = 256; i < sizeof(big); i++) {
+        if (big[i] != 0) { big_tail_zero = 0; break; }
+    }
+    ASSERT(big_tail_zero == 0);
+
     /* NULL/zero-length returns error */
     ASSERT(secure_random_bytes(NULL, 16) == -1);
     ASSERT(secure_random_bytes(buf1, 0) == -1);
