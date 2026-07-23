@@ -959,6 +959,73 @@ void test_stress_slow_client(void) {
     PASS();
 }
 
+/* Security regression: a client that starts a request and never finishes it,
+ * dribbling bytes to keep each recv() under SO_RCVTIMEO (slow-loris), must be
+ * cut off by the total request deadline rather than holding a worker forever. */
+void test_stress_slowloris_deadline(void) {
+    TEST("slow-loris (never-completing drip is bounded by request deadline)");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/test", dummy_handler);
+    http_server_set_router(server, router);
+
+    /* Default deadline is 60s; tighten to 1s. Keep SO_RCVTIMEO high (5s) so the
+     * per-recv timer never fires -- only the total deadline should stop us. */
+    ASSERT(http_server_get_request_timeout(server) == 60);
+    ASSERT(http_server_set_request_timeout(server, 1) == 0);
+    ASSERT(http_server_get_request_timeout(server) == 1);
+    http_server_set_timeout(server, 5, 5);
+
+    uint16_t port = 19007;
+    ASSERT(http_server_listen(server, port) == 0);
+    usleep(200000);
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT(sock >= 0);
+    struct timeval cto = { .tv_sec = 3, .tv_usec = 0 };   /* client recv timeout */
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &cto, sizeof(cto));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    ASSERT(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+
+    time_t t_start = time(NULL);
+    /* Start a request but never send the terminating CRLF; dribble one byte at
+     * a time, each well within SO_RCVTIMEO, so the per-recv timer keeps resetting. */
+    const char *partial = "GET /test HTTP/1.1\r\nHost: localhost\r\n";
+    send(sock, partial, strlen(partial), 0);
+    for (int i = 0; i < 4; i++) {
+        send(sock, "a", 1, 0);     /* dribble; never completes the request */
+        usleep(300000);            /* 4 * 300ms = 1.2s > 1s deadline */
+    }
+
+    /* With the deadline, the server cuts us off at ~1s, so this recv returns
+     * promptly (408 / EOF / reset). A regression leaves the server blocked in
+     * recv until SO_RCVTIMEO, so the client recv would time out instead -- the
+     * timing assertion below catches that (elapsed would be ~4s, not ~1.2s). */
+    char resp[512];
+    ssize_t n = recv(sock, resp, sizeof(resp) - 1, 0);
+    time_t elapsed = time(NULL) - t_start;
+    ASSERT(elapsed <= 3);
+    if (n > 0) {
+        resp[n] = '\0';
+        ASSERT(strstr(resp, "408") != NULL);
+    }
+
+    close(sock);
+    http_server_stop(server);
+    usleep(100000);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 /* ===== Input Validation Stress Tests ===== */
 
 void test_stress_input_validation_long_strings(void) {
@@ -1120,6 +1187,7 @@ int main(void) {
         test_stress_oversized_request();
         test_stress_many_headers();
         test_stress_slow_client();
+        test_stress_slowloris_deadline();
     }
 
     /* Input Validation Stress Tests */

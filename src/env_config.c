@@ -180,6 +180,12 @@ int http_server_apply_env(http_server_t *server) {
                                 wt >= 0 ? wt : cur_wt);
     }
 
+    /* WEBLIB_REQUEST_TIMEOUT (total request-read deadline; slow-loris guard) */
+    int reqt = env_config_get_int("WEBLIB_REQUEST_TIMEOUT", -1);
+    if (reqt >= 0) {
+        http_server_set_request_timeout(server, reqt);
+    }
+
     /* WEBLIB_THREAD_COUNT */
     int tc = env_config_get_int("WEBLIB_THREAD_COUNT", -1);
     if (tc > 0) {

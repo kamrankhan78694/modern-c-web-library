@@ -173,6 +173,11 @@ typedef enum {
 /* Default timeouts in seconds */
 #define DEFAULT_READ_TIMEOUT_SEC 30
 #define DEFAULT_WRITE_TIMEOUT_SEC 30
+/* Total wall-clock deadline to read a COMPLETE request.  SO_RCVTIMEO only
+ * bounds a single recv() and is reset by every byte that arrives, so a slow
+ * "drip" client can hold a worker thread indefinitely (slow-loris).  This
+ * deadline bounds the whole request regardless of drip rate. 0 disables it. */
+#define DEFAULT_REQUEST_TIMEOUT_SEC 60
 
 /* Internal server structure */
 struct http_server {
@@ -186,7 +191,8 @@ struct http_server {
     /* Socket timeouts */
     int read_timeout_sec;
     int write_timeout_sec;
-    
+    int request_timeout_sec;   /* Total deadline to read a full request (slow-loris guard) */
+
     /* Thread pool (threaded mode) */
     thread_pool_t *pool;
     int thread_count;
@@ -282,6 +288,7 @@ http_server_t *http_server_create(void) {
     server->event_loop = NULL;
     server->read_timeout_sec = DEFAULT_READ_TIMEOUT_SEC;
     server->write_timeout_sec = DEFAULT_WRITE_TIMEOUT_SEC;
+    server->request_timeout_sec = DEFAULT_REQUEST_TIMEOUT_SEC;
     server->pool = NULL;
     server->thread_count = THREAD_POOL_DEFAULT_SIZE;
     
@@ -701,7 +708,20 @@ static void *handle_connection(void *arg) {
             result = http_parser_execute(&conn->parser, NULL, 0);
         }
 
+        /* Start the total-request deadline for this request. */
+        time_t request_start = time(NULL);
+
         while (result == PARSER_INCOMPLETE || result == PARSER_EXPECT_CONTINUE) {
+            /* Enforce the whole-request deadline: a slow-drip client keeps each
+             * recv() under SO_RCVTIMEO, so only this wall-clock bound stops it
+             * from holding the worker thread indefinitely (slow-loris). */
+            if (server->request_timeout_sec > 0 &&
+                (long)(time(NULL) - request_start) >= (long)server->request_timeout_sec) {
+                send_error_response(client_fd, HTTP_REQUEST_TIMEOUT, "Request Timeout");
+                connection_open = false;
+                goto iteration_cleanup;
+            }
+
             if (result == PARSER_EXPECT_CONTINUE) {
                 /* RFC 7231 §5.1.1: send 100 Continue before waiting for body */
                 static const char CONTINUE_RESP[] = "HTTP/1.1 100 Continue\r\n\r\n";
@@ -723,6 +743,14 @@ static void *handle_connection(void *arg) {
             if (bytes_read < 0) {
                 if (errno == EINTR) {
                     continue;
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    /* SO_RCVTIMEO fired: the client stalled without completing
+                     * the request. That is a client timeout (408), not a
+                     * server error (500). */
+                    send_error_response(client_fd, HTTP_REQUEST_TIMEOUT, "Request Timeout");
+                    connection_open = false;
+                    goto iteration_cleanup;
                 }
                 perror("recv failed");
                 send_error_response(client_fd, HTTP_INTERNAL_ERROR, "Socket read error");
@@ -1913,6 +1941,23 @@ int http_server_set_timeout(http_server_t *server, int read_sec, int write_sec) 
     server->read_timeout_sec = read_sec;
     server->write_timeout_sec = write_sec;
     return 0;
+}
+
+/* Set the total request-read deadline in seconds (0 disables the deadline). */
+int http_server_set_request_timeout(http_server_t *server, int sec) {
+    if (!server || sec < 0) {
+        return -1;
+    }
+    server->request_timeout_sec = sec;
+    return 0;
+}
+
+/* Get the total request-read deadline. */
+int http_server_get_request_timeout(http_server_t *server) {
+    if (!server) {
+        return -1;
+    }
+    return server->request_timeout_sec;
 }
 
 /* Get read timeout */
