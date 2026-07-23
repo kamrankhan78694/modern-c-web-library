@@ -458,7 +458,7 @@ static void test_d1_create_table_and_insert(void) {
 static void test_d1_select(void) {
     TEST("d1_select");
     worker_d1_t *db = worker_d1_create("testdb");
-    worker_d1_exec(db, "CREATE TABLE items (id, title)");
+    worker_d1_result_destroy(worker_d1_exec(db, "CREATE TABLE items (id, title)"));
 
     /* Insert two rows */
     worker_d1_stmt_t *ins = worker_d1_prepare(db,
@@ -507,7 +507,7 @@ static void test_d1_select(void) {
 static void test_d1_delete_rows(void) {
     TEST("d1_delete_rows");
     worker_d1_t *db = worker_d1_create("testdb");
-    worker_d1_exec(db, "CREATE TABLE logs (id, msg)");
+    worker_d1_result_destroy(worker_d1_exec(db, "CREATE TABLE logs (id, msg)"));
 
     worker_d1_stmt_t *ins = worker_d1_prepare(db,
         "INSERT INTO logs (id, msg) VALUES (?, ?)");
@@ -550,7 +550,7 @@ static void test_d1_delete_rows(void) {
 static void test_d1_batch(void) {
     TEST("d1_batch");
     worker_d1_t *db = worker_d1_create("testdb");
-    worker_d1_exec(db, "CREATE TABLE batch_test (id, val)");
+    worker_d1_result_destroy(worker_d1_exec(db, "CREATE TABLE batch_test (id, val)"));
 
     worker_d1_stmt_t *s1 = worker_d1_prepare(db,
         "INSERT INTO batch_test (id, val) VALUES (?, ?)");
