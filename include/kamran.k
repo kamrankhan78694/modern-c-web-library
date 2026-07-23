@@ -1212,6 +1212,11 @@ void template_context_destroy(template_context_t *ctx);
  * Only use the triple-brace raw form for values you fully control; binding
  * untrusted input with {{{ }}} reintroduces XSS. Unknown variables render empty.
  *
+ * Escaping is sufficient for HTML text and quoted attribute values only. It is
+ * NOT sufficient for unquoted attributes, javascript:/data: URLs, or the bodies
+ * of <script>/<style> elements -- do not place template output in those
+ * contexts without additional, context-appropriate encoding.
+ *
  * @param template_str Template string
  * @param ctx Template context with variables
  * @return Rendered string (caller must free) or NULL on error

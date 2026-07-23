@@ -1449,6 +1449,10 @@ void test_template_autoescape(void) {
     ASSERT(strstr(esc, "<script>") == NULL);          /* no raw injection */
     ASSERT(strstr(esc, "&lt;script&gt;") != NULL);    /* escaped */
     ASSERT(strstr(esc, "&amp;") != NULL);             /* & escaped */
+    ASSERT(strstr(esc, "&quot;") != NULL);            /* " escaped */
+    ASSERT(strstr(esc, "&#39;") != NULL);             /* ' escaped */
+    ASSERT(strchr(esc, '"') == NULL);                 /* no raw quote survives */
+    ASSERT(strchr(esc, '\'') == NULL);                /* no raw apostrophe survives */
     free(esc);
 
     /* {{{ x }}} is an explicit opt-in to raw, unescaped output. */
