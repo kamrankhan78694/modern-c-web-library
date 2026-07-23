@@ -187,7 +187,7 @@ struct http_server {
     volatile sig_atomic_t running;
     volatile sig_atomic_t state;
     pthread_t accept_thread;
-    bool accept_thread_started;   /* true only once pthread_create() succeeded — gates every pthread_join() so an uninitialised handle is never joined */
+    volatile sig_atomic_t accept_thread_started;   /* set only once pthread_create() succeeded — gates every pthread_join() so an uninitialised handle is never joined; sig_atomic_t (like running/state) keeps it safe when stop() is driven from a signal handler */
     
     /* Socket timeouts */
     int read_timeout_sec;
