@@ -222,7 +222,57 @@ void test_json_parse_string(void) {
     ASSERT(strcmp(val->data.string_val, "test string") == 0);
     
     json_value_free(val);
-    
+
+    PASS();
+}
+
+/* Regression: numbers must serialize losslessly, not via %g's 6-sig-fig form. */
+void test_json_number_precision(void) {
+    TEST("json_stringify (number precision / round-trip)");
+
+    /* Large integer prints exactly (was "1.23457e+09" with %g). */
+    json_value_t *big = json_number_create(1234567890.0);
+    char *s = json_stringify(big);
+    ASSERT(s != NULL);
+    ASSERT(strcmp(s, "1234567890") == 0);
+    free(s); json_value_free(big);
+
+    /* Integral double: no decimal point or exponent. */
+    json_value_t *e11 = json_number_create(100000000000.0);
+    s = json_stringify(e11);
+    ASSERT(s != NULL && strcmp(s, "100000000000") == 0);
+    free(s); json_value_free(e11);
+
+    /* High-precision fraction must round-trip exactly (was "3.14159"). */
+    double pi = 3.141592653589793;
+    json_value_t *fp = json_number_create(pi);
+    s = json_stringify(fp);
+    ASSERT(s != NULL);
+    ASSERT(strtod(s, NULL) == pi);
+    ASSERT(strstr(s, "3.14159265") != NULL);
+    free(s); json_value_free(fp);
+
+    /* Round-trip through the parser for a value with no exact decimal form. */
+    double third = 1.0 / 3.0;
+    json_value_t *t = json_number_create(third);
+    s = json_stringify(t);
+    json_value_t *reparsed = json_parse(s);
+    ASSERT(reparsed != NULL && reparsed->type == JSON_NUMBER);
+    ASSERT(reparsed->data.number_val == third);
+    free(s); json_value_free(t); json_value_free(reparsed);
+
+    /* Non-finite values (JSON has no NaN/Infinity) serialize as valid null,
+     * not the invalid "inf"/"nan" that %g would emit. */
+    json_value_t *inf = json_number_create(strtod("inf", NULL));
+    s = json_stringify(inf);
+    ASSERT(s != NULL && strcmp(s, "null") == 0);
+    free(s); json_value_free(inf);
+
+    json_value_t *nanv = json_number_create(strtod("nan", NULL));
+    s = json_stringify(nanv);
+    ASSERT(s != NULL && strcmp(s, "null") == 0);
+    free(s); json_value_free(nanv);
+
     PASS();
 }
 
@@ -4294,6 +4344,7 @@ int main(void) {
     test_json_bool_create();
     test_json_object_operations();
     test_json_stringify();
+    test_json_number_precision();
     test_json_parse_string();
     test_json_parse_number();
     test_json_parse_bool();
