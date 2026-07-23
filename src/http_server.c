@@ -173,6 +173,11 @@ typedef enum {
 /* Default timeouts in seconds */
 #define DEFAULT_READ_TIMEOUT_SEC 30
 #define DEFAULT_WRITE_TIMEOUT_SEC 30
+/* Total wall-clock deadline to read a COMPLETE request.  SO_RCVTIMEO only
+ * bounds a single recv() and is reset by every byte that arrives, so a slow
+ * "drip" client can hold a worker thread indefinitely (slow-loris).  This
+ * deadline bounds the whole request regardless of drip rate. 0 disables it. */
+#define DEFAULT_REQUEST_TIMEOUT_SEC 60
 
 /* Internal server structure */
 struct http_server {
@@ -186,7 +191,8 @@ struct http_server {
     /* Socket timeouts */
     int read_timeout_sec;
     int write_timeout_sec;
-    
+    int request_timeout_sec;   /* Total deadline to read a full request (slow-loris guard) */
+
     /* Thread pool (threaded mode) */
     thread_pool_t *pool;
     int thread_count;
@@ -282,6 +288,7 @@ http_server_t *http_server_create(void) {
     server->event_loop = NULL;
     server->read_timeout_sec = DEFAULT_READ_TIMEOUT_SEC;
     server->write_timeout_sec = DEFAULT_WRITE_TIMEOUT_SEC;
+    server->request_timeout_sec = DEFAULT_REQUEST_TIMEOUT_SEC;
     server->pool = NULL;
     server->thread_count = THREAD_POOL_DEFAULT_SIZE;
     
@@ -517,6 +524,18 @@ static void apply_socket_timeouts(int fd, int read_sec, int write_sec) {
     }
 }
 
+/* Monotonic wall-clock seconds for measuring elapsed time.  Unlike time(), it
+ * is immune to system-clock jumps (NTP/DST), so a backward jump cannot extend
+ * (and thereby defeat) the request deadline.  Falls back to time() only if the
+ * monotonic clock is unavailable at runtime. */
+static time_t monotonic_seconds(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        return (time_t)ts.tv_sec;
+    }
+    return time(NULL);
+}
+
 /* Thread pool work wrapper — handle_connection expects void* and frees conn */
 static void connection_work(void *arg) {
     handle_connection(arg);
@@ -555,8 +574,17 @@ static void *accept_connections(void *arg) {
         server->active_connections++;
         pthread_mutex_unlock(&server->conn_lock);
         
-        /* Apply socket timeouts */
-        apply_socket_timeouts(client_fd, server->read_timeout_sec, server->write_timeout_sec);
+        /* Apply socket timeouts.  The request deadline is only checked between
+         * recv() calls, so recv() must wake within the deadline for it to bound
+         * a partial-then-silent client.  Cap the effective read timeout at the
+         * request deadline (treating 0 as "no timeout") so the deadline stays
+         * enforced even when the per-recv read timeout is disabled. */
+        int eff_read_timeout = server->read_timeout_sec;
+        if (server->request_timeout_sec > 0 &&
+            (eff_read_timeout <= 0 || eff_read_timeout > server->request_timeout_sec)) {
+            eff_read_timeout = server->request_timeout_sec;
+        }
+        apply_socket_timeouts(client_fd, eff_read_timeout, server->write_timeout_sec);
         
         /* Submit to thread pool */
         connection_t *conn = (connection_t *)calloc(1, sizeof(connection_t));
@@ -701,7 +729,20 @@ static void *handle_connection(void *arg) {
             result = http_parser_execute(&conn->parser, NULL, 0);
         }
 
+        /* Start the total-request deadline for this request (monotonic clock). */
+        time_t request_start = monotonic_seconds();
+
         while (result == PARSER_INCOMPLETE || result == PARSER_EXPECT_CONTINUE) {
+            /* Enforce the whole-request deadline: a slow-drip client keeps each
+             * recv() under SO_RCVTIMEO, so only this wall-clock bound stops it
+             * from holding the worker thread indefinitely (slow-loris). */
+            if (server->request_timeout_sec > 0 &&
+                (long)(monotonic_seconds() - request_start) >= (long)server->request_timeout_sec) {
+                send_error_response(client_fd, HTTP_REQUEST_TIMEOUT, "Request Timeout");
+                connection_open = false;
+                goto iteration_cleanup;
+            }
+
             if (result == PARSER_EXPECT_CONTINUE) {
                 /* RFC 7231 §5.1.1: send 100 Continue before waiting for body */
                 static const char CONTINUE_RESP[] = "HTTP/1.1 100 Continue\r\n\r\n";
@@ -723,6 +764,14 @@ static void *handle_connection(void *arg) {
             if (bytes_read < 0) {
                 if (errno == EINTR) {
                     continue;
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    /* SO_RCVTIMEO fired: the client stalled without completing
+                     * the request. That is a client timeout (408), not a
+                     * server error (500). */
+                    send_error_response(client_fd, HTTP_REQUEST_TIMEOUT, "Request Timeout");
+                    connection_open = false;
+                    goto iteration_cleanup;
                 }
                 perror("recv failed");
                 send_error_response(client_fd, HTTP_INTERNAL_ERROR, "Socket read error");
@@ -827,6 +876,7 @@ static const char *status_reason_phrase(http_status_t status) {
         case HTTP_FORBIDDEN: return "Forbidden";
         case HTTP_NOT_FOUND: return "Not Found";
         case HTTP_METHOD_NOT_ALLOWED: return "Method Not Allowed";
+        case HTTP_REQUEST_TIMEOUT: return "Request Timeout";
         case HTTP_PAYLOAD_TOO_LARGE: return "Payload Too Large";
         case HTTP_URI_TOO_LONG: return "URI Too Long";
         case HTTP_TOO_MANY_REQUESTS: return "Too Many Requests";
@@ -1915,6 +1965,23 @@ int http_server_set_timeout(http_server_t *server, int read_sec, int write_sec) 
     return 0;
 }
 
+/* Set the total request-read deadline in seconds (0 disables the deadline). */
+int http_server_set_request_timeout(http_server_t *server, int sec) {
+    if (!server || sec < 0) {
+        return -1;
+    }
+    server->request_timeout_sec = sec;
+    return 0;
+}
+
+/* Get the total request-read deadline. */
+int http_server_get_request_timeout(http_server_t *server) {
+    if (!server) {
+        return -1;
+    }
+    return server->request_timeout_sec;
+}
+
 /* Get read timeout */
 int http_server_get_read_timeout(http_server_t *server) {
     if (!server) {
@@ -1985,7 +2052,15 @@ static int set_nonblocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-/* Async accept handler */
+/* Async accept handler.
+ *
+ * NOTE: async mode does NOT yet bound slow/idle clients. Unlike the threaded
+ * path, it registers no per-connection start-time or idle timer, so the
+ * request_timeout_sec deadline is not enforced here and a slow-loris (or fully
+ * idle) client persists until it disconnects, tying up an fd + memory. Less
+ * severe than the threaded case (no worker thread is held), but still a gap --
+ * tracked as a follow-up: add an event-loop idle/deadline reaper for async
+ * connections. */
 static void async_accept_handler(int fd, int events, void *user_data) {
     http_server_t *server = (http_server_t *)user_data;
     

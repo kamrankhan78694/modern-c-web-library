@@ -959,6 +959,133 @@ void test_stress_slow_client(void) {
     PASS();
 }
 
+/* Security regression: a client that starts a request and never finishes it,
+ * dribbling bytes to keep each recv() under SO_RCVTIMEO (slow-loris), must be
+ * cut off by the total request deadline rather than holding a worker forever. */
+void test_stress_slowloris_deadline(void) {
+    TEST("slow-loris (never-completing drip is bounded by request deadline)");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/test", dummy_handler);
+    http_server_set_router(server, router);
+
+    /* Default deadline is 60s; tighten to 1s. Keep SO_RCVTIMEO high (5s) so the
+     * per-recv timer never fires -- only the total deadline should stop us. */
+    ASSERT(http_server_get_request_timeout(server) == 60);
+    ASSERT(http_server_set_request_timeout(server, 1) == 0);
+    ASSERT(http_server_get_request_timeout(server) == 1);
+    http_server_set_timeout(server, 5, 5);
+
+    uint16_t port = 19007;
+    ASSERT(http_server_listen(server, port) == 0);
+    usleep(200000);
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT(sock >= 0);
+    struct timeval cto = { .tv_sec = 3, .tv_usec = 0 };   /* client recv timeout */
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &cto, sizeof(cto));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    ASSERT(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+
+    /* Start a request but never send the terminating CRLF, then dribble bytes
+     * continuously (each within SO_RCVTIMEO, so the per-recv timer keeps
+     * resetting -- classic slow-loris).  With the total deadline the server
+     * cuts us off ~1s in; we detect that by a failed send() (EPIPE on a closed
+     * socket; SIGPIPE is ignored process-wide) or a non-blocking recv seeing the
+     * 408 / EOF / reset.  A regression reads the drip forever, so the safety cap
+     * is reached and `cutoff` stays false.  Polling (not a fixed sleep) keeps
+     * this robust under slow/loaded CI and Valgrind. */
+    const char *partial = "GET /test HTTP/1.1\r\nHost: localhost\r\n";
+    send(sock, partial, strlen(partial), 0);
+
+    time_t t_start = time(NULL);
+    int cutoff = 0;
+    while ((time(NULL) - t_start) < 6) {                 /* safety cap */
+        if (send(sock, "a", 1, 0) < 0) { cutoff = 1; break; }   /* server closed */
+        char buf[512];
+        ssize_t r = recv(sock, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+        if (r == 0) { cutoff = 1; break; }               /* FIN */
+        if (r > 0) { cutoff = 1; break; }                /* 408 response */
+        if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            cutoff = 1; break;                           /* e.g. ECONNRESET */
+        }
+        usleep(150000);                                  /* 150ms drip interval */
+    }
+    time_t elapsed = time(NULL) - t_start;
+
+    /* The server must have cut off the never-completing drip (slow-loris)
+     * within the deadline plus a generous margin, not held it to the safety cap. */
+    ASSERT(cutoff == 1);
+    ASSERT(elapsed <= 4);
+
+    close(sock);
+    http_server_stop(server);
+    usleep(100000);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
+/* Security regression: with the per-recv read timeout disabled, a partial
+ * request followed by silence must STILL be cut off by the request deadline --
+ * the effective recv() timeout is capped at the deadline so it stays enforced. */
+void test_stress_request_deadline_silent(void) {
+    TEST("request deadline bounds a silent client even with read timeout 0");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/test", dummy_handler);
+    http_server_set_router(server, router);
+
+    http_server_set_timeout(server, 0, 0);                    /* read timeout DISABLED */
+    ASSERT(http_server_set_request_timeout(server, 1) == 0);  /* 1s total deadline */
+
+    uint16_t port = 19008;
+    ASSERT(http_server_listen(server, port) == 0);
+    usleep(200000);
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT(sock >= 0);
+    struct timeval cto = { .tv_sec = 3, .tv_usec = 0 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &cto, sizeof(cto));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    ASSERT(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+
+    /* Send a partial request, then go completely silent. */
+    const char *partial = "GET /test HTTP/1.1\r\nHost: localhost\r\n";
+    send(sock, partial, strlen(partial), 0);
+
+    /* The server must act (408 / close) within our 3s recv timeout. A regression
+     * (deadline not enforced when the read timeout is 0) leaves the server
+     * blocked in recv indefinitely, so our recv would time out with EAGAIN. */
+    char buf[512];
+    errno = 0;
+    ssize_t n = recv(sock, buf, sizeof(buf) - 1, 0);
+    int server_acted = (n >= 0) || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK);
+    ASSERT(server_acted);
+
+    close(sock);
+    http_server_stop(server);
+    usleep(100000);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 /* ===== Input Validation Stress Tests ===== */
 
 void test_stress_input_validation_long_strings(void) {
@@ -1120,6 +1247,8 @@ int main(void) {
         test_stress_oversized_request();
         test_stress_many_headers();
         test_stress_slow_client();
+        test_stress_slowloris_deadline();
+        test_stress_request_deadline_silent();
     }
 
     /* Input Validation Stress Tests */
