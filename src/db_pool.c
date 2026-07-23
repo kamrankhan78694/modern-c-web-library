@@ -272,8 +272,9 @@ db_connection_t *db_pool_acquire(db_pool_t *pool) {
     }
     
     pool->active_acquirers--;
-    /* Wake db_pool_destroy in case it is waiting for acquirers to drain. */
-    pthread_cond_broadcast(&pool->cond);
+    if (pool->shutdown) {
+        pthread_cond_broadcast(&pool->cond);
+    }
     pthread_mutex_unlock(&pool->mutex);
     return conn;
 }
