@@ -4087,8 +4087,9 @@ void test_secure_random_bytes(void) {
     }
     ASSERT(all_zero == 0);
 
-    /* A larger-than-256-byte fill exercises the multi-call getrandom/read loop
-     * (getrandom may return partial; getentropy caps at 256 per call). */
+    /* A larger-than-256-byte fill exercises the getrandom() partial-read loop:
+     * on Linux getrandom() only guarantees full delivery for requests up to
+     * 256 bytes, so larger requests may return partial and must be looped. */
     unsigned char big[300];
     memset(big, 0, sizeof(big));
     ASSERT(secure_random_bytes(big, sizeof(big)) == 0);
@@ -4099,7 +4100,7 @@ void test_secure_random_bytes(void) {
     ASSERT(big_all_zero == 0);
 
     /* The tail past the first 256 bytes must also be randomized -- catches a
-     * fill loop that stops after a single getrandom/getentropy chunk. */
+     * getrandom() loop that stops after the first (<=256-byte) partial read. */
     int big_tail_zero = 1;
     for (size_t i = 256; i < sizeof(big); i++) {
         if (big[i] != 0) { big_tail_zero = 0; break; }
