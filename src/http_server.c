@@ -5,6 +5,19 @@
 #include <time.h>
 #include <ctype.h>
 
+/* Portable case-insensitive substring search (replaces GNU strcasestr) */
+static const char *_portable_strcasestr(const char *haystack, const char *needle) {
+    if (!haystack) return NULL;
+    if (!needle || !*needle) return haystack;
+    size_t needle_len = strlen(needle);
+    for (; *haystack; haystack++) {
+        if (strncasecmp(haystack, needle, needle_len) == 0) {
+            return haystack;
+        }
+    }
+    return NULL;
+}
+
 /* ===== WASM-safe section (compiled on all platforms) ===== */
 
 /*
@@ -732,8 +745,8 @@ static void *handle_connection(void *arg) {
         }
 
         if (server->router) {
-            if (router_route(server->router, conn->request, conn->response) < 0) {
-                /* router_route already set 404 response body */
+            if (router_route(server->router, conn->request, conn->response) != 0) {
+                /* router_route already set error/404 response body */
             }
         } else {
             http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
@@ -870,14 +883,19 @@ static int header_list_add(http_header_node_t **head_ref, const char *name, cons
             free(lower);
             return -1;
         }
-        free(existing->value);
-        existing->value = new_value;
+        char *new_raw = NULL;
         if (raw_name) {
-            char *new_raw = strdup(raw_name);
+            new_raw = strdup(raw_name);
             if (!new_raw) {
+                free(new_value);
                 free(lower);
                 return -1;
             }
+        }
+        /* All allocations succeeded — now apply changes atomically */
+        free(existing->value);
+        existing->value = new_value;
+        if (new_raw) {
             free(existing->raw_name);
             existing->raw_name = new_raw;
         }
@@ -1235,6 +1253,10 @@ static void parser_set_error(http_parser_t *parser, http_status_t status, const 
 }
 
 static int ensure_buffer_capacity(http_parser_t *parser, size_t additional) {
+    if (additional > SIZE_MAX - parser->buffer_len) {
+        parser_set_error(parser, HTTP_PAYLOAD_TOO_LARGE, "Payload Too Large");
+        return -1;
+    }
     size_t required = parser->buffer_len + additional;
     if (required > MAX_REQUEST_BUFFER) {
         parser_set_error(parser, HTTP_PAYLOAD_TOO_LARGE, "Payload Too Large");
@@ -1505,9 +1527,9 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
             parser->expect_continue = true;
         }
     } else if (strcasecmp(name_buf, "connection") == 0) {
-        if (strcasestr(value_buf, "close")) {
+        if (_portable_strcasestr(value_buf, "close")) {
             parser->keep_alive = false;
-        } else if (strcasestr(value_buf, "keep-alive")) {
+        } else if (_portable_strcasestr(value_buf, "keep-alive")) {
             parser->keep_alive = true;
         }
     } else if (strcasecmp(name_buf, "host") == 0) {
@@ -1628,7 +1650,9 @@ static int parse_chunk_size(http_parser_t *parser) {
     char *endptr = NULL;
     errno = 0;
     unsigned long chunk_size = strtoul(line, &endptr, 16);
-    if (endptr == line || errno == ERANGE || chunk_size > MAX_BODY_BYTES) {
+    /* Reject trailing garbage after hex digits (allow optional chunk-ext starting with ';') */
+    if (endptr == line || errno == ERANGE || chunk_size > MAX_BODY_BYTES ||
+        (*endptr != '\0' && *endptr != ';')) {
         free(line);
         parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid chunk size");
         return -1;
@@ -1755,7 +1779,7 @@ static parser_result_t http_parser_execute(http_parser_t *parser, const char *da
         return PARSER_ERROR;
     }
 
-    if (len > 0) {
+    if (len > 0 && data) {
         if (ensure_buffer_capacity(parser, len) < 0) {
             return PARSER_ERROR;
         }
@@ -1986,6 +2010,16 @@ static void async_accept_handler(int fd, int events, void *user_data) {
         return;
     }
     
+    /* Enforce connection limit in async mode */
+    pthread_mutex_lock(&server->conn_lock);
+    if (server->active_connections >= server->max_connections) {
+        pthread_mutex_unlock(&server->conn_lock);
+        close(client_fd);
+        return;
+    }
+    server->active_connections++;
+    pthread_mutex_unlock(&server->conn_lock);
+    
     /* Set client socket to non-blocking */
     if (set_nonblocking(client_fd) < 0) {
         perror("Failed to set client socket to non-blocking");
@@ -2053,8 +2087,8 @@ static bool async_on_parser_result(async_connection_t *conn, int fd, parser_resu
         keep_alive = false;
     } else if (result == PARSER_COMPLETE) {
         if (server->router) {
-            if (router_route(server->router, conn->request, conn->response) < 0) {
-                /* router_route already set 404 response body */
+            if (router_route(server->router, conn->request, conn->response) != 0) {
+                /* router_route already set error/404 response body */
             }
         } else {
             http_response_send_text(conn->response, HTTP_NOT_FOUND, "Not Found");
@@ -2066,6 +2100,16 @@ static bool async_on_parser_result(async_connection_t *conn, int fd, parser_resu
         } else {
             keep_alive = conn->parser.keep_alive && !response_forces_close(conn->response);
         }
+    } else if (result == PARSER_EXPECT_CONTINUE) {
+        /* RFC 7231 §5.1.1: send 100 Continue before waiting for body */
+        static const char CONTINUE_RESP[] = "HTTP/1.1 100 Continue\r\n\r\n";
+        int send_flags = 0;
+#ifdef MSG_NOSIGNAL
+        send_flags |= MSG_NOSIGNAL;
+#endif
+        send(fd, CONTINUE_RESP, sizeof(CONTINUE_RESP) - 1, send_flags);
+        /* Continue reading body data */
+        return true;
     } else {
         return true;
     }
@@ -2392,6 +2436,15 @@ static void async_websocket_read_handler(int fd, int events, void *user_data) {
 static void free_async_connection(async_connection_t *conn) {
     if (!conn) {
         return;
+    }
+    
+    /* Decrement active connection count */
+    if (conn->server) {
+        pthread_mutex_lock(&conn->server->conn_lock);
+        if (conn->server->active_connections > 0) {
+            conn->server->active_connections--;
+        }
+        pthread_mutex_unlock(&conn->server->conn_lock);
     }
     
     if (conn->client_fd >= 0) {

@@ -100,12 +100,14 @@ void json_object_set(json_value_t *obj, const char *key, json_value_t *value) {
     /* Key doesn't exist, add new entry */
     json_object_entry_t *entry = (json_object_entry_t *)malloc(sizeof(json_object_entry_t));
     if (!entry) {
+        json_value_free(value);
         return;
     }
     
     entry->key = strdup(key);
     if (!entry->key) {
         free(entry);
+        json_value_free(value);
         return;
     }
     entry->value = value;
@@ -501,7 +503,20 @@ static json_value_t *parse_string(const char **str) {
                 for (int i = 1; i <= 4; i++) {
                     if (hex_digit_value(p[i]) < 0) return NULL;
                 }
+                /* Check if this is a high surrogate that requires a second \uXXXX */
+                unsigned int cp = 0;
+                for (int i = 1; i <= 4; i++) {
+                    cp = (cp << 4) | (unsigned)hex_digit_value(p[i]);
+                }
                 p += 5; /* skip u + 4 hex digits */
+                if (cp >= 0xD800 && cp <= 0xDBFF) {
+                    /* Expect \uDC00-\uDFFF */
+                    if (p[0] != '\\' || p[1] != 'u') return NULL;
+                    for (int i = 2; i <= 5; i++) {
+                        if (hex_digit_value(p[i]) < 0) return NULL;
+                    }
+                    p += 6; /* skip \uXXXX */
+                }
             } else {
                 /* Validate escape character */
                 switch (*p) {
@@ -552,14 +567,53 @@ static json_value_t *parse_string(const char **str) {
                         codepoint = (codepoint << 4) | (unsigned)hex_digit_value(p[i]);
                     }
                     p += 4; /* skip 4 hex digits (the 'u' is skipped by outer p++) */
+
+                    /* Reject NUL byte — \u0000 would truncate C strings */
+                    if (codepoint == 0) {
+                        free(string_val);
+                        return NULL;
+                    }
+
+                    /* Handle UTF-16 surrogate pairs (RFC 8259 §7) */
+                    if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+                        /* High surrogate — must be followed by \uDC00-\uDFFF */
+                        if (p[1] == '\\' && p[2] == 'u') {
+                            unsigned int low = 0;
+                            for (int i = 3; i <= 6; i++) {
+                                low = (low << 4) | (unsigned)hex_digit_value(p[i]);
+                            }
+                            if (low >= 0xDC00 && low <= 0xDFFF) {
+                                codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00);
+                                p += 6; /* skip \uXXXX of the low surrogate */
+                            } else {
+                                /* Invalid low surrogate */
+                                free(string_val);
+                                return NULL;
+                            }
+                        } else {
+                            /* Lone high surrogate */
+                            free(string_val);
+                            return NULL;
+                        }
+                    } else if (codepoint >= 0xDC00 && codepoint <= 0xDFFF) {
+                        /* Lone low surrogate — invalid */
+                        free(string_val);
+                        return NULL;
+                    }
+
                     /* Encode as UTF-8 */
                     if (codepoint <= 0x7F) {
                         string_val[out_idx++] = (char)codepoint;
                     } else if (codepoint <= 0x7FF) {
                         string_val[out_idx++] = (char)(0xC0 | (codepoint >> 6));
                         string_val[out_idx++] = (char)(0x80 | (codepoint & 0x3F));
-                    } else {
+                    } else if (codepoint <= 0xFFFF) {
                         string_val[out_idx++] = (char)(0xE0 | (codepoint >> 12));
+                        string_val[out_idx++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+                        string_val[out_idx++] = (char)(0x80 | (codepoint & 0x3F));
+                    } else if (codepoint <= 0x10FFFF) {
+                        string_val[out_idx++] = (char)(0xF0 | (codepoint >> 18));
+                        string_val[out_idx++] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
                         string_val[out_idx++] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
                         string_val[out_idx++] = (char)(0x80 | (codepoint & 0x3F));
                     }
@@ -592,10 +646,31 @@ static json_value_t *parse_string(const char **str) {
 }
 
 static json_value_t *parse_number(const char **str) {
+    const char *p = *str;
+    
+    /* RFC 8259 number: [ minus ] int [ frac ] [ exp ]
+     * int = "0" / ( digit1-9 *DIGIT )
+     * Reject hex, leading '+', leading '.', inf, nan */
+    if (*p == '-') p++;
+    if (!(*p >= '0' && *p <= '9')) return NULL;
+    if (*p == '0' && p[1] >= '0' && p[1] <= '9') return NULL; /* no leading zeros */
+    while (*p >= '0' && *p <= '9') p++;
+    if (*p == '.') {
+        p++;
+        if (!(*p >= '0' && *p <= '9')) return NULL; /* digit required after '.' */
+        while (*p >= '0' && *p <= '9') p++;
+    }
+    if (*p == 'e' || *p == 'E') {
+        p++;
+        if (*p == '+' || *p == '-') p++;
+        if (!(*p >= '0' && *p <= '9')) return NULL;
+        while (*p >= '0' && *p <= '9') p++;
+    }
+    
     char *end;
     double num = strtod(*str, &end);
     
-    if (end == *str) {
+    if (end != p) {
         return NULL;
     }
     
@@ -626,11 +701,18 @@ static json_value_t *parse_null(const char **str) {
 }
 
 static bool ensure_stringify_capacity(char **output, size_t *capacity, size_t length, size_t needed) {
+    if (needed > SIZE_MAX - length) {
+        return false; /* overflow */
+    }
     if (length + needed <= *capacity) {
         return true;
     }
     size_t new_cap = *capacity;
     while (new_cap < length + needed) {
+        if (new_cap > SIZE_MAX / 2) {
+            new_cap = length + needed; /* clamp to exact requirement */
+            break;
+        }
         new_cap *= 2;
     }
     char *new_output = (char *)realloc(*output, new_cap);

@@ -316,10 +316,14 @@ static worker_d1_result_t *_d1_exec_select(worker_d1_t *db, const char *sql,
     r->success = true;
 
     json_value_t *arr = json_array_create();
+    if (!arr) {
+        free(r);
+        return NULL;
+    }
 
     for (int i = 0; i < t->row_count; i++) {
         /* Apply WHERE filter */
-        if (where_col >= 0 && params[0]) {
+        if (where_col >= 0 && param_count > 0 && params[0]) {
             if (strcmp(t->rows[i].cells[where_col], params[0]) != 0)
                 continue;
         }
@@ -366,7 +370,7 @@ static worker_d1_result_t *_d1_exec_delete(worker_d1_t *db, const char *sql,
     int deleted = 0;
     for (int i = t->row_count - 1; i >= 0; i--) {
         bool match = true;
-        if (where_col >= 0 && params[0]) {
+        if (where_col >= 0 && param_count > 0 && params[0]) {
             match = (strcmp(t->rows[i].cells[where_col], params[0]) == 0);
         }
         if (match) {

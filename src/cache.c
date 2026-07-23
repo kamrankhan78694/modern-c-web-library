@@ -204,7 +204,7 @@ static int _is_expired(cache_entry_t *entry)
  */
 cache_t *cache_create(size_t max_entries)
 {
-    if (max_entries == 0)
+    if (max_entries == 0 || max_entries > SIZE_MAX / 2)
         return NULL;
 
     cache_t *cache = calloc(1, sizeof(cache_t));
@@ -343,12 +343,9 @@ int cache_set(cache_t *cache, const char *key, const char *value, int ttl_second
 
 /**
  * Get value by key
- * Returns NULL if not found or expired
- * If expired, automatically removes the entry
- * 
- * WARNING: The returned pointer is internal to the cache and only valid
- * while the cache exists and the entry hasn't been modified/evicted.
- * Caller should copy the string if needed beyond immediate use.
+ * Returns a freshly allocated copy of the cached value, or NULL if not found/expired.
+ * If expired, automatically removes the entry.
+ * Caller must free() the returned string when done.
  */
 const char *cache_get(cache_t *cache, const char *key)
 {
@@ -373,7 +370,7 @@ const char *cache_get(cache_t *cache, const char *key)
     /* Move to head (most recently used) */
     _lru_move_to_head(cache, entry);
 
-    const char *result = entry->value;
+    char *result = strdup(entry->value);
     pthread_mutex_unlock(&cache->lock);
 
     return result;

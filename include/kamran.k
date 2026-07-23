@@ -144,6 +144,7 @@ struct http_form_field {
 
 /* Body parser context stored in request */
 struct body_parser_data {
+    unsigned int magic;  /* Type tag: BODY_PARSER_MAGIC */
     http_form_field_t *fields;
     http_uploaded_file_t *files;
     bool parsed;

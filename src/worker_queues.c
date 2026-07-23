@@ -173,6 +173,18 @@ worker_queue_batch_t *worker_queue_consume(worker_queue_t *q, int max_batch,
     batch->messages = calloc((size_t)max_batch, sizeof(worker_queue_message_t *));
     if (!batch->messages) { free(batch); return NULL; }
 
+    /* Pre-allocate queue_name before dequeuing to avoid data loss on OOM */
+    if (q->queue_name) {
+        batch->queue_name = strdup(q->queue_name);
+        if (!batch->queue_name) {
+            free(batch->messages);
+            free(batch);
+            return NULL;
+        }
+    } else {
+        batch->queue_name = NULL;
+    }
+
     int fetched = 0;
     while (fetched < max_batch && q->count > 0) {
         queue_entry_t *e = &q->messages[q->head];
@@ -200,15 +212,6 @@ worker_queue_batch_t *worker_queue_consume(worker_queue_t *q, int max_batch,
     }
 
     batch->count = fetched;
-    if (q->queue_name) {
-        batch->queue_name = strdup(q->queue_name);
-        if (!batch->queue_name) {
-            worker_queue_batch_destroy(batch);
-            return NULL;
-        }
-    } else {
-        batch->queue_name = NULL;
-    }
     return batch;
 }
 

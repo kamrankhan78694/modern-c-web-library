@@ -35,18 +35,19 @@ static metrics_data_t *_metrics = NULL;
 static bool _metrics_middleware(http_request_t *req, http_response_t *res, void *user_data) {
     (void)res;
     (void)user_data;
-    if (!_metrics)
+    metrics_data_t *m = _metrics;
+    if (!m)
         return true;
     
-    pthread_mutex_lock(&_metrics->lock);
-    _metrics->total_requests++;
+    pthread_mutex_lock(&m->lock);
+    m->total_requests++;
     
     /* Increment method count (method is an enum 0-6) */
     int method_idx = (int)req->method;
     if (method_idx >= 0 && method_idx < 7)
-        _metrics->method_counts[method_idx]++;
+        m->method_counts[method_idx]++;
     
-    pthread_mutex_unlock(&_metrics->lock);
+    pthread_mutex_unlock(&m->lock);
     
     return true;  /* always continue to next middleware/handler */
 }

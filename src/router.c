@@ -89,7 +89,8 @@ int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware
     return 0;
 }
 
-/* Route request */
+/* Route request.
+ * Returns: 0 = routed, 1 = no route found (404 already sent), -1 = invalid input */
 int router_route(router_t *router, http_request_t *req, http_response_t *res) {
     if (!router || !req || !res || !req->path) {
         return -1;
@@ -133,7 +134,7 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res) {
     
     /* No route found */
     http_response_send_text(res, HTTP_NOT_FOUND, "Not Found");
-    return -1;
+    return 1; /* Distinct from -1 (invalid input) */
 }
 
 /* Destroy router */
