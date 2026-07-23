@@ -646,6 +646,47 @@ static void test_d1_sql_safety(void) {
     worker_d1_result_destroy(mr);
     worker_d1_stmt_destroy(mm);
 
+    /* Regression guard: a table whose NAME contains "where" (e.g. "elsewhere")
+     * must not be misread as having a WHERE clause and refused. */
+    worker_d1_result_destroy(worker_d1_exec(db, "CREATE TABLE elsewhere (x)"));
+    worker_d1_stmt_t *ew = worker_d1_prepare(db, "INSERT INTO elsewhere (x) VALUES (?)");
+    worker_d1_stmt_bind(ew, 1, "here");
+    worker_d1_result_destroy(worker_d1_stmt_run(ew));
+    worker_d1_stmt_destroy(ew);
+    worker_d1_stmt_t *ews = worker_d1_prepare(db, "SELECT * FROM elsewhere");
+    json_value_t *ewr = worker_d1_stmt_all(ews);
+    ASSERT(ewr != NULL);                          /* would be NULL if misdetected */
+    char *ewjs = json_stringify(ewr);
+    ASSERT(ewjs != NULL && strstr(ewjs, "here") != NULL);
+    free(ewjs); json_value_free(ewr); worker_d1_stmt_destroy(ews);
+
+    /* Positional INSERT (no column list) still binds by physical column order. */
+    worker_d1_result_destroy(worker_d1_exec(db, "CREATE TABLE pos (m, n)"));
+    worker_d1_stmt_t *pi = worker_d1_prepare(db, "INSERT INTO pos VALUES (?, ?)");
+    worker_d1_stmt_bind(pi, 1, "MM");
+    worker_d1_stmt_bind(pi, 2, "NN");
+    worker_d1_result_destroy(worker_d1_stmt_run(pi));
+    worker_d1_stmt_destroy(pi);
+    worker_d1_stmt_t *ps = worker_d1_prepare(db, "SELECT * FROM pos");
+    json_value_t *pr = worker_d1_stmt_all(ps);
+    char *pjs = json_stringify(pr);
+    ASSERT(pjs != NULL && strstr(pjs, "\"m\":\"MM\"") != NULL &&
+           strstr(pjs, "\"n\":\"NN\"") != NULL);
+    free(pjs); json_value_free(pr); worker_d1_stmt_destroy(ps);
+
+    /* DELETE with NO WHERE clause deletes all (intended). */
+    worker_d1_result_t *da = worker_d1_exec(db, "DELETE FROM elsewhere");
+    ASSERT(da != NULL && da->success && da->meta_changes == 1);
+    worker_d1_result_destroy(da);
+    worker_d1_stmt_t *es2 = worker_d1_prepare(db, "SELECT * FROM elsewhere");
+    json_value_t *er2 = worker_d1_stmt_all(es2);
+    if (er2) {
+        char *e2 = json_stringify(er2);
+        ASSERT(e2 == NULL || strstr(e2, "here") == NULL);   /* emptied */
+        free(e2); json_value_free(er2);
+    }
+    worker_d1_stmt_destroy(es2);
+
     worker_d1_destroy(db);
     PASS();
 }

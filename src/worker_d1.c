@@ -355,8 +355,10 @@ static worker_d1_result_t *_d1_exec_select(worker_d1_t *db, const char *sql,
     d1_table_t *t = _d1_find_table(db, tname);
     if (!t) return NULL;
 
-    /* Check for WHERE clause */
-    const char *where = _ci_strstr(sql, "WHERE");
+    /* Check for WHERE clause. Search only PAST the table name, so a table whose
+     * name contains "where" (e.g. "elsewhere", "nowhere") is not misdetected as
+     * having a WHERE clause -- which the fail-closed guard would then refuse. */
+    const char *where = _ci_strstr(from, "WHERE");
     int where_col = -1;
     if (where) {
         where += 5;
@@ -420,7 +422,9 @@ static worker_d1_result_t *_d1_exec_delete(worker_d1_t *db, const char *sql,
     d1_table_t *t = _d1_find_table(db, tname);
     if (!t) return NULL;
 
-    const char *where = _ci_strstr(sql, "WHERE");
+    /* Search for WHERE only past the table name (see the SELECT note): a table
+     * named "elsewhere"/"nowhere" must not be misread as having a WHERE clause. */
+    const char *where = _ci_strstr(p, "WHERE");
     int where_col = -1;
     if (where) {
         where += 5;
