@@ -27,6 +27,15 @@ static const char *_strcasestr(const char *haystack, const char *needle) {
 #define WS_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 #define WS_FRAME_MAX_SIZE 65536
 #define WS_HEADER_MAX_SIZE 14
+/* Maximum accepted payload for a single frame AND for a reassembled fragmented
+ * message.  A frame's length field is 64-bit, so without this cap a client can
+ * claim a multi-terabyte payload and drive the receive/fragment buffers to
+ * exhaust memory.  Oversized messages are rejected with RFC 6455 close 1009
+ * (Message Too Big). Compile-time bound (default 16 MiB); override with
+ * -DWS_MAX_MESSAGE_SIZE=... at build time. */
+#ifndef WS_MAX_MESSAGE_SIZE
+#define WS_MAX_MESSAGE_SIZE (16u * 1024u * 1024u)
+#endif
 
 /* WebSocket opcodes */
 typedef enum {
@@ -632,11 +641,26 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
             return -1;
         }
         
-        /* Check for overflow: header_size + payload_length */
-        if (frame.payload_length > SIZE_MAX - (size_t)header_size) {
+        /* Reject an oversized frame on the header alone, BEFORE accumulating the
+         * payload: the 64-bit length field otherwise lets a client claim a
+         * multi-terabyte frame and exhaust memory. The second clause also keeps
+         * header_size + payload_length from overflowing size_t (relevant on a
+         * 32-bit build if WS_MAX_MESSAGE_SIZE is overridden very large). Either
+         * way, close 1009 (Message Too Big) -- never a silent -1. */
+        if (frame.payload_length > WS_MAX_MESSAGE_SIZE ||
+            frame.payload_length > SIZE_MAX - (size_t)header_size) {
+            /* Drop any in-progress reassembly, consistent with the other error
+             * paths (defensive; the caller also destroys the connection on -1). */
+            if (conn->fragment_buffer) {
+                free(conn->fragment_buffer);
+                conn->fragment_buffer = NULL;
+                conn->fragment_len = 0;
+                conn->fragment_capacity = 0;
+            }
+            websocket_close(conn, 1009, "Message too big");
             return -1;
         }
-        
+
         size_t frame_size = (size_t)header_size + (size_t)frame.payload_length;
         if (conn->buffer_len < frame_size) {
             /* Need more data */
@@ -702,6 +726,17 @@ int websocket_process_data(websocket_connection_t *conn, const uint8_t *data, si
                 if (!conn->fragment_buffer) {
                     /* Protocol error: continuation without start frame */
                     websocket_close(conn, 1002, "Protocol error: unexpected continuation");
+                    return -1;
+                }
+                /* Cap the total reassembled message size (DoS): a client could
+                 * otherwise send unlimited continuation frames. Written to avoid
+                 * overflow (fragment_len is always <= WS_MAX_MESSAGE_SIZE). */
+                if (frame.payload_length > WS_MAX_MESSAGE_SIZE - conn->fragment_len) {
+                    free(conn->fragment_buffer);
+                    conn->fragment_buffer = NULL;
+                    conn->fragment_len = 0;
+                    conn->fragment_capacity = 0;
+                    websocket_close(conn, 1009, "Message too big");
                     return -1;
                 }
                 /* Append to fragmented message */
