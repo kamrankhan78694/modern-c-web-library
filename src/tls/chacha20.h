@@ -28,8 +28,9 @@ void chacha20_block(const uint8_t key[32], uint32_t counter,
 /*
  * Encrypt (or decrypt — the operation is its own inverse) `len` bytes from `in`
  * to `out` by XOR with the ChaCha20 keystream, starting at block `counter`
- * (RFC 8439 §2.4). `in` and `out` may alias. The internal keystream buffer is
- * wiped before return. The 32-bit counter limits one (key, nonce) to 256 GiB.
+ * (RFC 8439 §2.4). `out` may be the same buffer as `in` (in-place); partially
+ * overlapping buffers are not supported. The internal keystream buffer is wiped
+ * before return. The 32-bit counter limits one (key, nonce) to 256 GiB.
  */
 void chacha20_encrypt(const uint8_t key[32], uint32_t counter,
                       const uint8_t nonce[12],
