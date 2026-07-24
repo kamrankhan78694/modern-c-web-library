@@ -1745,6 +1745,16 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
                              "Both Content-Length and Transfer-Encoding present");
             return -1;
         }
+        /* RFC 7230 §3.3.2: Content-Length = 1*DIGIT. strtoull() would also accept
+         * a leading '+'/'-' sign (e.g. "+5" -> 5, "-0" -> 0), which a strict
+         * proxy rejects — an accept/reject framing divergence. Require the first
+         * byte to be an ASCII digit so only unsigned decimal is accepted. */
+        if (value_buf[0] < '0' || value_buf[0] > '9') {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid Content-Length header");
+            return -1;
+        }
         char *endptr = NULL;
         unsigned long long val = strtoull(value_buf, &endptr, 10);
         if (endptr == value_buf || *endptr != '\0') {
@@ -1921,12 +1931,36 @@ static int parse_chunk_size(http_parser_t *parser) {
     memcpy(line, parser->buffer, (size_t)crlf_index);
     line[crlf_index] = '\0';
 
-    char *endptr = NULL;
-    errno = 0;
-    unsigned long chunk_size = strtoul(line, &endptr, 16);
-    /* Reject trailing garbage after hex digits (allow optional chunk-ext starting with ';') */
-    if (endptr == line || errno == ERANGE || chunk_size > MAX_BODY_BYTES ||
-        (*endptr != '\0' && *endptr != ';')) {
+    /* RFC 7230 §4.1: chunk-size = 1*HEXDIG. Parse the hex digits by hand instead
+     * of strtoul(), which also accepts leading whitespace, a +/- sign, and a
+     * "0x" prefix — any of which a strict proxy rejects, producing a chunk-body
+     * framing desync (e.g. "0x0" would be read as a terminating chunk and the
+     * trailing bytes smuggled as a pipelined request). Only an optional ";"
+     * chunk-ext may follow the digits. */
+    size_t idx = 0;
+    unsigned long chunk_size = 0;
+    bool have_digit = false;
+    for (; line[idx] != '\0' && line[idx] != ';'; idx++) {
+        unsigned int digit;
+        char c = line[idx];
+        if (c >= '0' && c <= '9') {
+            digit = (unsigned int)(c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            digit = (unsigned int)(c - 'a' + 10);
+        } else if (c >= 'A' && c <= 'F') {
+            digit = (unsigned int)(c - 'A' + 10);
+        } else {
+            break; /* non-HEXDIG (and not ';') -> invalid, rejected below */
+        }
+        chunk_size = chunk_size * 16u + digit;
+        have_digit = true;
+        if (chunk_size > MAX_BODY_BYTES) {
+            free(line);
+            parser_set_error(parser, HTTP_PAYLOAD_TOO_LARGE, "Chunk too large");
+            return -1;
+        }
+    }
+    if (!have_digit || (line[idx] != '\0' && line[idx] != ';')) {
         free(line);
         parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid chunk size");
         return -1;

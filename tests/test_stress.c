@@ -931,6 +931,9 @@ void test_stress_transfer_encoding_smuggling(void) {
         "Transfer-Encoding : chunked",              /* whitespace before colon (RFC 7230 §3.2.4) */
         "Content-Length : 6",                       /* whitespace before colon (tab variant below) */
         "Content-Length\t: 6",                      /* tab before colon */
+        "Content-Length: +5",                       /* signed Content-Length (strtoull leniency) */
+        "Content-Length: -0",                       /* signed zero */
+        "Content-Length: 0x5",                      /* hex Content-Length */
         NULL
     };
     for (int i = 0; bad_400[i] != NULL; i++) {
@@ -1002,6 +1005,23 @@ void test_stress_transfer_encoding_smuggling(void) {
         "Content-Length: 6\r\nContent-Length: 5\r\n\r\n";
     ASSERT(_stress_send_request(port, dup_cl, response, sizeof(response)) == 0);
     ASSERT(strstr(response, "400") != NULL);
+
+    /* Malformed chunk-size lines (RFC 7230 §4.1: chunk-size = 1*HEXDIG) must be
+     * rejected. strtoul() would leniently accept a "0x" prefix, a +/- sign, or
+     * leading whitespace and desync chunk-body framing (e.g. "0x0" reads as a
+     * terminating chunk, smuggling the trailing bytes as a pipelined request). */
+    const char *bad_chunk[] = {
+        "0x0", "0x5", " 5", "\t3", "-0", "+5", "g", "",
+        NULL
+    };
+    for (int i = 0; bad_chunk[i] != NULL; i++) {
+        char req[256];
+        snprintf(req, sizeof(req),
+                 "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+                 "Transfer-Encoding: chunked\r\n\r\n%s\r\nhello\r\n0\r\n\r\n", bad_chunk[i]);
+        ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
+        ASSERT(strstr(response, "400") != NULL);
+    }
 
     http_server_stop(server);
     usleep(100000);
