@@ -940,6 +940,48 @@ void test_cors_create_destroy(void) {
     PASS();
 }
 
+/* Regression (audit #22, CWE-942): the CORS middleware must refuse a wildcard
+ * origin (allowed_origins == NULL) combined with credentials, so it can never
+ * reflect an arbitrary Origin back with Access-Control-Allow-Credentials: true.
+ * Credentialed CORS must use an explicit origin allow-list. */
+void test_cors_rejects_wildcard_with_credentials(void) {
+    TEST("cors refuses wildcard origin + credentials (CWE-942)");
+
+    /* Dangerous combo: wildcard + credentials -> refused (returns NULL). */
+    cors_options_t bad = {
+        .allowed_origins = NULL,
+        .allowed_methods = "GET, POST",
+        .allow_credentials = true,
+        .max_age = 3600
+    };
+    ASSERT(cors_middleware_create(&bad) == NULL);
+
+    /* Wildcard WITHOUT credentials is still fine. */
+    cors_options_t wildcard_ok = {
+        .allowed_origins = NULL,
+        .allowed_methods = "GET, POST",
+        .allow_credentials = false,
+        .max_age = 3600
+    };
+    middleware_fn_t mw = cors_middleware_create(&wildcard_ok);
+    ASSERT(mw != NULL);
+    cors_middleware_destroy();
+
+    /* Explicit origins WITH credentials is the safe, supported combo. */
+    const char *origins[] = {"https://app.example.com", NULL};
+    cors_options_t creds_ok = {
+        .allowed_origins = origins,
+        .allowed_methods = "GET, POST",
+        .allow_credentials = true,
+        .max_age = 3600
+    };
+    mw = cors_middleware_create(&creds_ok);
+    ASSERT(mw != NULL);
+    cors_middleware_destroy();
+
+    PASS();
+}
+
 /* Test CORS middleware - handler behavior */
 void test_cors_handler(void) {
     TEST("cors (handler)");
@@ -4552,6 +4594,7 @@ int main(void) {
     
     /* Phase 5: CORS middleware tests */
     test_cors_create_destroy();
+    test_cors_rejects_wildcard_with_credentials();
     test_cors_handler();
     
     /* Phase 5: Rate limiting tests */
