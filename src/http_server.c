@@ -399,6 +399,7 @@ int http_server_listen(http_server_t *server, uint16_t port) {
         }
 
         /* Add server socket to event loop */
+        int listen_fd = server->socket_fd;   /* remembered for handler cleanup below */
         if (event_loop_add_fd(server->event_loop, server->socket_fd, EVENT_READ,
                              async_accept_handler, server) < 0) {
             fprintf(stderr, "Failed to add server socket to event loop\n");
@@ -420,9 +421,13 @@ int http_server_listen(http_server_t *server, uint16_t port) {
         /* Run event loop in main thread (blocks until stopped). */
         event_loop_run(server->event_loop);
 
-        /* Loop has stopped: close and free any still-open async connections so
-         * their fds and contexts are not leaked (audit #18). */
+        /* Loop has stopped (single-threaded from here): close and free any
+         * still-open async connections so their fds and contexts are not leaked
+         * (audit #18), and drop the server-socket handler so the event loop starts
+         * clean if this server is listened on again (otherwise the reused fd
+         * number collides with the stale handler). */
         reap_all_async_connections(server);
+        event_loop_remove_fd(server->event_loop, listen_fd);
     } else {
         /* Traditional threaded mode — create thread pool */
         server->pool = thread_pool_create(server->thread_count, 0);
@@ -2402,14 +2407,27 @@ static int set_nonblocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-/* Deadline for a new request on an async connection (absolute time), or 0 if the
- * request-timeout guard is disabled. Deliberately NOT refreshed per byte, so a
- * slow drip is bounded by request_timeout_sec regardless of its rate. */
+/* Deadline for a new request on an async connection (in monotonic seconds), or 0
+ * if the request-timeout guard is disabled. Uses the monotonic clock so a
+ * wall-clock step (NTP correction, VM resume) can't delay reaping. Deliberately
+ * NOT refreshed per byte, so a slow drip is bounded by request_timeout_sec
+ * regardless of its rate. */
 static time_t async_request_deadline(const http_server_t *server) {
     if (server->request_timeout_sec <= 0) {
         return 0;
     }
-    return time(NULL) + server->request_timeout_sec;
+    return monotonic_seconds() + server->request_timeout_sec;
+}
+
+/* Idle deadline for a live WebSocket: reaped after read_timeout_sec of receiving
+ * no frames (refreshed on each frame), so a client that upgrades then goes silent
+ * cannot hold an fd + connection-cap slot forever (audit #2 WS blind spot). 0
+ * only if the read timeout is disabled. */
+static time_t async_ws_idle_deadline(const http_server_t *server) {
+    if (server->read_timeout_sec <= 0) {
+        return 0;
+    }
+    return monotonic_seconds() + server->read_timeout_sec;
 }
 
 /* Link/unlink a connection into the server's live-connection list. Only ever
@@ -2450,7 +2468,7 @@ static void async_reaper_cb(int timer_fd, int events, void *user_data) {
         return;
     }
 
-    time_t now = time(NULL);
+    time_t now = monotonic_seconds();
     async_connection_t *conn = server->async_conns;
     while (conn) {
         async_connection_t *next = conn->rl_next;   /* save before free unlinks conn */
@@ -2463,16 +2481,18 @@ static void async_reaper_cb(int timer_fd, int events, void *user_data) {
         conn = next;
     }
 
-    if (server->running) {
-        /* One-shot timers are removed before this callback runs, so re-arming
-         * keeps exactly one reaper timer pending and cannot exhaust MAX_TIMERS on
-         * its own. Surface a failure (e.g. the user filled the timer table) rather
-         * than silently dropping the reap-and-shutdown-wake guarantee. */
-        if (event_loop_add_timeout(server->event_loop, ASYNC_REAPER_INTERVAL_MS,
-                                   async_reaper_cb, server) < 0) {
-            fprintf(stderr, "Failed to re-arm async idle reaper; idle connections "
-                            "will not be reaped\n");
-        }
+    /* Re-arm UNCONDITIONALLY. One-shot timers are removed before this callback
+     * runs, so this keeps exactly one reaper pending and cannot exhaust
+     * MAX_TIMERS. Do NOT gate on server->running: if a concurrent stop() cleared
+     * it after this timer fired, skipping the re-arm would leave
+     * get_next_timeout() infinite so the blocked poll could never be woken by
+     * event_loop_stop() -> shutdown hangs. event_loop_run still exits promptly
+     * because it checks loop->running each iteration; the leftover timer is freed
+     * with the loop. Surface a re-arm failure (e.g. a full user timer table). */
+    if (event_loop_add_timeout(server->event_loop, ASYNC_REAPER_INTERVAL_MS,
+                               async_reaper_cb, server) < 0) {
+        fprintf(stderr, "Failed to re-arm async idle reaper; idle connections "
+                        "will not be reaped\n");
     }
 }
 
@@ -2483,6 +2503,14 @@ static void reap_all_async_connections(http_server_t *server) {
     async_connection_t *conn = server->async_conns;
     while (conn) {
         async_connection_t *next = conn->rl_next;
+        /* Unregister the fd's handler BEFORE freeing the context — free_async_
+         * connection closes the fd and frees the struct but does not touch the
+         * event loop. Without this the handler entry (user_data == freed conn)
+         * outlives the connection; on a later event_loop_run (server reused across
+         * listens) that is a stale-fd collision or, on the poll backend, a UAF. */
+        if (conn->client_fd >= 0) {
+            event_loop_remove_fd(server->event_loop, conn->client_fd);
+        }
         free_async_connection(conn);                 /* untracks + closes fd + frees */
         conn = next;
     }
@@ -2833,9 +2861,12 @@ static void async_write_handler(int fd, int events, void *user_data) {
             http_parser_destroy(&conn->parser);
             conn->parser_initialized = false;
 
-            /* A live WebSocket is long-lived — exempt it from the request-deadline
-             * reaper (its own idle handling is separate). */
-            conn->deadline = 0;
+            /* A live WebSocket is long-lived, but must still have an IDLE bound —
+             * otherwise a client can upgrade cheaply then go silent forever, tying
+             * up an fd + connection-cap slot (a WS-path DoS). Switch from the
+             * request deadline to an idle deadline that the WS read handler
+             * refreshes on every frame, so only truly silent WS clients are reaped. */
+            conn->deadline = async_ws_idle_deadline(conn->server);
 
             /* Replace handler with WebSocket read handler */
             if (event_loop_remove_fd(conn->server->event_loop, fd) < 0 ||
@@ -2942,6 +2973,10 @@ static void async_websocket_read_handler(int fd, int events, void *user_data) {
             free_async_connection(conn);
             return;
         }
+
+        /* Inbound activity: refresh the idle deadline so an active WebSocket is
+         * never reaped, while a silent one still is (audit #2 WS blind spot). */
+        conn->deadline = async_ws_idle_deadline(conn->server);
 
         if (websocket_process_data(conn->ws_conn, buffer, (size_t)bytes_read) < 0 || !websocket_is_open(conn->ws_conn)) {
             event_loop_remove_fd(conn->server->event_loop, fd);

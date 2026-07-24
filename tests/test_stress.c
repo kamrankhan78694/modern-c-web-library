@@ -1276,6 +1276,60 @@ void test_stress_async_idle_reaper(void) {
     PASS();
 }
 
+/* Regression (adversarial review of #2): after stop, reap_all_async_connections
+ * + the server-socket handler removal must leave the (server-owned) event loop
+ * clean, so the server can be listened on again. Without that cleanup the reused
+ * socket fd collides with the stale handler ("already registered") and the second
+ * listen fails — or, on the poll backend, a freed connection's handler is a UAF. */
+void test_stress_async_server_restart(void) {
+    TEST("async server can be re-listened after stop (clean event-loop teardown)");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/test", dummy_handler);
+    http_server_set_router(server, router);
+    ASSERT(http_server_set_async(server, true) == 0);
+
+    uint16_t port = 19015;
+    _async_srv_arg_t arg = { server, port };
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    for (int cycle = 0; cycle < 2; cycle++) {
+        pthread_t th;
+        ASSERT(pthread_create(&th, NULL, _async_server_run, &arg) == 0);
+        usleep(400000);
+
+        /* A normal request must be served on each (re)listen — proving the second
+         * listen actually succeeded rather than failing on a stale handler. */
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        ASSERT(sock >= 0);
+        struct timeval tv = { 3, 0 };
+        ASSERT(setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0);
+        ASSERT(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+        const char *req = "GET /test HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        ASSERT(send(sock, req, strlen(req), 0) == (ssize_t)strlen(req));
+        char rbuf[256];
+        memset(rbuf, 0, sizeof(rbuf));
+        ssize_t rn = recv(sock, rbuf, sizeof(rbuf) - 1, 0);
+        ASSERT(rn > 0);
+        ASSERT(strstr(rbuf, "200 OK") != NULL);
+        close(sock);
+
+        http_server_stop(server);
+        pthread_join(th, NULL);
+    }
+
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 void test_stress_many_headers(void) {
     TEST("request with many headers (90 headers)");
 
@@ -1787,6 +1841,7 @@ int main(void) {
         test_stress_host_header_enforcement();
         test_stress_path_normalization();
         test_stress_async_idle_reaper();
+        test_stress_async_server_restart();
     }
 
     /* Input Validation Stress Tests */
