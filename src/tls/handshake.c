@@ -123,6 +123,9 @@ int tls_parse_client_hello(const uint8_t *msg, size_t msg_len, tls_client_hello_
             return 0;
         }
 
+        /* Recognized extensions are decoded strictly: the inner u16 lists must be
+         * whole (even byte length) and each extension payload must be consumed in
+         * full — a malformed known extension is a parse failure, not a pass. */
         switch (ext_type) {
         case EXT_SUPPORTED_VERSIONS: {
             /* ClientHello form: ProtocolVersion versions<2..254> (u8 length). */
@@ -130,7 +133,13 @@ int tls_parse_client_hello(const uint8_t *msg, size_t msg_len, tls_client_hello_
             if (!tls_read_vector(&ext_data, 1, &versions)) {
                 return 0;
             }
+            if ((tls_reader_remaining(&versions) % 2) != 0) {
+                return 0;
+            }
             out->offers_tls13 = list_u16_contains(&versions, VERSION_TLS13);
+            if (!tls_reader_eof(&ext_data)) {
+                return 0;
+            }
             break;
         }
         case EXT_SUPPORTED_GROUPS: {
@@ -138,7 +147,13 @@ int tls_parse_client_hello(const uint8_t *msg, size_t msg_len, tls_client_hello_
             if (!tls_read_vector(&ext_data, 2, &groups)) {
                 return 0;
             }
+            if ((tls_reader_remaining(&groups) % 2) != 0) {
+                return 0;
+            }
             out->offers_x25519 = list_u16_contains(&groups, GROUP_X25519);
+            if (!tls_reader_eof(&ext_data)) {
+                return 0;
+            }
             break;
         }
         case EXT_SIGNATURE_ALGS: {
@@ -146,18 +161,25 @@ int tls_parse_client_hello(const uint8_t *msg, size_t msg_len, tls_client_hello_
             if (!tls_read_vector(&ext_data, 2, &algs)) {
                 return 0;
             }
+            if ((tls_reader_remaining(&algs) % 2) != 0) {
+                return 0;
+            }
             out->offers_ed25519 = list_u16_contains(&algs, SIG_ED25519);
+            if (!tls_reader_eof(&ext_data)) {
+                return 0;
+            }
             break;
         }
         case EXT_KEY_SHARE: {
             /* KeyShareClientHello: KeyShareEntry client_shares<0..2^16-1>, each
-             * { NamedGroup group; opaque key_exchange<1..2^16-1> }. Take the
-             * X25519 share if present and exactly 32 bytes. */
+             * { NamedGroup group; opaque key_exchange<1..2^16-1> }. Every entry is
+             * consumed (so trailing bytes fail), key_exchange must be non-empty,
+             * and the X25519 share is taken if present and exactly 32 bytes. */
             tls_reader_t shares;
             if (!tls_read_vector(&ext_data, 2, &shares)) {
                 return 0;
             }
-            while (tls_reader_remaining(&shares) >= 4) {
+            while (tls_reader_remaining(&shares) > 0) {
                 uint16_t group;
                 tls_reader_t ke;
                 if (!tls_read_u16(&shares, &group)) {
@@ -166,37 +188,49 @@ int tls_parse_client_hello(const uint8_t *msg, size_t msg_len, tls_client_hello_
                 if (!tls_read_vector(&shares, 2, &ke)) {
                     return 0;
                 }
+                if (tls_reader_remaining(&ke) < 1) {
+                    return 0;   /* key_exchange<1..> must be non-empty */
+                }
                 if (group == GROUP_X25519 && tls_reader_remaining(&ke) == 32) {
                     if (!tls_read_bytes(&ke, &out->x25519_key_share, 32)) {
                         return 0;
                     }
                 }
             }
+            if (!tls_reader_eof(&ext_data)) {
+                return 0;
+            }
             break;
         }
         case EXT_SERVER_NAME: {
-            /* ServerNameList server_name_list<1..2^16-1>; first entry, host_name. */
+            /* ServerNameList server_name_list<1..2^16-1>. Each entry is
+             * { NameType name_type; HostName host_name<1..2^16-1> } (host_name is
+             * the only defined type); read every entry in full so a truncated one
+             * fails, and keep the first host_name. */
             tls_reader_t list;
-            uint8_t name_type;
             if (!tls_read_vector(&ext_data, 2, &list)) {
                 return 0;
             }
-            if (!tls_read_u8(&list, &name_type)) {
-                return 0;
-            }
-            if (name_type == 0x00) {   /* host_name */
-                tls_reader_t host;
-                size_t host_len;
-                if (!tls_read_vector(&list, 2, &host)) {
+            while (tls_reader_remaining(&list) > 0) {
+                uint8_t name_type;
+                tls_reader_t name;
+                size_t name_len;
+                if (!tls_read_u8(&list, &name_type)) {
                     return 0;
                 }
-                host_len = tls_reader_remaining(&host);
-                if (host_len > 0) {
-                    if (!tls_read_bytes(&host, &out->server_name, host_len)) {
+                if (!tls_read_vector(&list, 2, &name)) {
+                    return 0;
+                }
+                name_len = tls_reader_remaining(&name);
+                if (name_type == 0x00 && out->server_name == NULL && name_len > 0) {
+                    if (!tls_read_bytes(&name, &out->server_name, name_len)) {
                         return 0;
                     }
-                    out->server_name_len = host_len;
+                    out->server_name_len = name_len;
                 }
+            }
+            if (!tls_reader_eof(&ext_data)) {
+                return 0;
             }
             break;
         }
