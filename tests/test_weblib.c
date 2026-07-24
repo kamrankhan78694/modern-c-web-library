@@ -339,11 +339,56 @@ void test_json_parse_number(void) {
     PASS();
 }
 
+/* Under an already-selected non-'.' LC_NUMERIC locale, verify that JSON decimals,
+ * negatives, exponents, integers, and a >64-char token (which drives json_strtod's
+ * malloc fallback) all parse, and that stringify still emits '.'. Returns 1 on full
+ * success, 0 on any wrong result. */
+static int _json_decimals_ok_under_locale(void) {
+    json_value_t *a = json_parse("3.14");
+    json_value_t *b = json_parse("-2.5");
+    json_value_t *c = json_parse("1.5e3");
+    json_value_t *n = json_parse("42");                 /* no '.' -> fast path */
+    json_value_t *lng = json_parse(
+        "0.12345678901234567890123456789012345678901234567890123456789012345678");
+    char *out = a ? json_stringify(a) : NULL;
+
+    int ok = (a && a->type == JSON_NUMBER && a->data.number_val == 3.14 &&
+              b && b->type == JSON_NUMBER && b->data.number_val == -2.5 &&
+              c && c->type == JSON_NUMBER && c->data.number_val == 1500.0 &&
+              n && n->type == JSON_NUMBER && n->data.number_val == 42.0 &&
+              lng && lng->type == JSON_NUMBER &&
+              lng->data.number_val > 0.123456 && lng->data.number_val < 0.123457 &&
+              /* output must carry JSON's '.', never the locale separator */
+              out && strstr(out, "3.14") != NULL && strstr(out, "3,14") == NULL) ? 1 : 0;
+
+    free(out);
+    json_value_free(a);
+    json_value_free(b);
+    json_value_free(c);
+    json_value_free(n);
+    json_value_free(lng);
+    return ok;
+}
+
+/* Select the first installed locale from `names` whose decimal separator is not '.',
+ * and run the decimal checks under it. Returns 1/0 from the checks, or -1 if none of
+ * the candidates is installed (leg skipped). */
+static int _json_check_locale_group(const char *const *names, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (setlocale(LC_NUMERIC, names[i]) &&
+            localeconv()->decimal_point[0] != '.') {
+            return _json_decimals_ok_under_locale();
+        }
+    }
+    return -1;
+}
+
 /* Regression (audit #9): JSON always uses '.' as its decimal separator, but a bare
- * strtod() honors LC_NUMERIC. Under a comma-decimal locale (e.g. de_DE) strtod("3.14")
- * stops at the '.', so the parser's span check would reject every non-integer number.
- * Set such a locale (skipping cleanly if none is installed) and confirm decimals,
- * negatives, and exponents still parse and re-serialize with a '.'. */
+ * strtod() honors LC_NUMERIC. Under a non-'.' locale strtod("3.14") stops at the '.',
+ * so the parser's span check would reject every non-integer number. Exercise both a
+ * single-byte comma separator (de_DE) and a multi-byte separator (ar_SA '٫', which
+ * checks json_strtod's full-separator splice), skipping either leg cleanly if that
+ * locale isn't installed. */
 void test_json_parse_locale_independent(void) {
     TEST("json_parse/stringify (locale-independent numbers)");
 
@@ -356,64 +401,25 @@ void test_json_parse_locale_independent(void) {
         saved[sizeof(saved) - 1] = '\0';
     }
 
-    static const char *candidates[] = {
+    static const char *comma[] = {
         "de_DE.UTF-8", "fr_FR.UTF-8", "de_DE", "fr_FR", "nl_NL.UTF-8"
     };
-    bool comma = false;
-    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-        if (setlocale(LC_NUMERIC, candidates[i]) &&
-            localeconv()->decimal_point[0] == ',') {
-            comma = true;
-            break;
-        }
-    }
+    static const char *multibyte[] = {   /* Arabic '٫' (U+066B) is 2 bytes in UTF-8 */
+        "ar_SA.UTF-8", "fa_IR.UTF-8", "ar_EG.UTF-8"
+    };
+    int comma_res = _json_check_locale_group(comma, sizeof(comma) / sizeof(comma[0]));
+    int multi_res = _json_check_locale_group(multibyte, sizeof(multibyte) / sizeof(multibyte[0]));
 
-    if (!comma) {
-        /* No comma-decimal locale installed here; the '.'-locale fast path is
-         * already exercised by every other json test. Skip without failing. */
-        setlocale(LC_NUMERIC, saved[0] ? saved : "C");
-        printf("[SKIP: no comma-decimal locale] ");
-        PASS();
-        return;
-    }
-
-    /* Parse under the comma locale. Compute results first, then restore the locale
-     * BEFORE asserting (ASSERT returns early, which would otherwise leak the test
-     * locale into later tests). */
-    json_value_t *a = json_parse("3.14");
-    json_value_t *b = json_parse("-2.5");
-    json_value_t *c = json_parse("1.5e3");
-    json_value_t *n = json_parse("42");
-    /* A 70-char token (> the 64-byte stack buffer) drives the malloc fallback in
-     * json_strtod so ASan/UBSan cover that branch too. */
-    json_value_t *lng = json_parse(
-        "0.12345678901234567890123456789012345678901234567890123456789012345678");
-    char *out = a ? json_stringify(a) : NULL;
-
-    bool a_ok = (a && a->type == JSON_NUMBER && a->data.number_val == 3.14);
-    bool b_ok = (b && b->type == JSON_NUMBER && b->data.number_val == -2.5);
-    bool c_ok = (c && c->type == JSON_NUMBER && c->data.number_val == 1500.0);
-    bool n_ok = (n && n->type == JSON_NUMBER && n->data.number_val == 42.0);
-    bool lng_ok = (lng && lng->type == JSON_NUMBER &&
-                   lng->data.number_val > 0.123456 && lng->data.number_val < 0.123457);
-    /* Output must carry JSON's '.', never the locale's ','. */
-    bool out_ok = (out && strstr(out, "3.14") != NULL && strstr(out, "3,14") == NULL);
-
-    free(out);
-    json_value_free(a);
-    json_value_free(b);
-    json_value_free(c);
-    json_value_free(n);
-    json_value_free(lng);
-
+    /* Restore BEFORE asserting (ASSERT returns early, which would otherwise leak the
+     * test locale into later tests). */
     setlocale(LC_NUMERIC, saved[0] ? saved : "C");
 
-    ASSERT(a_ok);
-    ASSERT(b_ok);
-    ASSERT(c_ok);
-    ASSERT(n_ok);
-    ASSERT(lng_ok);
-    ASSERT(out_ok);
+    /* -1 == that locale class isn't installed here (skip the leg); 0 == a wrong parse. */
+    ASSERT(comma_res != 0);   /* single-byte ',' separator */
+    ASSERT(multi_res != 0);   /* multi-byte  '٫' separator */
+    if (comma_res == -1 && multi_res == -1) {
+        printf("[SKIP: no non-'.' locale installed] ");
+    }
 
     PASS();
 }
