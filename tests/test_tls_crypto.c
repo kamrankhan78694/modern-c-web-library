@@ -15,6 +15,7 @@
 #include "chacha20poly1305.h"
 #include "hkdf.h"
 #include "x25519.h"
+#include "sha512.h"
 #endif
 
 static int g_failures = 0;
@@ -362,6 +363,55 @@ static void test_hkdf(void) {
     }
 }
 
+/* SHA-512 (FIPS 180-4) known-answer tests, incl. a multi-block message and a
+ * streaming-equals-one-shot check. */
+static void test_sha512(void) {
+    uint8_t d[SHA512_DIGEST_SIZE];
+
+    sha512((const uint8_t *)"abc", 3, d);
+    check_hex("sha512 (\"abc\")", d, 64,
+              "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
+              "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+
+    sha512((const uint8_t *)"", 0, d);
+    check_hex("sha512 (empty)", d, 64,
+              "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
+              "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
+
+    /* 112-byte (two-block) NIST vector. */
+    sha512((const uint8_t *)"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno"
+                            "ijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu", 112, d);
+    check_hex("sha512 (896-bit, 2 blocks)", d, 64,
+              "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018"
+              "501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909");
+
+    /* Streaming (odd chunk sizes over a 1000-byte message) must equal one-shot. */
+    {
+        uint8_t big[1000];
+        uint8_t one[SHA512_DIGEST_SIZE];
+        sha512_ctx_t ctx;
+        size_t off = 0;
+        size_t chunk = 1;
+        memset(big, 'a', sizeof(big));
+        sha512(big, sizeof(big), one);
+        sha512_init(&ctx);
+        while (off < sizeof(big)) {
+            size_t n = (sizeof(big) - off < chunk) ? (sizeof(big) - off) : chunk;
+            sha512_update(&ctx, big + off, n);
+            off += n;
+            chunk = chunk * 2 + 1;   /* 1,3,7,15,... spans multiple blocks */
+        }
+        sha512_final(&ctx, d);
+        if (memcmp(d, one, sizeof(d)) != 0) {
+            printf("FAIL: sha512 streaming != one-shot\n"); g_failures++;
+        } else {
+            check_hex("sha512 (1000 'a', streaming==one-shot)", d, 64,
+                      "67ba5535a46e3f86dbfbed8cbbaf0125c76ed549ff8b0b9e03e0c88cf90fa634"
+                      "fa7b12b47d77b694de488ace8d9a65967dc96df599727d3292a8d9d447709c97");
+        }
+    }
+}
+
 /* X25519 ECDH (RFC 7748) — §5.2 scalar-mult vectors, §6.1 base point + agreement,
  * and the iterated test (1 and 1000 rounds exercise the ladder end to end). */
 static void test_x25519(void) {
@@ -442,6 +492,7 @@ int main(void) {
     test_poly1305();
     test_chacha20poly1305();
     test_hkdf();
+    test_sha512();
     test_x25519();
 
     if (g_failures == 0) {
