@@ -16,6 +16,7 @@
 #include "pem.h"
 #include "ed25519_key.h"
 #include "ed25519.h"
+#include "wire.h"
 #endif
 
 static int g_failures = 0;
@@ -353,6 +354,89 @@ static void test_ed25519_key(void) {
                    && memcmp(got_seed, seed, 32) == 0);
     }
 }
+
+/* Bounded TLS wire codec: big-endian integers + length-prefixed vectors. The
+ * writer's output is constructed to equal the reader's input, so the two are
+ * cross-checked against each other, and malformed reads / writer overflow are
+ * rejected. */
+static void test_wire(void) {
+    /* This byte string is both the reader's input and the writer's expected
+     * output: u8 0x2a | u16 0x0103 | u24 0x000200 | u16-vector{aa,bb,cc} | u8 0xff. */
+    static const uint8_t framed[] = {
+        0x2a, 0x01, 0x03, 0x00, 0x02, 0x00, 0x00, 0x03, 0xaa, 0xbb, 0xcc, 0xff
+    };
+
+    /* --- reader: read every field back --- */
+    {
+        tls_reader r, body;
+        uint8_t u8 = 0;
+        uint16_t u16 = 0;
+        uint32_t u24 = 0;
+        const uint8_t *p = NULL;
+        tls_reader_init(&r, framed, sizeof framed);
+        check_true("wire read u8", tls_read_u8(&r, &u8) && u8 == 0x2a);
+        check_true("wire read u16", tls_read_u16(&r, &u16) && u16 == 0x0103);
+        check_true("wire read u24", tls_read_u24(&r, &u24) && u24 == 0x000200u);
+        check_true("wire read u16 vector",
+                   tls_read_vector(&r, 2, &body) && tls_reader_remaining(&body) == 3
+                   && tls_read_bytes(&body, &p, 3) && p[0] == 0xaa && p[2] == 0xcc
+                   && tls_reader_eof(&body));
+        check_true("wire read trailing u8", tls_read_u8(&r, &u8) && u8 == 0xff);
+        check_true("wire reader reaches eof", tls_reader_eof(&r));
+        check_true("wire read past eof fails", tls_read_u8(&r, &u8) == 0);
+    }
+
+    /* --- reader rejections --- */
+    {
+        static const uint8_t trunc[] = { 0x01 };            /* u16 needs 2 bytes */
+        tls_reader r, body;
+        uint16_t u16 = 0;
+        tls_reader_init(&r, trunc, sizeof trunc);
+        check_true("wire read u16 truncated fails", tls_read_u16(&r, &u16) == 0);
+        (void)body;
+    }
+    {
+        static const uint8_t badvec[] = { 0x00, 0x05, 0xaa };  /* vec len 5, 1 byte body */
+        tls_reader r, body;
+        tls_reader_init(&r, badvec, sizeof badvec);
+        check_true("wire vector overrun fails", tls_read_vector(&r, 2, &body) == 0);
+        tls_reader_init(&r, badvec, sizeof badvec);
+        check_true("wire vector bad len_bytes fails", tls_read_vector(&r, 4, &body) == 0);
+    }
+
+    /* --- writer: build the same framing and compare to `framed` --- */
+    {
+        uint8_t buf[64];
+        tls_writer w;
+        size_t out_len = 0, marker;
+        static const uint8_t vbody[] = { 0xaa, 0xbb, 0xcc };
+        tls_writer_init(&w, buf, sizeof buf);
+        tls_write_u8(&w, 0x2a);
+        tls_write_u16(&w, 0x0103);
+        tls_write_u24(&w, 0x000200u);
+        marker = tls_writer_open_vector(&w, 2);
+        tls_write_bytes(&w, vbody, sizeof vbody);
+        tls_writer_close_vector(&w, marker, 2);
+        tls_write_u8(&w, 0xff);
+        check_true("wire writer output matches reader input",
+                   tls_writer_finish(&w, &out_len) == 1
+                   && out_len == sizeof framed
+                   && memcmp(buf, framed, sizeof framed) == 0);
+    }
+
+    /* --- writer overflow + u24 range --- */
+    {
+        uint8_t buf[3];
+        tls_writer w;
+        tls_writer_init(&w, buf, sizeof buf);
+        tls_write_u16(&w, 0x1234);      /* 2 of 3 bytes */
+        tls_write_u16(&w, 0x5678);      /* needs 2 more, only 1 left -> overflow */
+        check_true("wire writer overflow clears ok", tls_writer_finish(&w, NULL) == 0);
+
+        tls_writer_init(&w, buf, sizeof buf);
+        check_true("wire write u24 over 0xFFFFFF fails", tls_write_u24(&w, 0x1000000u) == 0);
+    }
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -366,6 +450,7 @@ int main(void) {
     test_der_tag_enforcement();
     test_pem_decode();
     test_ed25519_key();
+    test_wire();
 
     if (g_failures == 0) {
         printf("All TLS parse tests passed.\n");
