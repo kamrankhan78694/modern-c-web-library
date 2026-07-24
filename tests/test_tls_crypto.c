@@ -20,13 +20,24 @@ static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return 0;
+    return -1;   /* not a hex digit */
 }
 
+/* Decode exactly out_len bytes of hex from `hex`. Fails (marks g_failures, zeroes
+ * out) if the string is too short or contains a non-hex character — never reads
+ * past the terminating NUL. */
 static void from_hex(const char *hex, uint8_t *out, size_t out_len) {
     size_t i;
     for (i = 0; i < out_len; i++) {
-        out[i] = (uint8_t)((hexval(hex[i * 2]) << 4) | hexval(hex[i * 2 + 1]));
+        int hi = 0, lo = 0;
+        if (hex[i * 2] == '\0' || hex[i * 2 + 1] == '\0' ||
+            (hi = hexval(hex[i * 2])) < 0 || (lo = hexval(hex[i * 2 + 1])) < 0) {
+            printf("FAIL: from_hex: short or non-hex input\n");
+            g_failures++;
+            memset(out, 0, out_len);
+            return;
+        }
+        out[i] = (uint8_t)((hi << 4) | lo);
     }
 }
 
@@ -125,11 +136,14 @@ static void test_poly1305(void) {
     uint8_t tag[16];
 
     /* §2.5.2: 34-byte message = two full blocks + a 2-byte partial. */
-    from_hex("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b", key, 32);
-    poly1305_mac(key, (const uint8_t *)"Cryptographic Forum Research Group", 34, tag);
-    check_hex("poly1305 (RFC 8439 2.5.2)", tag, 16, "a8061dc1305136c6c22b8baf0c0127a9");
+    {
+        const char *msg = "Cryptographic Forum Research Group";
+        from_hex("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b", key, 32);
+        poly1305_mac(key, (const uint8_t *)msg, strlen(msg), tag);
+        check_hex("poly1305 (RFC 8439 2.5.2)", tag, 16, "a8061dc1305136c6c22b8baf0c0127a9");
+    }
 
-    /* Empty message: h stays 0, so tag == s (low 16 key bytes). */
+    /* Empty message: h stays 0, so tag == s (the HIGH 16 key bytes, 0103...f51b). */
     poly1305_mac(key, (const uint8_t *)"", 0, tag);
     check_hex("poly1305 (empty message)", tag, 16, "0103808afb0db2fd4abff6af4149f51b");
 
@@ -155,9 +169,12 @@ static void test_poly1305(void) {
 
     /* r == 0 (clamped) -> accumulator stays 0 -> tag == s. Exercises the case
      * where no reduction subtraction is needed. */
-    from_hex("0000000000000000000000000000000036e5f6b5c5e06070f0efca96227a863e", key, 32);
-    poly1305_mac(key, (const uint8_t *)"any message here, r is zero so tag=s", 36, tag);
-    check_hex("poly1305 (r=0 -> tag=s)", tag, 16, "36e5f6b5c5e06070f0efca96227a863e");
+    {
+        const char *msg = "any message here, r is zero so tag=s";
+        from_hex("0000000000000000000000000000000036e5f6b5c5e06070f0efca96227a863e", key, 32);
+        poly1305_mac(key, (const uint8_t *)msg, strlen(msg), tag);
+        check_hex("poly1305 (r=0 -> tag=s)", tag, 16, "36e5f6b5c5e06070f0efca96227a863e");
+    }
 }
 #endif /* WEBLIB_TLS */
 
