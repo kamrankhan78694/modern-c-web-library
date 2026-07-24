@@ -759,11 +759,22 @@ static bool jwt_header_alg_is_hs256(const char *header_json) {
     return strncmp(v, "HS256", 5) == 0 && v[5] == '"';
 }
 
+/* Tri-state result of looking up an integer JWT claim. A security-critical claim
+ * that is PRESENT but malformed must not be silently ignored, so ABSENT (key not
+ * found) is distinguished from INVALID (key found but not a well-formed integer). */
+typedef enum {
+    JWT_CLAIM_ABSENT = 0,   /* key not present in the payload */
+    JWT_CLAIM_INVALID,      /* key present but its value is not a bare base-10 int */
+    JWT_CLAIM_OK            /* key present with a valid integer; *out is set */
+} jwt_claim_status_t;
+
 /* Look up a base-10 integer JSON claim (e.g. `key` == "\"exp\"") in the flat JWT
- * payload. Matches only a real key — one preceded by '{', ',' or whitespace, not
- * a substring inside some string value. Returns true and sets *out when found
- * with a numeric value. */
-static bool jwt_claim_int(const char *payload_json, const char *key, long *out) {
+ * payload. Matches only a real key — one preceded by '{', ',' or whitespace, not a
+ * substring inside some string value. The value must be a bare integer followed only
+ * by optional whitespace and a JSON object terminator (',' or '}'): a quoted string
+ * ("exp":"123"), trailing garbage ("exp":123abc), or a missing ':' all yield INVALID
+ * so the caller can reject the token rather than treat the claim as absent. */
+static jwt_claim_status_t jwt_claim_int(const char *payload_json, const char *key, long long *out) {
     size_t keylen = strlen(key);
     const char *p = payload_json;
     const char *found = NULL;
@@ -776,19 +787,36 @@ static bool jwt_claim_int(const char *payload_json, const char *key, long *out) 
         p += keylen;
     }
     if (!found) {
-        return false;
+        return JWT_CLAIM_ABSENT;
     }
     const char *v = found + keylen;
     if (!json_skip_to_value(&v)) {
-        return false;                 /* malformed: no key:value separator */
+        return JWT_CLAIM_INVALID;      /* no key:value separator */
+    }
+    /* A JSON number starts with '-' or a digit. strtol() would also accept a leading
+     * '+' and further leading whitespace, neither of which is valid JSON, so gate the
+     * first byte explicitly. */
+    if (*v != '-' && !(*v >= '0' && *v <= '9')) {
+        return JWT_CLAIM_INVALID;      /* not a bare number (quoted string, '+', ...) */
     }
     char *endptr = NULL;
-    long val = strtol(v, &endptr, 10);
+    /* NumericDate (RFC 7519) can exceed 2^31 (year 2038+), and `long` is only 32-bit
+     * on wasm32/LLP64 — parse into long long so exp/nbf are platform-independent. */
+    long long val = strtoll(v, &endptr, 10);
     if (endptr == v) {
-        return false;                 /* non-numeric value */
+        return JWT_CLAIM_INVALID;      /* e.g. a lone '-' */
+    }
+    /* The integer must be terminated by optional whitespace then a value delimiter;
+     * anything else (e.g. "123abc") is malformed. */
+    const char *e = endptr;
+    while (*e == ' ' || *e == '\t' || *e == '\n' || *e == '\r') {
+        e++;
+    }
+    if (*e != ',' && *e != '}') {
+        return JWT_CLAIM_INVALID;
     }
     *out = val;
-    return true;
+    return JWT_CLAIM_OK;
 }
 
 /**
@@ -886,22 +914,29 @@ static bool parse_jwt_token(const char *token,
      * substrings of a string value (jwt_claim_int). */
     {
         time_t now = time(NULL);
-        long exp_val = 0, nbf_val = 0;
-        bool have_exp = jwt_claim_int((const char *)payload_decoded, "\"exp\"", &exp_val);
+        long long exp_val = 0, nbf_val = 0;
+        jwt_claim_status_t exp_st = jwt_claim_int((const char *)payload_decoded, "\"exp\"", &exp_val);
+        jwt_claim_status_t nbf_st = jwt_claim_int((const char *)payload_decoded, "\"nbf\"", &nbf_val);
 
-        /* exp: reject an expired token. */
-        if (have_exp && exp_val > 0 && (time_t)exp_val < now) {
+        /* A present-but-malformed security claim (non-integer, trailing garbage,
+         * quoted string) is rejected outright — never silently treated as absent. */
+        if (exp_st == JWT_CLAIM_INVALID || nbf_st == JWT_CLAIM_INVALID) {
+            goto cleanup;
+        }
+        /* exp: RFC 7519 §4.1.4 requires the current time to be BEFORE exp, so reject
+         * at or after it. No sign guard: a non-positive exp is at/before the epoch,
+         * i.e. already expired. */
+        if (exp_st == JWT_CLAIM_OK && (long long)now >= exp_val) {
             goto cleanup; /* Token expired */
         }
         /* Optionally require exp to be present at all (RFC 7519 leaves it OPTIONAL;
          * strict callers can opt in so a leaked exp-less token can't replay
          * forever). */
-        if (require_exp && !have_exp) {
+        if (require_exp && exp_st != JWT_CLAIM_OK) {
             goto cleanup; /* exp claim required but absent */
         }
-        /* nbf: reject a token that is not yet valid. */
-        if (jwt_claim_int((const char *)payload_decoded, "\"nbf\"", &nbf_val) &&
-            nbf_val > 0 && now < (time_t)nbf_val) {
+        /* nbf: reject a token that is not yet valid (§4.1.5: not before nbf). */
+        if (nbf_st == JWT_CLAIM_OK && (long long)now < nbf_val) {
             goto cleanup; /* Token not yet valid */
         }
     }
