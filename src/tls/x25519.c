@@ -17,133 +17,13 @@
 
 #ifdef WEBLIB_TLS
 
-#include "kamran.k"   /* secure_zero */
+#include "kamran.k"        /* secure_zero */
+#include "field25519.h"    /* gf, (un)pack25519, sel25519, add/sub/mul/sq/inv25519 */
 #include <string.h>
 
-typedef int64_t gf[16];
-
-/* 121665 = (A-2)/4 for the Montgomery curve, in 16-bit-limb radix. */
+/* 121665 = (A-2)/4 for the Montgomery curve, in 16-bit-limb radix. The field
+ * element type `gf` and its operations now live in field25519.{c,h}. */
 static const gf gf_121665 = { 0xDB41, 1 };
-
-/* Carry/reduce a field element into 16-bit limbs, folding bit 256 back via *38. */
-static void car25519(gf o) {
-    int i;
-    int64_t c;
-    for (i = 0; i < 16; i++) {
-        o[i] += (int64_t)1 << 16;
-        c = o[i] >> 16;
-        o[(i + 1) * (i < 15)] += c - 1 + 37 * (c - 1) * (i == 15);
-        o[i] -= c << 16;
-    }
-}
-
-/* Constant-time conditional swap of p and q when b == 1. */
-static void sel25519(gf p, gf q, int b) {
-    int i;
-    int64_t t;
-    int64_t c = ~((int64_t)b - 1);
-    for (i = 0; i < 16; i++) {
-        t = c & (p[i] ^ q[i]);
-        p[i] ^= t;
-        q[i] ^= t;
-    }
-}
-
-/* Serialize a field element to 32 little-endian bytes (fully reduced mod p). */
-static void pack25519(uint8_t *o, const gf n) {
-    int i, j, b;
-    gf m, t;
-    for (i = 0; i < 16; i++) {
-        t[i] = n[i];
-    }
-    car25519(t);
-    car25519(t);
-    car25519(t);
-    for (j = 0; j < 2; j++) {
-        m[0] = t[0] - 0xffed;
-        for (i = 1; i < 15; i++) {
-            m[i] = t[i] - 0xffff - ((m[i - 1] >> 16) & 1);
-            m[i - 1] &= 0xffff;
-        }
-        m[15] = t[15] - 0x7fff - ((m[14] >> 16) & 1);
-        b = (int)((m[15] >> 16) & 1);
-        m[14] &= 0xffff;
-        sel25519(t, m, 1 - b);
-    }
-    for (i = 0; i < 16; i++) {
-        o[2 * i]     = (uint8_t)(t[i] & 0xff);
-        o[2 * i + 1] = (uint8_t)(t[i] >> 8);
-    }
-}
-
-/* Parse 32 little-endian bytes into a field element (masking the high bit). */
-static void unpack25519(gf o, const uint8_t *n) {
-    int i;
-    for (i = 0; i < 16; i++) {
-        o[i] = n[2 * i] + ((int64_t)n[2 * i + 1] << 8);
-    }
-    o[15] &= 0x7fff;
-}
-
-static void fadd(gf o, const gf a, const gf b) {
-    int i;
-    for (i = 0; i < 16; i++) {
-        o[i] = a[i] + b[i];
-    }
-}
-
-static void fsub(gf o, const gf a, const gf b) {
-    int i;
-    for (i = 0; i < 16; i++) {
-        o[i] = a[i] - b[i];
-    }
-}
-
-static void fmul(gf o, const gf a, const gf b) {
-    int64_t t[31];
-    int i, j;
-    for (i = 0; i < 31; i++) {
-        t[i] = 0;
-    }
-    for (i = 0; i < 16; i++) {
-        for (j = 0; j < 16; j++) {
-            t[i + j] += a[i] * b[j];
-        }
-    }
-    for (i = 0; i < 15; i++) {
-        t[i] += 38 * t[i + 16];
-    }
-    for (i = 0; i < 16; i++) {
-        o[i] = t[i];
-    }
-    car25519(o);
-    car25519(o);
-}
-
-static void fsquare(gf o, const gf a) {
-    fmul(o, a, a);
-}
-
-/* Field inverse via Fermat: o = i^(p-2) mod p, by a fixed square-and-multiply
- * chain (constant-time; the exceptions at exponent bits 2 and 4 are the two zero
- * bits of p-2). */
-static void finverse(gf o, const gf i) {
-    gf c;
-    int a;
-    for (a = 0; a < 16; a++) {
-        c[a] = i[a];
-    }
-    for (a = 253; a >= 0; a--) {
-        fsquare(c, c);
-        if (a != 2 && a != 4) {
-            fmul(c, c, i);
-        }
-    }
-    for (a = 0; a < 16; a++) {
-        o[a] = c[a];
-    }
-    secure_zero(c, sizeof(c));
-}
 
 void x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t u[32]) {
     uint8_t z[32];
@@ -169,31 +49,31 @@ void x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t u[32]) {
         int64_t r = (z[i >> 3] >> (i & 7)) & 1;
         sel25519(a, b, (int)r);
         sel25519(c, d, (int)r);
-        fadd(e, a, c);
-        fsub(a, a, c);
-        fadd(c, b, d);
-        fsub(b, b, d);
-        fsquare(d, e);
-        fsquare(f, a);
-        fmul(a, c, a);
-        fmul(c, b, e);
-        fadd(e, a, c);
-        fsub(a, a, c);
-        fsquare(b, a);
-        fsub(c, d, f);
-        fmul(a, c, gf_121665);
-        fadd(a, a, d);
-        fmul(c, c, a);
-        fmul(a, d, f);
-        fmul(d, b, x1);
-        fsquare(b, e);
+        add25519(e, a, c);
+        sub25519(a, a, c);
+        add25519(c, b, d);
+        sub25519(b, b, d);
+        sq25519(d, e);
+        sq25519(f, a);
+        mul25519(a, c, a);
+        mul25519(c, b, e);
+        add25519(e, a, c);
+        sub25519(a, a, c);
+        sq25519(b, a);
+        sub25519(c, d, f);
+        mul25519(a, c, gf_121665);
+        add25519(a, a, d);
+        mul25519(c, c, a);
+        mul25519(a, d, f);
+        mul25519(d, b, x1);
+        sq25519(b, e);
         sel25519(a, b, (int)r);
         sel25519(c, d, (int)r);
     }
 
     /* out = x2 / z2 = a * c^(p-2). */
-    finverse(c, c);
-    fmul(a, a, c);
+    inv25519(c, c);
+    mul25519(a, a, c);
     pack25519(out, a);
 
     /* Wipe the clamped scalar and all working field elements. */
