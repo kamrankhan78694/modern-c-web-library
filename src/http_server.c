@@ -1513,6 +1513,116 @@ static int parse_request_line(http_parser_t *parser) {
     return 1;
 }
 
+/* RFC 7230 §3.2.6 token characters (tchar). */
+static bool _is_tchar(unsigned char c) {
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+        return true;
+    }
+    switch (c) {
+        case '!': case '#': case '$': case '%': case '&': case '\'':
+        case '*': case '+': case '-': case '.': case '^': case '_':
+        case '`': case '|': case '~':
+            return true;
+        default:
+            return false;
+    }
+}
+
+typedef enum {
+    TE_CHUNKED,      /* the sole coding is "chunked" -> read a chunked body */
+    TE_UNSUPPORTED,  /* a transfer-coding we cannot apply is present -> 501 */
+    TE_MALFORMED     /* chunked missing/repeated/not-final, or bad syntax -> 400 */
+} te_result_t;
+
+/*
+ * Classify a Transfer-Encoding field value per RFC 7230 §3.3.1 / §3.3.3.
+ *
+ * The field is a comma-separated list of transfer-codings (each a token with
+ * optional ";"-parameters). We deliberately TOKEN-parse rather than
+ * substring-match "chunked": the old strstr(value, "chunked") accepted
+ * "xchunked", "chunkedx", and "chunked, gzip" (chunked not last). A stricter
+ * upstream proxy frames those differently, which is the classic
+ * Transfer-Encoding request-smuggling (TE.TE) precondition.
+ *
+ * "chunked" is the only coding this server can apply, and per §3.3.1 it MUST be
+ * the final coding for a request. So the ONLY value that yields a chunked body
+ * is a list whose single coding is "chunked"; anything else is rejected:
+ *   - chunked repeated, not final, or absent  -> TE_MALFORMED (400): the message
+ *     framing cannot be determined reliably.
+ *   - a non-chunked coding present with chunked last (e.g. "gzip, chunked") ->
+ *     TE_UNSUPPORTED (501): we cannot decode that transfer-coding.
+ */
+static te_result_t classify_transfer_encoding(const char *value) {
+    int coding_count = 0;
+    int chunked_count = 0;
+    bool last_is_chunked = false;
+    bool has_unsupported = false;
+
+    const char *p = value;
+    while (*p) {
+        /* Skip optional whitespace and empty list elements (the #rule tolerates
+         * stray commas). */
+        while (*p == ' ' || *p == '\t' || *p == ',') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+
+        /* Read the coding name (a token). */
+        const char *name = p;
+        while (_is_tchar((unsigned char)*p)) {
+            p++;
+        }
+        size_t name_len = (size_t)(p - name);
+        if (name_len == 0) {
+            return TE_MALFORMED; /* a non-token char where a coding name was due */
+        }
+
+        /* After the name, only OWS, an optional ";"-parameter section, then a
+         * comma (or end) are valid. Anything else (e.g. "chunked gzip" without a
+         * comma, or trailing junk) is malformed. */
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (*p == ';') {
+            /* Skip the parameter section up to the next list separator. We do
+             * not interpret parameters; any comma (even one inside a quoted
+             * string) ends the element, which at worst rejects an exotic value
+             * as malformed — the safe direction for smuggling. */
+            while (*p != '\0' && *p != ',') {
+                p++;
+            }
+        }
+        if (*p != '\0' && *p != ',') {
+            return TE_MALFORMED;
+        }
+
+        coding_count++;
+        if (name_len == 7 && strncasecmp(name, "chunked", 7) == 0) {
+            chunked_count++;
+            last_is_chunked = true;
+        } else {
+            has_unsupported = true;
+            last_is_chunked = false;
+        }
+    }
+
+    if (coding_count == 0) {
+        return TE_MALFORMED;                 /* Transfer-Encoding present but empty */
+    }
+    if (chunked_count > 1) {
+        return TE_MALFORMED;                 /* chunked applied more than once */
+    }
+    if (chunked_count == 0 || !last_is_chunked) {
+        return TE_MALFORMED;                 /* chunked absent or not the final coding */
+    }
+    if (has_unsupported) {
+        return TE_UNSUPPORTED;               /* e.g. "gzip, chunked": can't decode gzip */
+    }
+    return TE_CHUNKED;                        /* exactly "chunked" */
+}
+
 static int parse_header_line(http_parser_t *parser, const char *line, size_t len) {
     const char *colon = memchr(line, ':', len);
     if (!colon) {
@@ -1603,8 +1713,24 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
             return -1;
         }
         parser->seen_transfer_encoding = true;
-        if (strstr(value_buf, "chunked") != NULL) {
+        /* RFC 7230 §3.3.1: token-parse the transfer-coding list instead of a
+         * substring match, so "xchunked"/"chunkedx"/"chunked, gzip" can never be
+         * mistaken for a chunked body (request-smuggling precondition). */
+        te_result_t te = classify_transfer_encoding(value_buf);
+        if (te == TE_CHUNKED) {
             parser->chunked = true;
+        } else if (te == TE_UNSUPPORTED) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_NOT_IMPLEMENTED,
+                             "Unsupported Transfer-Encoding");
+            return -1;
+        } else { /* TE_MALFORMED */
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST,
+                             "Malformed Transfer-Encoding");
+            return -1;
         }
     } else if (strcasecmp(name_buf, "expect") == 0) {
         if (strcasecmp(value_buf, "100-continue") == 0) {

@@ -840,6 +840,80 @@ void test_stress_oversized_request(void) {
     PASS();
 }
 
+/* Regression (audit #21): Transfer-Encoding must be token-parsed per RFC 7230
+ * §3.3.1, not substring-matched. Verifies the smuggling vectors the old
+ * strstr(value,"chunked") accepted are now rejected, while a well-formed
+ * "chunked" request still works. */
+void test_stress_transfer_encoding_smuggling(void) {
+    TEST("Transfer-Encoding token parse rejects smuggling vectors");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_POST, "/upload", dummy_handler);
+    http_server_set_router(server, router);
+
+    uint16_t port = 19010;
+    ASSERT(http_server_listen(server, port) == 0);
+    usleep(200000);
+
+    char response[4096];
+
+    /* Valid: the sole coding is "chunked" + a proper chunked body -> accepted. */
+    const char *valid =
+        "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+    ASSERT(_stress_send_request(port, valid, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "200 OK") != NULL);
+
+    /* Token match is case-insensitive; empty chunked body is fine. */
+    const char *valid_case =
+        "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+        "Transfer-Encoding: Chunked\r\n\r\n0\r\n\r\n";
+    ASSERT(_stress_send_request(port, valid_case, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "200 OK") != NULL);
+
+    /* "chunked" with an (ignored) parameter is still the chunked coding. */
+    const char *valid_param =
+        "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+        "Transfer-Encoding: chunked;x=y\r\n\r\n0\r\n\r\n";
+    ASSERT(_stress_send_request(port, valid_param, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "200 OK") != NULL);
+
+    /* Vectors the old substring match accepted -> now 400 (Malformed). */
+    const char *bad_400[] = {
+        "Transfer-Encoding: xchunked",         /* substring, not a token */
+        "Transfer-Encoding: chunkedx",
+        "Transfer-Encoding: chunked, gzip",     /* chunked not the final coding */
+        "Transfer-Encoding: chunked, chunked",  /* chunked applied twice */
+        "Transfer-Encoding: gzip",              /* chunked absent -> undeterminable */
+        "Transfer-Encoding: chunked chunked",   /* two codings, missing comma */
+        NULL
+    };
+    for (int i = 0; bad_400[i] != NULL; i++) {
+        char req[256];
+        snprintf(req, sizeof(req),
+                 "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n%s\r\n\r\n",
+                 bad_400[i]);
+        ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
+        ASSERT(strstr(response, "400") != NULL);
+    }
+
+    /* A non-chunked coding we cannot apply, with chunked last -> 501. */
+    const char *req501 =
+        "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+        "Transfer-Encoding: gzip, chunked\r\n\r\n";
+    ASSERT(_stress_send_request(port, req501, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "501") != NULL);
+
+    http_server_stop(server);
+    usleep(100000);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 void test_stress_many_headers(void) {
     TEST("request with many headers (90 headers)");
 
@@ -1346,6 +1420,7 @@ int main(void) {
         test_stress_slowloris_deadline();
         test_stress_request_deadline_silent();
         test_stress_listen_failure_cleanup();
+        test_stress_transfer_encoding_smuggling();
     }
 
     /* Input Validation Stress Tests */
