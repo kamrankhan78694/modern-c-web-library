@@ -86,5 +86,9 @@ void tls_writer_close_vector(tls_writer_t *w, size_t marker, int len_bytes);
  * returns 0 if any write overflowed or a vector length did not fit. */
 int tls_writer_finish(const tls_writer_t *w, size_t *out_len);
 
+/* The writer's current success state: 1 while every write has fit, 0 once one
+ * has overflowed (or a vector failed to close). */
+int tls_writer_ok(const tls_writer_t *w);
+
 #endif /* WEBLIB_TLS */
 #endif /* WEBLIB_TLS_WIRE_H */
