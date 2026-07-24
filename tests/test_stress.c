@@ -17,6 +17,8 @@
 #include <netinet/in.h>
 #include <errno.h>
 #include <time.h>
+#include <sys/wait.h>       /* fork/waitpid isolation for the listen-failure test */
+#include <sys/resource.h>   /* setrlimit(RLIMIT_NPROC) to force thread-creation failure */
 
 /* Test counter */
 static int tests_run = 0;
@@ -1199,6 +1201,99 @@ void test_stress_event_loop_create_destroy_cycle(void) {
     PASS();
 }
 
+/*
+ * Regression test for audit #4 (HIGH): an http_server_listen() that fails AFTER
+ * server->running has been set true — e.g. thread-pool creation fails — must
+ * leave the server in a clean STOPPED state, so that a subsequent
+ * http_server_destroy() does NOT pthread_join() an accept thread that was never
+ * created (joining a garbage pthread_t is undefined behaviour and typically
+ * crashes) and does not leak the thread pool.
+ *
+ * We force the post-startup failure deterministically by lowering RLIMIT_NPROC
+ * inside a forked child so that thread_pool_create()'s eager pthread_create()
+ * fails with EAGAIN. The child then calls http_server_destroy(); with the bug
+ * present this dereferences an uninitialised thread handle and the child is
+ * killed by a signal. We assert the child instead exits normally.
+ *
+ * Isolation & portability:
+ *   - Everything runs in a forked child so the aggressive rlimit never touches
+ *     the rest of the suite.
+ *   - RLIMIT_NPROC is per real-UID and root is exempt on Linux; if we cannot
+ *     force the failure (listen() unexpectedly succeeds, as under root in some
+ *     CI containers, or the platform lacks RLIMIT_NPROC) the child tears the
+ *     running server down cleanly and reports SKIP. That still proves teardown
+ *     is crash-free; on non-root hosts it additionally exercises the exact
+ *     error path (and is a valid negative control there).
+ */
+#define LISTEN_FAIL_CHILD_OK    0   /* failure was forced and destroy() was clean */
+#define LISTEN_FAIL_CHILD_BUG   1   /* running/state not reset after failed listen() */
+#define LISTEN_FAIL_CHILD_SKIP  42  /* could not force the failure (e.g. running as root) */
+
+void test_stress_listen_failure_cleanup(void) {
+    TEST("listen() post-startup failure leaves server safely destroyable");
+
+    pid_t pid = fork();
+    ASSERT(pid >= 0);
+
+    if (pid == 0) {
+        /* ---------- child ---------- */
+#if defined(RLIMIT_NPROC)
+        /* Drive the real-UID process/thread limit below the current usage so any
+         * further pthread_create() (the thread pool's workers) fails EAGAIN. */
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_NPROC, &rl) == 0) {
+            rl.rlim_cur = 1;
+            (void)setrlimit(RLIMIT_NPROC, &rl);
+        }
+#endif
+        http_server_t *server = http_server_create();
+        if (!server) {
+            _exit(LISTEN_FAIL_CHILD_SKIP);
+        }
+        http_server_set_thread_count(server, 1);
+
+        /* Port 0 => the OS assigns a free ephemeral port, so bind()/listen()
+         * succeed regardless of what else is bound. This is essential: if we
+         * hard-coded a port and it happened to be busy, listen() would fail
+         * EARLY (before server->running is set true) and the buggy code path
+         * would never be reached — the test would pass as a false negative.
+         * With port 0 the only remaining failure point is the post-startup
+         * thread-pool creation we are deliberately forcing. */
+        int rc = http_server_listen(server, 0);
+        if (rc == 0) {
+            /* Could not force the failure — tear the running server down cleanly
+             * and report SKIP (this path must itself be crash-free). */
+            http_server_stop(server);
+            http_server_destroy(server);
+            _exit(LISTEN_FAIL_CHILD_SKIP);
+        }
+
+        /* listen() failed post-startup: the server must be back in STOPPED and
+         * destroy() must not join a never-created accept thread. */
+        if (http_server_get_state(server) != HTTP_SERVER_STOPPED) {
+            _exit(LISTEN_FAIL_CHILD_BUG);
+        }
+        http_server_destroy(server);   /* crashes here if the bug is present */
+        _exit(LISTEN_FAIL_CHILD_OK);
+    }
+
+    /* ---------- parent ---------- */
+    int status = 0;
+    ASSERT(waitpid(pid, &status, 0) == pid);
+
+    /* Never killed by a signal (that would be the join-on-garbage crash). */
+    ASSERT(WIFEXITED(status));
+    int code = WEXITSTATUS(status);
+    ASSERT(code != LISTEN_FAIL_CHILD_BUG);
+    ASSERT(code == LISTEN_FAIL_CHILD_OK || code == LISTEN_FAIL_CHILD_SKIP);
+    if (code == LISTEN_FAIL_CHILD_SKIP) {
+        printf("    (note: thread-creation failure not forced on this host; "
+               "verified teardown is crash-free)\n");
+    }
+
+    PASS();
+}
+
 /* ===== Main Test Runner ===== */
 
 int main(void) {
@@ -1249,6 +1344,7 @@ int main(void) {
         test_stress_slow_client();
         test_stress_slowloris_deadline();
         test_stress_request_deadline_silent();
+        test_stress_listen_failure_cleanup();
     }
 
     /* Input Validation Stress Tests */

@@ -187,6 +187,7 @@ struct http_server {
     volatile sig_atomic_t running;
     volatile sig_atomic_t state;
     pthread_t accept_thread;
+    volatile sig_atomic_t accept_thread_started;   /* set only once pthread_create() succeeded — gates every pthread_join() so an uninitialised handle is never joined; sig_atomic_t (like running/state) keeps it safe when stop() is driven from a signal handler */
     
     /* Socket timeouts */
     int read_timeout_sec;
@@ -300,6 +301,31 @@ http_server_t *http_server_create(void) {
     return server;
 }
 
+/* Reset the server to a clean STOPPED state after an http_server_listen() error
+ * that occurs once server->running has already been set true.
+ *
+ * Security-by-design (audit #4): the previous error paths closed the socket but
+ * left running=true with an uninitialised accept_thread and (in the threaded
+ * path) an already-created thread pool. A subsequent http_server_stop()/
+ * http_server_destroy() would then see running==true and pthread_join() a
+ * thread that was never started — undefined behaviour on a garbage handle — and
+ * leak the pool. Rather than patch each caller, we make failed startup leave the
+ * server indistinguishable from "never listened": stop()/destroy() early-return
+ * on running==false, so the join is unreachable, and the pool is freed here. */
+static void _listen_fail_cleanup(http_server_t *server) {
+    if (server->socket_fd >= 0) {
+        close(server->socket_fd);
+        server->socket_fd = -1;
+    }
+    if (server->pool) {
+        thread_pool_destroy(server->pool);
+        server->pool = NULL;
+    }
+    server->accept_thread_started = false;
+    server->running = false;
+    server->state = SERVER_STOPPED;
+}
+
 /* Start listening on port */
 int http_server_listen(http_server_t *server, uint16_t port) {
     if (!server) {
@@ -351,15 +377,15 @@ int http_server_listen(http_server_t *server, uint16_t port) {
         /* Set server socket to non-blocking */
         if (set_nonblocking(server->socket_fd) < 0) {
             perror("Failed to set server socket to non-blocking");
-            close(server->socket_fd);
+            _listen_fail_cleanup(server);
             return -1;
         }
-        
+
         /* Add server socket to event loop */
-        if (event_loop_add_fd(server->event_loop, server->socket_fd, EVENT_READ, 
+        if (event_loop_add_fd(server->event_loop, server->socket_fd, EVENT_READ,
                              async_accept_handler, server) < 0) {
             fprintf(stderr, "Failed to add server socket to event loop\n");
-            close(server->socket_fd);
+            _listen_fail_cleanup(server);
             return -1;
         }
         
@@ -370,19 +396,21 @@ int http_server_listen(http_server_t *server, uint16_t port) {
         server->pool = thread_pool_create(server->thread_count, 0);
         if (!server->pool) {
             fprintf(stderr, "Failed to create thread pool\n");
-            close(server->socket_fd);
+            _listen_fail_cleanup(server);
             return -1;
         }
-        
+
         printf("HTTP server listening on port %d (threaded mode, pool=%d)\n", port, server->thread_count);
-        
+
         /* Start accept thread */
         if (pthread_create(&server->accept_thread, NULL, accept_connections, server) != 0) {
             perror("pthread_create failed");
-            server->running = false;
-            close(server->socket_fd);
+            /* Frees the pool created just above and resets running/state. */
+            _listen_fail_cleanup(server);
             return -1;
         }
+        /* Handle is valid from here on — authorise the matching pthread_join(). */
+        server->accept_thread_started = true;
     }
     
     return 0;
@@ -409,8 +437,11 @@ void http_server_stop(http_server_t *server) {
             close(server->socket_fd);
             server->socket_fd = -1;
         }
-        pthread_join(server->accept_thread, NULL);
-        
+        if (server->accept_thread_started) {
+            pthread_join(server->accept_thread, NULL);
+            server->accept_thread_started = false;
+        }
+
         /* Drain and destroy thread pool */
         if (server->pool) {
             thread_pool_destroy(server->pool);
@@ -464,13 +495,16 @@ int http_server_shutdown(http_server_t *server, int timeout_sec) {
             event_loop_stop(server->event_loop);
         }
     } else {
-        pthread_join(server->accept_thread, NULL);
+        if (server->accept_thread_started) {
+            pthread_join(server->accept_thread, NULL);
+            server->accept_thread_started = false;
+        }
         if (server->pool) {
             thread_pool_destroy(server->pool);
             server->pool = NULL;
         }
     }
-    
+
     server->state = SERVER_STOPPED;
     printf("HTTP server shut down gracefully\n");
     return 0;
