@@ -3712,6 +3712,62 @@ void test_compression_negotiate(void) {
     PASS();
 }
 
+/* Regression (task #20): Accept-Encoding q-values use '.' as the decimal separator,
+ * but _parse_quality() used strtod(), which honors LC_NUMERIC. Under a comma-decimal
+ * locale strtod("0.8") stopped at the '.' -> q=0.0 -> an encoding the client accepts
+ * was silently refused. Verify negotiation is locale-independent (skipping cleanly if
+ * no comma-decimal locale is installed). */
+void test_compression_negotiate_locale(void) {
+    TEST("compression_negotiate (locale-independent q-value)");
+
+    const char *cur = setlocale(LC_NUMERIC, NULL);
+    char saved[128];
+    saved[0] = '\0';
+    if (cur) {
+        strncpy(saved, cur, sizeof(saved) - 1);
+        saved[sizeof(saved) - 1] = '\0';
+    }
+
+    static const char *comma[] = {
+        "de_DE.UTF-8", "fr_FR.UTF-8", "de_DE", "fr_FR", "nl_NL.UTF-8"
+    };
+    bool have_comma = false;
+    for (size_t i = 0; i < sizeof(comma) / sizeof(comma[0]); i++) {
+        if (setlocale(LC_NUMERIC, comma[i]) &&
+            localeconv()->decimal_point[0] == ',') {
+            have_comma = true;
+            break;
+        }
+    }
+
+    if (!have_comma) {
+        setlocale(LC_NUMERIC, saved[0] ? saved : "C");
+        printf("[SKIP: no comma-decimal locale] ");
+        PASS();
+        return;
+    }
+
+    /* Compute under the comma locale, then restore BEFORE asserting (ASSERT returns). */
+    const char *r_frac = compression_negotiate("gzip;q=0.8");   /* 0.8 > 0  -> gzip */
+    const char *r_tiny = compression_negotiate("gzip;q=0.001"); /* 0.001 > 0 -> gzip */
+    const char *r_zero = compression_negotiate("gzip;q=0");     /* 0 -> refused */
+    const char *r_wild = compression_negotiate("*;q=0.5");      /* wildcard -> gzip */
+
+    bool frac_ok = (r_frac && strcmp(r_frac, "gzip") == 0);
+    bool tiny_ok = (r_tiny && strcmp(r_tiny, "gzip") == 0);
+    bool zero_ok = (r_zero == NULL);
+    bool wild_ok = (r_wild && strcmp(r_wild, "gzip") == 0);
+
+    setlocale(LC_NUMERIC, saved[0] ? saved : "C");
+
+    ASSERT(frac_ok);   /* q=0.8 must not collapse to 0 under a comma locale */
+    ASSERT(tiny_ok);   /* q=0.001 is still > 0 */
+    ASSERT(zero_ok);   /* q=0 still refuses */
+    ASSERT(wild_ok);
+
+    PASS();
+}
+
 void test_compression_should_compress(void) {
     TEST("compression_should_compress");
 
@@ -5023,6 +5079,7 @@ int main(void) {
     /* Phase 9: Compression tests */
     test_crc32_compute();
     test_compression_negotiate();
+    test_compression_negotiate_locale();
     test_compression_should_compress();
     test_gzip_compress_valid();
 

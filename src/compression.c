@@ -527,13 +527,34 @@ static double _parse_quality(const char *param) {
     }
     
     param += 2;
-    char *endptr;
-    double q = strtod(param, &endptr);
-    
-    if (endptr == param || q < 0.0) {
-        return 1.0;
+    while (*param && isspace((unsigned char)*param)) {   /* match strtod's leading-ws skip */
+        param++;
     }
-    
+
+    /* RFC 7231 §5.3.1  qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] ).
+     * Parse it by hand rather than via strtod(), whose decimal-point handling
+     * follows LC_NUMERIC: under a comma-decimal locale (de_DE, fr_FR, ...)
+     * strtod("0.8") stops at the '.', yields 0.0, and silently refuses an encoding
+     * the client actually accepts. The fixed grammar makes a direct parse trivial
+     * and locale-independent by construction. */
+    int whole;
+    if (param[0] == '0') {
+        whole = 0;
+    } else if (param[0] == '1') {
+        whole = 1;
+    } else {
+        return 1.0;                   /* missing/invalid qvalue -> default 1.0 */
+    }
+    const char *p = param + 1;
+    long frac = 0, scale = 1;
+    if (*p == '.') {
+        p++;
+        for (int digits = 0; digits < 3 && *p >= '0' && *p <= '9'; digits++, p++) {
+            frac = frac * 10 + (*p - '0');
+            scale *= 10;
+        }
+    }
+    double q = (double)whole + (double)frac / (double)scale;
     return q > 1.0 ? 1.0 : q;
 }
 
