@@ -1419,6 +1419,38 @@ static bool assign_http_method(http_request_t *req, const char *method) {
     return false;
 }
 
+/* Canonicalize a request path in place: collapse runs of '/' into a single '/'
+ * and strip a single trailing '/' (except for the root "/"). This is done once
+ * at ingest so the router — and every handler that reads req->path — sees one
+ * canonical form. Without it, "/a//b", "/a/b/", and "//a//b//" reach the router
+ * as distinct strings, and because :param matching tokenizes on '/' (dropping
+ * empty segments) while literal matching uses strcmp, those variants alias onto
+ * a :param route yet not onto a literal route — an inconsistency and a
+ * path-confusion / ACL-or-cache-key divergence class (audit #19). The result is
+ * never longer than the input, so the in-place rewrite is safe. */
+static void normalize_path(char *path) {
+    if (!path) {
+        return;
+    }
+    const char *r = path;
+    char *w = path;
+    while (*r) {
+        if (*r == '/') {
+            *w++ = '/';
+            while (*r == '/') {
+                r++;               /* skip the rest of the slash run */
+            }
+        } else {
+            *w++ = *r++;
+        }
+    }
+    *w = '\0';
+    size_t len = (size_t)(w - path);
+    if (len > 1 && path[len - 1] == '/') {
+        path[len - 1] = '\0';      /* strip a single trailing slash, keep root "/" */
+    }
+}
+
 static int parse_request_line(http_parser_t *parser) {
     ssize_t crlf_index = find_crlf(parser->buffer, parser->buffer_len);
     if (crlf_index < 0) {
@@ -1517,6 +1549,9 @@ static int parse_request_line(http_parser_t *parser) {
         parser_set_error(parser, HTTP_INTERNAL_ERROR, "Out of memory");
         return -1;
     }
+    /* Canonicalize before routing so //, trailing slashes, etc. cannot alias
+     * distinct wire paths onto one route (audit #19). */
+    normalize_path(parser->req->path);
 
     if (strcmp(version, "HTTP/1.1") == 0) {
         parser->http_1_1 = true;
