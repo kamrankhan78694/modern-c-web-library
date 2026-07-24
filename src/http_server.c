@@ -182,6 +182,7 @@ typedef enum {
  * "drip" client can hold a worker thread indefinitely (slow-loris).  This
  * deadline bounds the whole request regardless of drip rate. 0 disables it. */
 #define DEFAULT_REQUEST_TIMEOUT_SEC 60
+#define ASYNC_REAPER_INTERVAL_MS 1000  /* how often the async idle reaper sweeps */
 
 /* Internal server structure */
 struct http_server {
@@ -210,6 +211,9 @@ struct http_server {
     /* Async I/O support */
     bool async_mode;
     event_loop_t *event_loop;
+    struct async_connection *async_conns;  /* head of the live async-connection list,
+                                              walked by the idle reaper; only touched
+                                              from the (single-threaded) event loop */
 };
 
 /* Connection handler data */
@@ -239,6 +243,13 @@ typedef struct async_connection {
     /* WebSocket (async mode) */
     bool is_websocket;
     websocket_connection_t *ws_conn;
+    /* Idle/slow-loris reaper (audit #2): absolute deadline by which the current
+     * request must complete; 0 disables reaping (e.g. an upgraded WebSocket, which
+     * is long-lived). Set on accept, refreshed per keep-alive request, and NOT
+     * refreshed on individual bytes so a slow drip is still bounded. */
+    time_t deadline;
+    struct async_connection *rl_prev;      /* server->async_conns list links */
+    struct async_connection *rl_next;
 } async_connection_t;
 
 /* Forward declarations */
@@ -274,6 +285,8 @@ static void async_write_handler(int fd, int events, void *user_data);
 static void free_async_connection(async_connection_t *conn);
 static bool async_on_parser_result(async_connection_t *conn, int fd, parser_result_t result);
 static void async_websocket_read_handler(int fd, int events, void *user_data);
+static void async_reaper_cb(int timer_fd, int events, void *user_data);
+static void reap_all_async_connections(http_server_t *server);
 
 /* Create HTTP server */
 http_server_t *http_server_create(void) {
@@ -392,9 +405,19 @@ int http_server_listen(http_server_t *server, uint16_t port) {
             _listen_fail_cleanup(server);
             return -1;
         }
-        
-        /* Run event loop in main thread */
+
+        /* Arm the idle/slow-loris reaper (audit #2). It re-arms itself, so one
+         * timer is always pending — which also bounds shutdown latency by keeping
+         * the poll wait finite. */
+        event_loop_add_timeout(server->event_loop, ASYNC_REAPER_INTERVAL_MS,
+                               async_reaper_cb, server);
+
+        /* Run event loop in main thread (blocks until stopped). */
         event_loop_run(server->event_loop);
+
+        /* Loop has stopped: close and free any still-open async connections so
+         * their fds and contexts are not leaked (audit #18). */
+        reap_all_async_connections(server);
     } else {
         /* Traditional threaded mode — create thread pool */
         server->pool = thread_pool_create(server->thread_count, 0);
@@ -2374,15 +2397,88 @@ static int set_nonblocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-/* Async accept handler.
- *
- * NOTE: async mode does NOT yet bound slow/idle clients. Unlike the threaded
- * path, it registers no per-connection start-time or idle timer, so the
- * request_timeout_sec deadline is not enforced here and a slow-loris (or fully
- * idle) client persists until it disconnects, tying up an fd + memory. Less
- * severe than the threaded case (no worker thread is held), but still a gap --
- * tracked as a follow-up: add an event-loop idle/deadline reaper for async
- * connections. */
+/* Deadline for a new request on an async connection (absolute time), or 0 if the
+ * request-timeout guard is disabled. Deliberately NOT refreshed per byte, so a
+ * slow drip is bounded by request_timeout_sec regardless of its rate. */
+static time_t async_request_deadline(const http_server_t *server) {
+    if (server->request_timeout_sec <= 0) {
+        return 0;
+    }
+    return time(NULL) + server->request_timeout_sec;
+}
+
+/* Link/unlink a connection into the server's live-connection list. Only ever
+ * touched from the single-threaded event loop, so no locking is required.
+ * Unlink is idempotent (safe for a connection that was never tracked). */
+static void async_conn_track(http_server_t *server, async_connection_t *conn) {
+    conn->rl_prev = NULL;
+    conn->rl_next = server->async_conns;
+    if (server->async_conns) {
+        server->async_conns->rl_prev = conn;
+    }
+    server->async_conns = conn;
+}
+
+static void async_conn_untrack(http_server_t *server, async_connection_t *conn) {
+    if (conn->rl_prev) {
+        conn->rl_prev->rl_next = conn->rl_next;
+    } else if (server->async_conns == conn) {
+        server->async_conns = conn->rl_next;
+    }
+    if (conn->rl_next) {
+        conn->rl_next->rl_prev = conn->rl_prev;
+    }
+    conn->rl_prev = NULL;
+    conn->rl_next = NULL;
+}
+
+/* Idle/slow-loris reaper (audit #2): close and free every tracked async
+ * connection whose request deadline has passed, then re-arm itself (event-loop
+ * timers are one-shot). Runs in the event-loop thread. An always-present reaper
+ * timer also bounds shutdown latency: get_next_timeout() would otherwise return
+ * "block forever" and a stop() could not wake epoll_wait/kevent/poll. */
+static void async_reaper_cb(int timer_fd, int events, void *user_data) {
+    (void)timer_fd;
+    (void)events;
+    http_server_t *server = (http_server_t *)user_data;
+    if (!server || !server->event_loop) {
+        return;
+    }
+
+    time_t now = time(NULL);
+    async_connection_t *conn = server->async_conns;
+    while (conn) {
+        async_connection_t *next = conn->rl_next;   /* save before free unlinks conn */
+        if (conn->deadline != 0 && now >= conn->deadline) {
+            if (conn->client_fd >= 0) {
+                event_loop_remove_fd(server->event_loop, conn->client_fd);
+            }
+            free_async_connection(conn);             /* untracks, closes fd, frees */
+        }
+        conn = next;
+    }
+
+    if (server->running) {
+        event_loop_add_timeout(server->event_loop, ASYNC_REAPER_INTERVAL_MS,
+                               async_reaper_cb, server);
+    }
+}
+
+/* Free every remaining tracked async connection. Called after the event loop has
+ * stopped, so their fds and heap contexts are not leaked on shutdown (audit #18:
+ * event_loop_destroy frees only the handler array). */
+static void reap_all_async_connections(http_server_t *server) {
+    async_connection_t *conn = server->async_conns;
+    while (conn) {
+        async_connection_t *next = conn->rl_next;
+        free_async_connection(conn);                 /* untracks + closes fd + frees */
+        conn = next;
+    }
+    server->async_conns = NULL;
+}
+
+/* Async accept handler. Bounds slow/idle clients via async_reaper_cb, which
+ * reaps any tracked connection past its request deadline (see below). */
 static void async_accept_handler(int fd, int events, void *user_data) {
     http_server_t *server = (http_server_t *)user_data;
     
@@ -2420,14 +2516,20 @@ static void async_accept_handler(int fd, int events, void *user_data) {
     /* Set client socket to non-blocking */
     if (set_nonblocking(client_fd) < 0) {
         perror("Failed to set client socket to non-blocking");
+        pthread_mutex_lock(&server->conn_lock);
+        if (server->active_connections > 0) server->active_connections--;
+        pthread_mutex_unlock(&server->conn_lock);
         close(client_fd);
         return;
     }
-    
+
     /* Create async connection context */
     async_connection_t *conn = (async_connection_t *)calloc(1, sizeof(async_connection_t));
     if (!conn) {
         fprintf(stderr, "Failed to allocate connection context\n");
+        pthread_mutex_lock(&server->conn_lock);
+        if (server->active_connections > 0) server->active_connections--;
+        pthread_mutex_unlock(&server->conn_lock);
         close(client_fd);
         return;
     }
@@ -2467,6 +2569,11 @@ static void async_accept_handler(int fd, int events, void *user_data) {
         free_async_connection(conn);
         return;
     }
+
+    /* Registered successfully: give it a request deadline and track it so the
+     * idle reaper can close it if the client stalls (audit #2). */
+    conn->deadline = async_request_deadline(server);
+    async_conn_track(server, conn);
 }
 
 static bool async_on_parser_result(async_connection_t *conn, int fd, parser_result_t result) {
@@ -2714,6 +2821,10 @@ static void async_write_handler(int fd, int events, void *user_data) {
             http_parser_destroy(&conn->parser);
             conn->parser_initialized = false;
 
+            /* A live WebSocket is long-lived — exempt it from the request-deadline
+             * reaper (its own idle handling is separate). */
+            conn->deadline = 0;
+
             /* Replace handler with WebSocket read handler */
             if (event_loop_remove_fd(conn->server->event_loop, fd) < 0 ||
                 event_loop_add_fd(conn->server->event_loop, fd, EVENT_READ, async_websocket_read_handler, conn) < 0) {
@@ -2748,6 +2859,7 @@ static void async_write_handler(int fd, int events, void *user_data) {
         conn->closing = false;
         conn->header_sent = 0;
         conn->body_sent = 0;
+        conn->deadline = async_request_deadline(conn->server);  /* fresh window for the next request */
 
         parser_result_t result = PARSER_INCOMPLETE;
         if (conn->parser.buffer_len > 0) {
@@ -2835,8 +2947,10 @@ static void free_async_connection(async_connection_t *conn) {
         return;
     }
     
-    /* Decrement active connection count */
+    /* Unlink from the reaper's live-connection list (idempotent if never tracked;
+     * event-loop-thread only, so no lock) and decrement the active count. */
     if (conn->server) {
+        async_conn_untrack(conn->server, conn);
         pthread_mutex_lock(&conn->server->conn_lock);
         if (conn->server->active_connections > 0) {
             conn->server->active_connections--;

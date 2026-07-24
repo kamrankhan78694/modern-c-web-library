@@ -1218,6 +1218,64 @@ void test_stress_path_normalization(void) {
     PASS();
 }
 
+/* Runs an async server's (blocking) event loop until http_server_stop() is called. */
+typedef struct { http_server_t *server; uint16_t port; } _async_srv_arg_t;
+static void *_async_server_run(void *arg) {
+    _async_srv_arg_t *a = (_async_srv_arg_t *)arg;
+    http_server_listen(a->server, a->port);   /* blocks in event_loop_run until stopped */
+    return NULL;
+}
+
+/* Regression (audit #2): an idle / slow-loris async connection must be reaped by
+ * the event-loop idle reaper once its request deadline passes, rather than tying
+ * up an fd + memory forever. Also exercises the reaper bounding shutdown latency
+ * (pthread_join would hang if event_loop_stop couldn't wake the poll). */
+void test_stress_async_idle_reaper(void) {
+    TEST("async idle/slow-loris connection is reaped");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/test", dummy_handler);
+    http_server_set_router(server, router);
+    ASSERT(http_server_set_async(server, true) == 0);
+    http_server_set_request_timeout(server, 1);   /* 1s request deadline */
+
+    uint16_t port = 19014;
+    _async_srv_arg_t arg = { server, port };
+    pthread_t th;
+    ASSERT(pthread_create(&th, NULL, _async_server_run, &arg) == 0);
+    usleep(400000);   /* let the async server start listening */
+
+    /* Connect and send a partial request that is never completed. */
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT(sock >= 0);
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    ASSERT(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    ASSERT(send(sock, "GET /te", 7, 0) == 7);   /* partial request line */
+
+    /* Within deadline(1s) + reaper interval(1s) + margin the server must reap the
+     * idle connection: a blocking recv then returns 0 (EOF) rather than timing
+     * out. n < 0 (the 4s recv timeout fired) means it was NOT reaped -> fail. */
+    struct timeval tv = { 4, 0 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    char buf[64];
+    ssize_t n = recv(sock, buf, sizeof(buf), 0);
+    ASSERT(n >= 0);   /* 0 = reaped/closed; not a timeout */
+    close(sock);
+
+    http_server_stop(server);       /* event_loop_stop; reaper timer bounds the wake */
+    pthread_join(th, NULL);         /* would hang if the loop never exits */
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 void test_stress_many_headers(void) {
     TEST("request with many headers (90 headers)");
 
@@ -1728,6 +1786,7 @@ int main(void) {
         test_stress_request_target_control_bytes();
         test_stress_host_header_enforcement();
         test_stress_path_normalization();
+        test_stress_async_idle_reaper();
     }
 
     /* Input Validation Stress Tests */
