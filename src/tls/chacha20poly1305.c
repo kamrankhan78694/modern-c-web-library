@@ -38,11 +38,22 @@ static int aead_tag(const uint8_t otk[32],
                     const uint8_t *aad, size_t aad_len,
                     const uint8_t *ct, size_t ct_len,
                     uint8_t tag[16]) {
-    size_t aad_pad = (16 - (aad_len % 16)) % 16;
-    size_t ct_pad  = (16 - (ct_len  % 16)) % 16;
-    size_t mac_len = aad_len + aad_pad + ct_len + ct_pad + 16;
+    size_t aad_pad, ct_pad, mac_len;
     uint8_t *m;
     size_t off = 0;
+
+    /* Guard against size_t overflow when sizing the MAC input. Each pad adds < 16
+     * bytes and the length block adds 16, so the total is at most aad_len + ct_len
+     * + 46; an overflow here would under-size the malloc and lead to out-of-bounds
+     * writes below. (In TLS these lengths are bounded by the record size, but the
+     * primitive must be safe for any caller.) */
+    if (ct_len > SIZE_MAX - 46 || aad_len > SIZE_MAX - 46 - ct_len) {
+        return 0;
+    }
+
+    aad_pad = (16 - (aad_len % 16)) % 16;
+    ct_pad  = (16 - (ct_len  % 16)) % 16;
+    mac_len = aad_len + aad_pad + ct_len + ct_pad + 16;
 
     m = (uint8_t *)malloc(mac_len);
     if (m == NULL) {

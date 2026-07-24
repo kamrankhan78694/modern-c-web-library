@@ -178,6 +178,27 @@ static void test_poly1305(void) {
     }
 }
 
+/* Assert open() both rejected the input (returned 0) AND left the output buffer
+ * untouched (still the 0xEE sentinel it was pre-filled with) — i.e. no plaintext
+ * was released on an authentication failure. */
+static void check_aead_rejected(const char *label, int open_result,
+                                const uint8_t *out, size_t out_len) {
+    size_t i;
+    int untouched = 1;
+    for (i = 0; i < out_len; i++) {
+        if (out[i] != 0xEE) { untouched = 0; break; }
+    }
+    if (open_result != 0) {
+        printf("FAIL: %s: open() accepted tampered input\n", label);
+        g_failures++;
+    } else if (!untouched) {
+        printf("FAIL: %s: open() wrote to the output buffer on failure\n", label);
+        g_failures++;
+    } else {
+        printf("PASS: %s\n", label);
+    }
+}
+
 /* ChaCha20-Poly1305 AEAD — RFC 8439 §2.8.2 KAT, a seal/open round-trip, and
  * tamper-detection on the ciphertext, tag, and AAD. */
 static void test_chacha20poly1305(void) {
@@ -226,33 +247,28 @@ static void test_chacha20poly1305(void) {
     }
 
     /* Tamper detection: a single-bit change in ct, tag, or aad must be rejected,
-     * and the plaintext buffer must not be touched. */
+     * and the output buffer must be left untouched (no plaintext released). Each
+     * case pre-fills `out` with a 0xEE sentinel that check_aead_rejected verifies. */
     {
         uint8_t bad[114];
         uint8_t btag[16];
         uint8_t baad[12];
+        int r;
 
         memcpy(bad, ct, pt_len); bad[0] ^= 0x01;
         memset(out, 0xEE, sizeof(out));
-        if (chacha20poly1305_open(key, nonce, aad, sizeof(aad), bad, pt_len, tag, out) != 0) {
-            printf("FAIL: aead accepted tampered ciphertext\n"); g_failures++;
-        } else {
-            printf("PASS: aead rejects tampered ciphertext\n");
-        }
+        r = chacha20poly1305_open(key, nonce, aad, sizeof(aad), bad, pt_len, tag, out);
+        check_aead_rejected("aead rejects tampered ciphertext", r, out, sizeof(out));
 
         memcpy(btag, tag, 16); btag[15] ^= 0x80;
-        if (chacha20poly1305_open(key, nonce, aad, sizeof(aad), ct, pt_len, btag, out) != 0) {
-            printf("FAIL: aead accepted tampered tag\n"); g_failures++;
-        } else {
-            printf("PASS: aead rejects tampered tag\n");
-        }
+        memset(out, 0xEE, sizeof(out));
+        r = chacha20poly1305_open(key, nonce, aad, sizeof(aad), ct, pt_len, btag, out);
+        check_aead_rejected("aead rejects tampered tag", r, out, sizeof(out));
 
         memcpy(baad, aad, sizeof(baad)); baad[0] ^= 0x01;
-        if (chacha20poly1305_open(key, nonce, baad, sizeof(baad), ct, pt_len, tag, out) != 0) {
-            printf("FAIL: aead accepted tampered AAD\n"); g_failures++;
-        } else {
-            printf("PASS: aead rejects tampered AAD\n");
-        }
+        memset(out, 0xEE, sizeof(out));
+        r = chacha20poly1305_open(key, nonce, baad, sizeof(baad), ct, pt_len, tag, out);
+        check_aead_rejected("aead rejects tampered AAD", r, out, sizeof(out));
     }
 }
 #endif /* WEBLIB_TLS */
