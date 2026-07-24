@@ -111,12 +111,22 @@ static int _stress_send_request(uint16_t port, const char *request, char *respon
         total_sent += sent;
     }
 
-    /* Receive response */
+    /* Receive the full response. A single recv() can return only the header
+     * segment before the body arrives (more likely under ASan's slower timing),
+     * so drain until the peer closes (these callers use Connection: close) or
+     * the buffer fills. */
     memset(response, 0, resp_size);
-    ssize_t received = recv(sock, response, resp_size - 1, 0);
+    size_t total = 0;
+    while (total < resp_size - 1) {
+        ssize_t n = recv(sock, response + total, resp_size - 1 - total, 0);
+        if (n <= 0) {
+            break;
+        }
+        total += (size_t)n;
+    }
     close(sock);
 
-    return (received > 0) ? 0 : -1;
+    return (total > 0) ? 0 : -1;
 }
 
 static void *_concurrent_request_thread(void *arg) {
@@ -840,6 +850,234 @@ void test_stress_oversized_request(void) {
     PASS();
 }
 
+/* Echoes the (already de-chunked) request body back so a test can verify the
+ * decoded bytes, not just the status line. */
+static void _te_echo_body_handler(http_request_t *req, http_response_t *res) {
+    char buf[256];
+    size_t n = (req->body_length < sizeof(buf) - 1) ? req->body_length : sizeof(buf) - 1;
+    if (req->body && n > 0) {
+        memcpy(buf, req->body, n);
+    }
+    buf[n] = '\0';
+    http_response_send_text(res, HTTP_OK, buf);
+}
+
+/* Regression (audit #21 + adversarial review): Transfer-Encoding must be
+ * token-parsed per RFC 7230 §3.3.1, not substring-matched. Covers the accept
+ * path (including that the body is de-chunked correctly), the 400 malformed/
+ * smuggling matrix, and the 501 unsupported-coding boundary. */
+void test_stress_transfer_encoding_smuggling(void) {
+    TEST("Transfer-Encoding token parse rejects smuggling vectors");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_POST, "/upload", _te_echo_body_handler);
+    http_server_set_router(server, router);
+
+    uint16_t port = 19010;
+    ASSERT(http_server_listen(server, port) == 0);
+    usleep(200000);
+
+    char response[4096];
+
+    /* --- Accept path: sole "chunked" coding, body must be de-chunked exactly. */
+    struct { const char *te; const char *body; const char *expect_decoded; } ok[] = {
+        { "chunked",     "5\r\nhello\r\n0\r\n\r\n",              "hello"  }, /* single chunk */
+        { "chunked",     "3\r\nfoo\r\n3\r\nbar\r\n0\r\n\r\n",    "foobar" }, /* multi-chunk reassembly */
+        { "chunked",     "5;ext=1\r\nhello\r\n0\r\n\r\n",        "hello"  }, /* chunk-extension ignored */
+        { "Chunked",     "0\r\n\r\n",                            ""       }, /* case-insensitive token */
+        { "chunked;x=y", "0\r\n\r\n",                            ""       }, /* ignored parameter */
+        { "chunked;",    "0\r\n\r\n",                            ""       }, /* bare (empty) parameter */
+        { NULL, NULL, NULL }
+    };
+    for (int i = 0; ok[i].te != NULL; i++) {
+        char req[256];
+        snprintf(req, sizeof(req),
+                 "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+                 "Transfer-Encoding: %s\r\n\r\n%s", ok[i].te, ok[i].body);
+        ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
+        ASSERT(strstr(response, "200 OK") != NULL);
+        if (ok[i].expect_decoded[0] != '\0') {
+            /* The echoed body proves the decoder produced the right bytes. */
+            ASSERT(strstr(response, ok[i].expect_decoded) != NULL);
+        }
+    }
+
+    /* --- 400 Malformed: framing cannot be determined reliably. */
+    const char *bad_400[] = {
+        "Transfer-Encoding: xchunked",             /* substring, not a token */
+        "Transfer-Encoding: chunkedx",
+        "Transfer-Encoding: chunked, gzip",         /* chunked not the final coding */
+        "Transfer-Encoding: chunked, chunked",      /* chunked applied twice */
+        "Transfer-Encoding: chunked , chunked",     /* ...with OWS before the comma */
+        "Transfer-Encoding: chunked, gzip, chunked",/* chunked repeated + not last */
+        "Transfer-Encoding: gzip",                  /* chunked absent -> undeterminable */
+        "Transfer-Encoding: identity",              /* legacy non-chunked coding */
+        "Transfer-Encoding: chunked chunked",       /* two codings, missing comma */
+        "Transfer-Encoding: chunked/gzip",          /* non-OWS junk after token */
+        "Transfer-Encoding: chunked@",              /* trailing non-token byte */
+        "Transfer-Encoding: chunked,",              /* trailing empty list element */
+        "Transfer-Encoding: ,chunked",              /* leading empty list element */
+        "Transfer-Encoding: chunked,,chunked",      /* doubled comma / empty element */
+        "Transfer-Encoding: ,",                     /* nothing but a separator */
+        "Transfer-Encoding: ;chunked",              /* leading ';' -> zero-length name */
+        "Transfer-Encoding: @chunked",              /* leading non-token char */
+        "Transfer-Encoding: chunked;x=\"a,b\"",     /* quoted comma splits -> malformed (intentional) */
+        "Transfer-Encoding: chunked\x0b",           /* trailing VT: not OWS, must not be trimmed */
+        "Transfer-Encoding: chunked\x0c",           /* trailing FF: control byte in value */
+        "Transfer-Encoding: chu\x0bnked",           /* interior control byte */
+        "Transfer-Encoding : chunked",              /* whitespace before colon (RFC 7230 §3.2.4) */
+        "Content-Length : 6",                       /* whitespace before colon (tab variant below) */
+        "Content-Length\t: 6",                      /* tab before colon */
+        "Content-Length: +5",                       /* signed Content-Length (strtoull leniency) */
+        "Content-Length: -0",                       /* signed zero */
+        "Content-Length: 0x5",                      /* hex Content-Length */
+        NULL
+    };
+    for (int i = 0; bad_400[i] != NULL; i++) {
+        char req[256];
+        snprintf(req, sizeof(req),
+                 "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n%s\r\n\r\n",
+                 bad_400[i]);
+        ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
+        ASSERT(strstr(response, "400") != NULL);
+    }
+
+    /* --- 501 Not Implemented: a non-chunked coding we cannot apply, chunked last. */
+    const char *bad_501[] = {
+        "Transfer-Encoding: gzip, chunked",
+        "Transfer-Encoding: gzip , chunked",        /* OWS before the comma */
+        "Transfer-Encoding: gzip,\tchunked",        /* tab as inter-element OWS */
+        "Transfer-Encoding: gzip, deflate, chunked",/* multiple unsupported, chunked last */
+        "Transfer-Encoding: gzip;q=1, chunked",     /* parameter on the unsupported coding */
+        NULL
+    };
+    for (int i = 0; bad_501[i] != NULL; i++) {
+        char req[256];
+        snprintf(req, sizeof(req),
+                 "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n%s\r\n\r\n",
+                 bad_501[i]);
+        ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
+        ASSERT(strstr(response, "501") != NULL);
+    }
+
+    /* Embedded NUL in the Transfer-Encoding value must be rejected (400), not
+     * silently truncated to the token before it (which would let the origin read
+     * a chunked body while a proxy frames the full "chunked\0, gzip" differently
+     * -- a smuggling desync). A NUL cannot pass through the C-string helper, so
+     * send raw with an explicit length. */
+    {
+        static const char nul_req[] =
+            "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+            "Transfer-Encoding: chunked\x00, gzip\r\n\r\n";
+        size_t nul_len = sizeof(nul_req) - 1;  /* keep the embedded NUL, drop the C terminator */
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        ASSERT(sock >= 0);
+        struct timeval tv = { 2, 0 };
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        ASSERT(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+        size_t off = 0;
+        while (off < nul_len) {
+            ssize_t s = send(sock, nul_req + off, nul_len - off, 0);
+            if (s <= 0) break;
+            off += (size_t)s;
+        }
+        ASSERT(off == nul_len);
+        char resp[1024];
+        memset(resp, 0, sizeof(resp));
+        ssize_t r = recv(sock, resp, sizeof(resp) - 1, 0);
+        close(sock);
+        ASSERT(r > 0);
+        ASSERT(strstr(resp, "400") != NULL);
+    }
+
+    /* Duplicate Content-Length (CL.CL smuggling): a second Content-Length must be
+     * rejected (400), not silently last-wins. */
+    const char *dup_cl =
+        "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+        "Content-Length: 6\r\nContent-Length: 5\r\n\r\n";
+    ASSERT(_stress_send_request(port, dup_cl, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "400") != NULL);
+
+    /* Malformed chunk-size lines (RFC 7230 §4.1: chunk-size = 1*HEXDIG) must be
+     * rejected. strtoul() would leniently accept a "0x" prefix, a +/- sign, or
+     * leading whitespace and desync chunk-body framing (e.g. "0x0" reads as a
+     * terminating chunk, smuggling the trailing bytes as a pipelined request). */
+    const char *bad_chunk[] = {
+        "0x0", "0x5", " 5", "\t3", "-0", "+5", "g", "",
+        NULL
+    };
+    for (int i = 0; bad_chunk[i] != NULL; i++) {
+        char req[256];
+        snprintf(req, sizeof(req),
+                 "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+                 "Transfer-Encoding: chunked\r\n\r\n%s\r\nhello\r\n0\r\n\r\n", bad_chunk[i]);
+        ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
+        ASSERT(strstr(response, "400") != NULL);
+    }
+
+    http_server_stop(server);
+    usleep(100000);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
+/* Regression (round-5 review): the request-target must not carry whitespace or
+ * control bytes into req->path. A bare CR/LF/HTAB/CTL survives find_crlf (which
+ * splits only on CR+LF) and the SP-only token split, and is a CRLF-injection /
+ * request-line smuggling / cache-poisoning primitive — it must be 400. */
+void test_stress_request_target_control_bytes(void) {
+    TEST("request-target with control bytes is rejected");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/ab", dummy_handler);
+    http_server_set_router(server, router);
+
+    uint16_t port = 19011;
+    ASSERT(http_server_listen(server, port) == 0);
+    usleep(200000);
+
+    char response[4096];
+
+    /* A clean target still works. */
+    const char *good = "GET /ab HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    ASSERT(_stress_send_request(port, good, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "200 OK") != NULL);
+
+    const char *bad_target[] = {
+        "GET /a\rb HTTP/1.1",       /* bare CR */
+        "GET /a\nb HTTP/1.1",       /* bare LF */
+        "GET /a\tb HTTP/1.1",       /* HTAB */
+        "GET /a\x01""b HTTP/1.1",   /* C0 control */
+        "GET /a\x7f""b HTTP/1.1",   /* DEL */
+        NULL
+    };
+    for (int i = 0; bad_target[i] != NULL; i++) {
+        char req[256];
+        snprintf(req, sizeof(req),
+                 "%s\r\nHost: localhost\r\nConnection: close\r\n\r\n", bad_target[i]);
+        ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
+        ASSERT(strstr(response, "400") != NULL);
+    }
+
+    http_server_stop(server);
+    usleep(100000);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 void test_stress_many_headers(void) {
     TEST("request with many headers (90 headers)");
 
@@ -1346,6 +1584,8 @@ int main(void) {
         test_stress_slowloris_deadline();
         test_stress_request_deadline_silent();
         test_stress_listen_failure_cleanup();
+        test_stress_transfer_encoding_smuggling();
+        test_stress_request_target_control_bytes();
     }
 
     /* Input Validation Stress Tests */

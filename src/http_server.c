@@ -1476,6 +1476,23 @@ static int parse_request_line(http_parser_t *parser) {
         return -1;
     }
 
+    /* RFC 7230 §3.2/§3.5: the request-target must contain no whitespace or
+     * control characters. find_crlf only splits on CR+LF pairs and the token
+     * split is SP-only, so without this a bare CR/LF/HTAB or other CTL byte
+     * survives verbatim into req->path / query_string — a CRLF-injection /
+     * response-splitting primitive, and a request-line smuggling / cache-key
+     * divergence when an upstream proxy interprets the byte differently. Reject
+     * SP, HTAB, CR, LF, any other C0 control, and DEL with 400. (High bytes
+     * 0x80-0xFF are left for the routing/application layer.) */
+    for (const char *t = target; *t != '\0'; t++) {
+        unsigned char c = (unsigned char)*t;
+        if (c <= 0x20 || c == 0x7f) {
+            free(line);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid request target");
+            return -1;
+        }
+    }
+
     char *query = strchr(target, '?');
     if (query) {
         *query = '\0';
@@ -1513,6 +1530,132 @@ static int parse_request_line(http_parser_t *parser) {
     return 1;
 }
 
+/* RFC 7230 §3.2.6 token characters (tchar). */
+static bool _is_tchar(unsigned char c) {
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+        return true;
+    }
+    switch (c) {
+        case '!': case '#': case '$': case '%': case '&': case '\'':
+        case '*': case '+': case '-': case '.': case '^': case '_':
+        case '`': case '|': case '~':
+            return true;
+        default:
+            return false;
+    }
+}
+
+typedef enum {
+    TE_CHUNKED,      /* the sole coding is "chunked" -> read a chunked body */
+    TE_UNSUPPORTED,  /* a transfer-coding we cannot apply is present -> 501 */
+    TE_MALFORMED     /* chunked missing/repeated/not-final, or bad syntax -> 400 */
+} te_result_t;
+
+/*
+ * Classify a Transfer-Encoding field value per RFC 7230 §3.3.1 / §3.3.3.
+ *
+ * The field is a comma-separated list of transfer-codings (each a token with
+ * optional ";"-parameters). We deliberately TOKEN-parse rather than
+ * substring-match "chunked": the old strstr(value, "chunked") accepted
+ * "xchunked", "chunkedx", and "chunked, gzip" (chunked not last). A stricter
+ * upstream proxy frames those differently, which is the classic
+ * Transfer-Encoding request-smuggling (TE.TE) precondition.
+ *
+ * "chunked" is the only coding this server can apply, and per §3.3.1 it MUST be
+ * the final coding for a request. So the ONLY value that yields a chunked body
+ * is a list whose single coding is "chunked"; anything else is rejected:
+ *   - chunked repeated, not final, or absent  -> TE_MALFORMED (400): the message
+ *     framing cannot be determined reliably.
+ *   - a non-chunked coding present with chunked last (e.g. "gzip, chunked") ->
+ *     TE_UNSUPPORTED (501): we cannot decode that transfer-coding.
+ */
+static te_result_t classify_transfer_encoding(const char *value) {
+    int coding_count = 0;
+    int chunked_count = 0;
+    bool last_is_chunked = false;
+    bool has_unsupported = false;
+
+    const char *p = value;
+
+    /* Skip leading OWS. A leading comma is an empty list element, which we
+     * reject below rather than tolerate (see the separator handling): being
+     * strict about empty elements removes a source of accept/reject divergence
+     * with upstream proxies — itself a smuggling precondition. */
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (*p == '\0') {
+        return TE_MALFORMED;                 /* empty or whitespace-only value */
+    }
+
+    for (;;) {
+        /* A coding name (token) must appear here. An empty element (e.g. from a
+         * leading/doubled/trailing comma) lands on ',' or '\0' and is rejected. */
+        const char *name = p;
+        while (_is_tchar((unsigned char)*p)) {
+            p++;
+        }
+        size_t name_len = (size_t)(p - name);
+        if (name_len == 0) {
+            return TE_MALFORMED;
+        }
+
+        /* After the name, only OWS then an optional ";"-parameter section may
+         * precede the separator. */
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (*p == ';') {
+            /* Skip the parameter section up to the next list separator. We do
+             * not interpret parameters; any comma (even one inside a quoted
+             * string) ends the element, which at worst rejects an exotic value
+             * as malformed — the safe direction for smuggling. */
+            while (*p != '\0' && *p != ',') {
+                p++;
+            }
+        }
+
+        coding_count++;
+        if (name_len == 7 && strncasecmp(name, "chunked", 7) == 0) {
+            chunked_count++;
+            last_is_chunked = true;
+        } else {
+            has_unsupported = true;
+            last_is_chunked = false;
+        }
+
+        if (*p == '\0') {
+            break;                           /* end of the list */
+        }
+        if (*p != ',') {
+            return TE_MALFORMED;             /* junk after a coding (e.g. missing comma) */
+        }
+        p++;                                 /* consume exactly one comma separator */
+        while (*p == ' ' || *p == '\t') {    /* OWS after the comma */
+            p++;
+        }
+        if (*p == '\0') {
+            return TE_MALFORMED;             /* trailing comma -> empty final element */
+        }
+        /* A ',' here would be a doubled comma (empty element); the next
+         * iteration reads name_len == 0 and rejects it. */
+    }
+
+    if (coding_count == 0) {
+        return TE_MALFORMED;                 /* unreachable: guarded above, kept for clarity */
+    }
+    if (chunked_count > 1) {
+        return TE_MALFORMED;                 /* chunked applied more than once */
+    }
+    if (chunked_count == 0 || !last_is_chunked) {
+        return TE_MALFORMED;                 /* chunked absent or not the final coding */
+    }
+    if (has_unsupported) {
+        return TE_UNSUPPORTED;               /* e.g. "gzip, chunked": can't decode gzip */
+    }
+    return TE_CHUNKED;                        /* exactly "chunked" */
+}
+
 static int parse_header_line(http_parser_t *parser, const char *line, size_t len) {
     const char *colon = memchr(line, ':', len);
     if (!colon) {
@@ -1521,11 +1664,18 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     }
 
     size_t name_len = (size_t)(colon - line);
-    while (name_len > 0 && isspace((unsigned char)line[name_len - 1])) {
-        name_len--;
-    }
     if (name_len == 0) {
         parser_set_error(parser, HTTP_BAD_REQUEST, "Empty header name");
+        return -1;
+    }
+    /* RFC 7230 §3.2.4: no whitespace is allowed between the field-name and the
+     * colon, and a server MUST reject it (400) — do NOT silently trim it. A
+     * lenient origin that strips "Transfer-Encoding : chunked" back to a real TE
+     * header while a strict proxy treats the space-bearing name as not-a-header
+     * is a request-smuggling desync. (Leading whitespace or any other non-token
+     * name byte is caught by the field-name token validation below.) */
+    if (line[name_len - 1] == ' ' || line[name_len - 1] == '\t') {
+        parser_set_error(parser, HTTP_BAD_REQUEST, "Whitespace before header colon");
         return -1;
     }
 
@@ -1533,8 +1683,13 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     while ((size_t)(value_start - line) < len && (*value_start == ' ' || *value_start == '\t')) {
         value_start++;
     }
+    /* Trim trailing value OWS using only SP / HTAB — NOT isspace(), which would
+     * also eat VT (0x0B) / FF (0x0C). Treating VT/FF as trimmable whitespace let
+     * "Transfer-Encoding: chunked\x0b" reduce to the token "chunked" while a
+     * compliant proxy keeps the byte and frames the message differently — a
+     * request-smuggling desync. (Interior control bytes are rejected below.) */
     const char *value_end = line + len;
-    while (value_end > value_start && isspace((unsigned char)value_end[-1])) {
+    while (value_end > value_start && (value_end[-1] == ' ' || value_end[-1] == '\t')) {
         value_end--;
     }
 
@@ -1554,6 +1709,32 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     memcpy(value_buf, value_start, value_len);
     value_buf[value_len] = '\0';
 
+    /* RFC 7230 §3.2: the field-name is a token, and the field-value carries no
+     * control bytes. Validate the exact byte ranges (not the C-string length) so
+     * an embedded NUL cannot pass. This is a request-smuggling defense: without
+     * it, "Transfer-Encoding: chunked\0, gzip" is copied verbatim but every later
+     * C-string reader (strcasecmp, classify_transfer_encoding) stops at the NUL
+     * and sees only "chunked" -> the origin frames a chunked body while a proxy
+     * that reads the whole value frames it differently. Reject NUL / C0 controls
+     * (except HTAB) / DEL, and any non-token byte in the name, with 400. */
+    for (size_t i = 0; i < name_len; i++) {
+        if (!_is_tchar((unsigned char)name_buf[i])) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid header name");
+            return -1;
+        }
+    }
+    for (size_t i = 0; i < value_len; i++) {
+        unsigned char c = (unsigned char)value_buf[i];
+        if ((c < 0x20 && c != '\t') || c == 0x7f) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid header value");
+            return -1;
+        }
+    }
+
     bool replace = (strcasecmp(name_buf, "set-cookie") != 0);
     if (header_list_add((http_header_node_t **)&parser->req->headers, name_buf, name_buf, value_buf, replace) < 0) {
         free(name_buf);
@@ -1563,12 +1744,32 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     }
 
     if (strcasecmp(name_buf, "content-length") == 0) {
+        /* RFC 7230 §3.3.3: a second Content-Length is a CL.CL smuggling
+         * precondition (a proxy keying off the first value and this origin off
+         * the last disagree on the body boundary). Reject any duplicate outright,
+         * mirroring the duplicate-Transfer-Encoding guard below. */
+        if (parser->seen_content_length) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Duplicate Content-Length header");
+            return -1;
+        }
         /* RFC 7230 §3.3.3: reject if Transfer-Encoding already seen */
         if (parser->seen_transfer_encoding) {
             free(name_buf);
             free(value_buf);
             parser_set_error(parser, HTTP_BAD_REQUEST,
                              "Both Content-Length and Transfer-Encoding present");
+            return -1;
+        }
+        /* RFC 7230 §3.3.2: Content-Length = 1*DIGIT. strtoull() would also accept
+         * a leading '+'/'-' sign (e.g. "+5" -> 5, "-0" -> 0), which a strict
+         * proxy rejects — an accept/reject framing divergence. Require the first
+         * byte to be an ASCII digit so only unsigned decimal is accepted. */
+        if (value_buf[0] < '0' || value_buf[0] > '9') {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid Content-Length header");
             return -1;
         }
         char *endptr = NULL;
@@ -1603,8 +1804,24 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
             return -1;
         }
         parser->seen_transfer_encoding = true;
-        if (strstr(value_buf, "chunked") != NULL) {
+        /* RFC 7230 §3.3.1: token-parse the transfer-coding list instead of a
+         * substring match, so "xchunked"/"chunkedx"/"chunked, gzip" can never be
+         * mistaken for a chunked body (request-smuggling precondition). */
+        te_result_t te = classify_transfer_encoding(value_buf);
+        if (te == TE_CHUNKED) {
             parser->chunked = true;
+        } else if (te == TE_UNSUPPORTED) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_NOT_IMPLEMENTED,
+                             "Unsupported Transfer-Encoding");
+            return -1;
+        } else { /* TE_MALFORMED */
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST,
+                             "Malformed Transfer-Encoding");
+            return -1;
         }
     } else if (strcasecmp(name_buf, "expect") == 0) {
         if (strcasecmp(value_buf, "100-continue") == 0) {
@@ -1731,12 +1948,36 @@ static int parse_chunk_size(http_parser_t *parser) {
     memcpy(line, parser->buffer, (size_t)crlf_index);
     line[crlf_index] = '\0';
 
-    char *endptr = NULL;
-    errno = 0;
-    unsigned long chunk_size = strtoul(line, &endptr, 16);
-    /* Reject trailing garbage after hex digits (allow optional chunk-ext starting with ';') */
-    if (endptr == line || errno == ERANGE || chunk_size > MAX_BODY_BYTES ||
-        (*endptr != '\0' && *endptr != ';')) {
+    /* RFC 7230 §4.1: chunk-size = 1*HEXDIG. Parse the hex digits by hand instead
+     * of strtoul(), which also accepts leading whitespace, a +/- sign, and a
+     * "0x" prefix — any of which a strict proxy rejects, producing a chunk-body
+     * framing desync (e.g. "0x0" would be read as a terminating chunk and the
+     * trailing bytes smuggled as a pipelined request). Only an optional ";"
+     * chunk-ext may follow the digits. */
+    size_t idx = 0;
+    unsigned long chunk_size = 0;
+    bool have_digit = false;
+    for (; line[idx] != '\0' && line[idx] != ';'; idx++) {
+        unsigned int digit;
+        char c = line[idx];
+        if (c >= '0' && c <= '9') {
+            digit = (unsigned int)(c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            digit = (unsigned int)(c - 'a' + 10);
+        } else if (c >= 'A' && c <= 'F') {
+            digit = (unsigned int)(c - 'A' + 10);
+        } else {
+            break; /* non-HEXDIG (and not ';') -> invalid, rejected below */
+        }
+        chunk_size = chunk_size * 16u + digit;
+        have_digit = true;
+        if (chunk_size > MAX_BODY_BYTES) {
+            free(line);
+            parser_set_error(parser, HTTP_PAYLOAD_TOO_LARGE, "Chunk too large");
+            return -1;
+        }
+    }
+    if (!have_digit || (line[idx] != '\0' && line[idx] != ';')) {
         free(line);
         parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid chunk size");
         return -1;
