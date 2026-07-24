@@ -275,23 +275,35 @@ static void test_ed25519_key(void) {
         0xc0, 0xcd, 0x55, 0xf1, 0x2a, 0xf4, 0x66, 0x0c
     };
     static const uint8_t garbage[] = { 0x30, 0x03, 0x99, 0x88, 0x77 };
+    static const uint8_t spki_alg_params[] = {   /* AlgId carries a NULL param */
+        0x30, 0x2c, 0x30, 0x07, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x05, 0x00, 0x03,
+        0x21, 0x00, 0x3d, 0x40, 0x17, 0xc3, 0xe8, 0x43, 0x89, 0x5a, 0x92, 0xb7,
+        0x0a, 0xa7, 0x4d, 0x1b, 0x7e, 0xbc, 0x9c, 0x98, 0x2c, 0xcf, 0x2e, 0xc4,
+        0x96, 0x8c, 0xc0, 0xcd, 0x55, 0xf1, 0x2a, 0xf4, 0x66, 0x0c
+    };
     uint8_t got_seed[32], got_pub[32], derived[32];
+    int pk_ok, sp_ok;
+
+    /* Parse both keys once, then gate the cross-derivation checks on success so
+     * a parse failure surfaces as one clear failure, not cascading ones. */
+    pk_ok = (ed25519_parse_pkcs8(pkcs8, sizeof pkcs8, got_seed) == 0);
+    sp_ok = (ed25519_parse_spki(spki, sizeof spki, got_pub) == 0);
 
     check_true("ed25519_key: PKCS#8 -> seed",
-               ed25519_parse_pkcs8(pkcs8, sizeof pkcs8, got_seed) == 0
-               && memcmp(got_seed, seed, 32) == 0);
-
-    /* End to end: the extracted seed must derive the expected public key. */
-    ed25519_public_key(derived, got_seed);
-    check_true("ed25519_key: PKCS#8 seed derives the expected public key",
-               memcmp(derived, pub, 32) == 0);
-
+               pk_ok && memcmp(got_seed, seed, 32) == 0);
     check_true("ed25519_key: SPKI -> public key",
-               ed25519_parse_spki(spki, sizeof spki, got_pub) == 0
-               && memcmp(got_pub, pub, 32) == 0);
+               sp_ok && memcmp(got_pub, pub, 32) == 0);
 
-    check_true("ed25519_key: PKCS#8-derived key matches SPKI key",
-               memcmp(derived, got_pub, 32) == 0);
+    if (pk_ok) {
+        /* End to end: the extracted seed must derive the expected public key. */
+        ed25519_public_key(derived, got_seed);
+        check_true("ed25519_key: PKCS#8 seed derives the expected public key",
+                   memcmp(derived, pub, 32) == 0);
+        if (sp_ok) {
+            check_true("ed25519_key: PKCS#8-derived key matches SPKI key",
+                       memcmp(derived, got_pub, 32) == 0);
+        }
+    }
 
     /* Rejections. */
     check_true("ed25519_key: SPKI wrong OID rejected",
@@ -305,6 +317,25 @@ static void test_ed25519_key(void) {
     check_true("ed25519_key: NULL arguments rejected",
                ed25519_parse_pkcs8(NULL, 10, got_seed) == -1
                && ed25519_parse_spki(spki, sizeof spki, NULL) == -1);
+
+    /* Strict structure: reject an AlgorithmIdentifier with parameters (RFC 8410
+     * requires them absent) and any trailing data after the key structure. */
+    check_true("ed25519_key: SPKI with AlgId parameters rejected",
+               ed25519_parse_spki(spki_alg_params, sizeof spki_alg_params, got_pub) == -1);
+    {
+        uint8_t buf[sizeof spki + 1];
+        memcpy(buf, spki, sizeof spki);
+        buf[sizeof spki] = 0x2a;
+        check_true("ed25519_key: SPKI with trailing data rejected",
+                   ed25519_parse_spki(buf, sizeof buf, got_pub) == -1);
+    }
+    {
+        uint8_t buf[sizeof pkcs8 + 1];
+        memcpy(buf, pkcs8, sizeof pkcs8);
+        buf[sizeof pkcs8] = 0x2a;
+        check_true("ed25519_key: PKCS#8 with trailing data rejected",
+                   ed25519_parse_pkcs8(buf, sizeof buf, got_seed) == -1);
+    }
 
     /* End-to-end server key-loading flow: a PEM "PRIVATE KEY" file decodes to
      * DER (pem_decode) which parses to the same seed (ed25519_parse_pkcs8). The

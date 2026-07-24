@@ -34,6 +34,11 @@ static int expect_ed25519_alg(der_reader_t *seq) {
     if (oid_len != sizeof ED25519_OID || memcmp(oid, ED25519_OID, oid_len) != 0) {
         return -1;
     }
+    /* RFC 8410 §3: the Ed25519 AlgorithmIdentifier parameters MUST be absent, so
+     * the SEQUENCE must hold nothing after the OID. */
+    if (!der_at_end(&alg)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -75,6 +80,12 @@ int ed25519_parse_pkcs8(const uint8_t *der, size_t der_len, uint8_t seed[32]) {
     if (vlen != 32) {
         return -1;
     }
+    /* The CurvePrivateKey wrapper holds only the 32-byte seed, and nothing may
+     * follow the OneAsymmetricKey SEQUENCE. (The outer SEQUENCE itself may carry
+     * v2's optional attributes/publicKey, so it is not required to be empty.) */
+    if (!der_at_end(&priv) || !der_at_end(&top)) {
+        return -1;
+    }
 
     memcpy(seed, v, 32);
     return 0;
@@ -106,6 +117,11 @@ int ed25519_parse_spki(const uint8_t *der, size_t der_len, uint8_t pub[32]) {
         return -1;
     }
     if (vlen != 33 || v[0] != 0x00) {
+        return -1;
+    }
+    /* SubjectPublicKeyInfo is exactly { algorithm, subjectPublicKey }, and
+     * nothing may follow it. */
+    if (!der_at_end(&seq) || !der_at_end(&top)) {
         return -1;
     }
 
