@@ -56,6 +56,7 @@ set(WEBLIB_SOURCES_WASM_SAFE
     src/compression.c
     src/env_config.c
     src/security_utils.c
+    src/crypto/sha256.c
     src/middleware_security_headers.c
     src/wasm_runtime.c
     src/worker_runtime.c
