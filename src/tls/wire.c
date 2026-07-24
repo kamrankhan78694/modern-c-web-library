@@ -236,4 +236,8 @@ int tls_writer_finish(const tls_writer_t *w, size_t *out_len) {
     return 1;
 }
 
+int tls_writer_ok(const tls_writer_t *w) {
+    return w->ok;
+}
+
 #endif /* WEBLIB_TLS */

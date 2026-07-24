@@ -243,4 +243,117 @@ int tls_parse_client_hello(const uint8_t *msg, size_t msg_len, tls_client_hello_
     return 1;
 }
 
+/* ---- server handshake message builders --------------------------------- */
+
+int tls_build_server_hello(tls_writer_t *w, const uint8_t random[32],
+                           const uint8_t *session_id, size_t session_id_len,
+                           const uint8_t x25519_public_key[32]) {
+    size_t hdr, sid, exts, sv_ext, ks_ext, ks_entry;
+
+    if (w == NULL || random == NULL || x25519_public_key == NULL) {
+        return 0;
+    }
+    if (session_id == NULL && session_id_len != 0) {
+        return 0;
+    }
+    if (session_id_len > 32) {
+        return 0;   /* legacy_session_id_echo<0..32> */
+    }
+
+    tls_write_u8(w, TLS_HS_SERVER_HELLO);
+    hdr = tls_writer_open_vector(w, 3);
+
+    tls_write_u16(w, 0x0303);                    /* legacy_version */
+    tls_write_bytes(w, random, 32);
+    sid = tls_writer_open_vector(w, 1);          /* legacy_session_id_echo */
+    tls_write_bytes(w, session_id, session_id_len);
+    tls_writer_close_vector(w, sid, 1);
+    tls_write_u16(w, SUITE_CHACHA20_SHA256);     /* cipher_suite */
+    tls_write_u8(w, 0x00);                       /* legacy_compression_method */
+
+    exts = tls_writer_open_vector(w, 2);
+
+    /* supported_versions: in ServerHello this is a single selected_version. */
+    tls_write_u16(w, EXT_SUPPORTED_VERSIONS);
+    sv_ext = tls_writer_open_vector(w, 2);
+    tls_write_u16(w, VERSION_TLS13);
+    tls_writer_close_vector(w, sv_ext, 2);
+
+    /* key_share: one KeyShareEntry { group; key_exchange<1..2^16-1> }. */
+    tls_write_u16(w, EXT_KEY_SHARE);
+    ks_ext = tls_writer_open_vector(w, 2);
+    tls_write_u16(w, GROUP_X25519);
+    ks_entry = tls_writer_open_vector(w, 2);
+    tls_write_bytes(w, x25519_public_key, 32);
+    tls_writer_close_vector(w, ks_entry, 2);
+    tls_writer_close_vector(w, ks_ext, 2);
+
+    tls_writer_close_vector(w, exts, 2);
+    tls_writer_close_vector(w, hdr, 3);
+    return tls_writer_ok(w);
+}
+
+int tls_build_encrypted_extensions(tls_writer_t *w) {
+    size_t hdr, exts;
+    if (w == NULL) {
+        return 0;
+    }
+    tls_write_u8(w, TLS_HS_ENCRYPTED_EXTENSIONS);
+    hdr = tls_writer_open_vector(w, 3);
+    exts = tls_writer_open_vector(w, 2);         /* empty extensions block */
+    tls_writer_close_vector(w, exts, 2);
+    tls_writer_close_vector(w, hdr, 3);
+    return tls_writer_ok(w);
+}
+
+int tls_build_certificate(tls_writer_t *w, const uint8_t *cert_der, size_t cert_len) {
+    size_t hdr, ctx, list, entry, entry_exts;
+    if (w == NULL || cert_der == NULL || cert_len == 0) {
+        return 0;   /* cert_data<1..2^24-1> must be non-empty */
+    }
+    tls_write_u8(w, TLS_HS_CERTIFICATE);
+    hdr = tls_writer_open_vector(w, 3);
+
+    ctx = tls_writer_open_vector(w, 1);          /* certificate_request_context = empty */
+    tls_writer_close_vector(w, ctx, 1);
+
+    list = tls_writer_open_vector(w, 3);         /* certificate_list<0..2^24-1> */
+    entry = tls_writer_open_vector(w, 3);        /* CertificateEntry.cert_data */
+    tls_write_bytes(w, cert_der, cert_len);
+    tls_writer_close_vector(w, entry, 3);
+    entry_exts = tls_writer_open_vector(w, 2);   /* per-certificate extensions: empty */
+    tls_writer_close_vector(w, entry_exts, 2);
+    tls_writer_close_vector(w, list, 3);
+
+    tls_writer_close_vector(w, hdr, 3);
+    return tls_writer_ok(w);
+}
+
+int tls_build_certificate_verify(tls_writer_t *w, const uint8_t signature[64]) {
+    size_t hdr, sig;
+    if (w == NULL || signature == NULL) {
+        return 0;
+    }
+    tls_write_u8(w, TLS_HS_CERTIFICATE_VERIFY);
+    hdr = tls_writer_open_vector(w, 3);
+    tls_write_u16(w, SIG_ED25519);               /* SignatureScheme */
+    sig = tls_writer_open_vector(w, 2);
+    tls_write_bytes(w, signature, 64);
+    tls_writer_close_vector(w, sig, 2);
+    tls_writer_close_vector(w, hdr, 3);
+    return tls_writer_ok(w);
+}
+
+int tls_build_finished(tls_writer_t *w, const uint8_t verify_data[32]) {
+    size_t hdr;
+    if (w == NULL || verify_data == NULL) {
+        return 0;
+    }
+    tls_write_u8(w, TLS_HS_FINISHED);
+    hdr = tls_writer_open_vector(w, 3);
+    tls_write_bytes(w, verify_data, 32);
+    tls_writer_close_vector(w, hdr, 3);
+    return tls_writer_ok(w);
+}
+
 #endif /* WEBLIB_TLS */

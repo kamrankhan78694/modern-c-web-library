@@ -18,6 +18,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "wire.h"   /* tls_writer_t for the message builders */
 
 /* HandshakeType values (RFC 8446 §4). */
 #define TLS_HS_CLIENT_HELLO         1
@@ -53,6 +54,37 @@ typedef struct {
  * the offered parameters are *acceptable* is the caller's decision.
  */
 int tls_parse_client_hello(const uint8_t *msg, size_t msg_len, tls_client_hello_t *out);
+
+/* ---- server handshake message builders --------------------------------- */
+
+/*
+ * Each builder appends one complete handshake message (HandshakeType || uint24
+ * length || body) to the writer `w`, and returns the writer's ok state (0 if the
+ * output buffer overflowed or an argument was out of range). The caller drives
+ * the writer (init over a buffer, build the flight's messages, tls_writer_finish).
+ */
+
+/* ServerHello (RFC 8446 §4.1.3): echoes `session_id` (<=32), selects
+ * TLS_CHACHA20_POLY1305_SHA256, and carries supported_versions (0x0304) and a
+ * key_share with the server's 32-byte X25519 public key. */
+int tls_build_server_hello(tls_writer_t *w, const uint8_t random[32],
+                           const uint8_t *session_id, size_t session_id_len,
+                           const uint8_t x25519_public_key[32]);
+
+/* EncryptedExtensions (RFC 8446 §4.3.1): an empty extensions block. */
+int tls_build_encrypted_extensions(tls_writer_t *w);
+
+/* Certificate (RFC 8446 §4.4.2): empty certificate_request_context and a single
+ * CertificateEntry carrying `cert_der` (with no per-certificate extensions). */
+int tls_build_certificate(tls_writer_t *w, const uint8_t *cert_der, size_t cert_len);
+
+/* CertificateVerify (RFC 8446 §4.4.3): the ed25519 SignatureScheme (0x0807) and
+ * the 64-byte signature. */
+int tls_build_certificate_verify(tls_writer_t *w, const uint8_t signature[64]);
+
+/* Finished (RFC 8446 §4.4.4): the 32-byte verify_data (an HMAC the caller
+ * computes from the finished key over the transcript hash). */
+int tls_build_finished(tls_writer_t *w, const uint8_t verify_data[32]);
 
 #endif /* WEBLIB_TLS */
 #endif /* WEBLIB_TLS_HANDSHAKE_H */
