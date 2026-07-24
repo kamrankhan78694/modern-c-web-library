@@ -774,7 +774,7 @@ typedef enum {
  * by optional whitespace and a JSON object terminator (',' or '}'): a quoted string
  * ("exp":"123"), trailing garbage ("exp":123abc), or a missing ':' all yield INVALID
  * so the caller can reject the token rather than treat the claim as absent. */
-static jwt_claim_status_t jwt_claim_int(const char *payload_json, const char *key, long *out) {
+static jwt_claim_status_t jwt_claim_int(const char *payload_json, const char *key, long long *out) {
     size_t keylen = strlen(key);
     const char *p = payload_json;
     const char *found = NULL;
@@ -800,7 +800,9 @@ static jwt_claim_status_t jwt_claim_int(const char *payload_json, const char *ke
         return JWT_CLAIM_INVALID;      /* not a bare number (quoted string, '+', ...) */
     }
     char *endptr = NULL;
-    long val = strtol(v, &endptr, 10);
+    /* NumericDate (RFC 7519) can exceed 2^31 (year 2038+), and `long` is only 32-bit
+     * on wasm32/LLP64 — parse into long long so exp/nbf are platform-independent. */
+    long long val = strtoll(v, &endptr, 10);
     if (endptr == v) {
         return JWT_CLAIM_INVALID;      /* e.g. a lone '-' */
     }
@@ -912,7 +914,7 @@ static bool parse_jwt_token(const char *token,
      * substrings of a string value (jwt_claim_int). */
     {
         time_t now = time(NULL);
-        long exp_val = 0, nbf_val = 0;
+        long long exp_val = 0, nbf_val = 0;
         jwt_claim_status_t exp_st = jwt_claim_int((const char *)payload_decoded, "\"exp\"", &exp_val);
         jwt_claim_status_t nbf_st = jwt_claim_int((const char *)payload_decoded, "\"nbf\"", &nbf_val);
 
@@ -924,7 +926,7 @@ static bool parse_jwt_token(const char *token,
         /* exp: RFC 7519 §4.1.4 requires the current time to be BEFORE exp, so reject
          * at or after it. No sign guard: a non-positive exp is at/before the epoch,
          * i.e. already expired. */
-        if (exp_st == JWT_CLAIM_OK && now >= (time_t)exp_val) {
+        if (exp_st == JWT_CLAIM_OK && (long long)now >= exp_val) {
             goto cleanup; /* Token expired */
         }
         /* Optionally require exp to be present at all (RFC 7519 leaves it OPTIONAL;
@@ -934,7 +936,7 @@ static bool parse_jwt_token(const char *token,
             goto cleanup; /* exp claim required but absent */
         }
         /* nbf: reject a token that is not yet valid (§4.1.5: not before nbf). */
-        if (nbf_st == JWT_CLAIM_OK && now < (time_t)nbf_val) {
+        if (nbf_st == JWT_CLAIM_OK && (long long)now < nbf_val) {
             goto cleanup; /* Token not yet valid */
         }
     }
