@@ -59,10 +59,10 @@ ctest --test-dir build-tls
 - **Phase 3 (landed):** TLS 1.3 key schedule, record layer, handshake messages
   (ClientHello parser + server builders + auth crypto), the server handshake
   state machine (`server_handshake.c`), and the sans-IO connection engine
-  (`tls_conn.c`) — record framing, handshake driving, and application-data
+  (`tls_khannection.c`) — record framing, handshake driving, and application-data
   encrypt/decrypt — for the 1-RTT `TLS_CHACHA20_POLY1305_SHA256` + X25519 + Ed25519
   flow, each cross-checked against an independent Python oracle.
-- **Phase 4 — integration (next):** wire `tls_conn` into the transport seam
+- **Phase 4 — integration (next):** wire `tls_khannection` into the transport seam
   (`conn_read`/`conn_write`) and add `http_server_enable_tls`; internal TLS
   termination validated with a local self-signed cert.
 - **Interoperability (separate milestone):** real `curl` / `openssl s_client` /

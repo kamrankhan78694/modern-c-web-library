@@ -1,13 +1,13 @@
 /*
- * tls_conn.c — TLS 1.3 server connection engine (sans-IO). EXPERIMENTAL /
- * UNAUDITED. See tls_conn.h.
+ * tls_khannection.c — TLS 1.3 server connection engine (sans-IO). EXPERIMENTAL /
+ * UNAUDITED. See tls_khannection.h.
  *
  * Compiled only under -DWEBLIB_ENABLE_TLS=ON. Frames a raw byte stream into TLS
  * records with a bounded reassembly buffer, dispatches each complete record by the
  * current connection state, drives the handshake state machine, and protects /
  * deprotects application data. No dynamic allocation and no socket I/O.
  */
-#include "tls_conn.h"
+#include "tls_khannection.h"
 
 #ifdef WEBLIB_TLS
 
@@ -35,7 +35,7 @@ static int out_append(uint8_t *out, size_t out_cap, size_t *out_len,
 /* Emit one alert record into `out`: encrypted under the send key once the
  * application keys are installed, otherwise a plaintext record. Best-effort — a
  * failure to append is ignored, since the caller is already tearing down. */
-static void emit_alert(tls_conn_t *c, uint8_t *out, size_t out_cap, size_t *out_len,
+static void emit_alert(tls_khannection_t *c, uint8_t *out, size_t out_cap, size_t *out_len,
                        uint8_t level, uint8_t desc) {
     uint8_t body[2];
     body[0] = level;
@@ -65,42 +65,42 @@ static void emit_alert(tls_conn_t *c, uint8_t *out, size_t out_cap, size_t *out_
 }
 
 /* Latch a fatal error: emit the alert (for the caller to flush), wipe secrets, and
- * move to FAILED. Always returns TLS_CONN_RC_ERROR. */
-static tls_conn_rc_t conn_fail(tls_conn_t *c, uint8_t *out, size_t out_cap,
+ * move to FAILED. Always returns TLS_KHANNECTION_RC_ERROR. */
+static tls_khannection_rc_t conn_fail(tls_khannection_t *c, uint8_t *out, size_t out_cap,
                                size_t *out_len, uint8_t desc) {
     emit_alert(c, out, out_cap, out_len, ALERT_LEVEL_FATAL, desc);
-    tls_conn_wipe(c);          /* wipes keys, sets state FAILED, alert 0 */
+    tls_khannection_wipe(c);          /* wipes keys, sets state FAILED, alert 0 */
     c->alert = desc;
-    return TLS_CONN_RC_ERROR;
+    return TLS_KHANNECTION_RC_ERROR;
 }
 
 /* Handle an alert received from the peer (its 2-byte body). close_notify is a
  * graceful shutdown -> CLOSED; anything else is the peer aborting -> FAILED (we do
  * not answer an alert with an alert). */
-static tls_conn_rc_t handle_incoming_alert(tls_conn_t *c, const uint8_t *body, size_t n) {
+static tls_khannection_rc_t handle_incoming_alert(tls_khannection_t *c, const uint8_t *body, size_t n) {
     if (n != 2) {
-        tls_conn_wipe(c);
+        tls_khannection_wipe(c);
         c->alert = TLS_ALERT_DECODE_ERROR;
-        return TLS_CONN_RC_ERROR;
+        return TLS_KHANNECTION_RC_ERROR;
     }
     if (body[1] == TLS_ALERT_CLOSE_NOTIFY) {
-        c->state = TLS_CONN_CLOSED;
-        return TLS_CONN_RC_CLOSED;
+        c->state = TLS_KHANNECTION_CLOSED;
+        return TLS_KHANNECTION_RC_CLOSED;
     }
-    tls_conn_wipe(c);
+    tls_khannection_wipe(c);
     c->alert = body[1];
-    return TLS_CONN_RC_ERROR;
+    return TLS_KHANNECTION_RC_ERROR;
 }
 
 /* Process exactly one complete record `rec[0..full)`. */
-static tls_conn_rc_t process_record(tls_conn_t *c, const uint8_t *rec, size_t full,
+static tls_khannection_rc_t process_record(tls_khannection_t *c, const uint8_t *rec, size_t full,
                                     uint8_t *out, size_t out_cap, size_t *out_len,
                                     uint8_t *app, size_t app_cap, size_t *app_len) {
     uint8_t type = rec[0];
     const uint8_t *content = rec + TLS_RECORD_HEADER_LEN;
     size_t content_len = full - TLS_RECORD_HEADER_LEN;
 
-    if (c->state == TLS_CONN_HANDSHAKE) {
+    if (c->state == TLS_KHANNECTION_HANDSHAKE) {
         switch (type) {
         case TLS_CONTENT_HANDSHAKE: {
             /* Plaintext handshake record — the ClientHello. read_client_hello
@@ -112,13 +112,13 @@ static tls_conn_rc_t process_record(tls_conn_t *c, const uint8_t *rec, size_t fu
                 return conn_fail(c, out, out_cap, out_len, tls_server_hs_alert(&c->hs));
             }
             *out_len += produced;
-            return TLS_CONN_RC_OK;   /* now awaiting the client Finished */
+            return TLS_KHANNECTION_RC_OK;   /* now awaiting the client Finished */
         }
         case TLS_CONTENT_CHANGE_CIPHER_SPEC:
             /* RFC 8446 §5 / §D.4: a legitimate middlebox-compat CCS is exactly the
              * single byte 0x01 and is dropped; anything else is unexpected. */
             if (content_len == 1 && content[0] == 0x01) {
-                return TLS_CONN_RC_OK;
+                return TLS_KHANNECTION_RC_OK;
             }
             return conn_fail(c, out, out_cap, out_len, TLS_ALERT_UNEXPECTED_MESSAGE);
         case TLS_CONTENT_APPLICATION_DATA:
@@ -133,8 +133,8 @@ static tls_conn_rc_t process_record(tls_conn_t *c, const uint8_t *rec, size_t fu
             c->keys_ready = 1;
             c->send_seq = 0;
             c->recv_seq = 0;
-            c->state = TLS_CONN_ESTABLISHED;
-            return TLS_CONN_RC_OK;
+            c->state = TLS_KHANNECTION_ESTABLISHED;
+            return TLS_KHANNECTION_RC_OK;
         case TLS_CONTENT_ALERT:
             return handle_incoming_alert(c, content, content_len);
         default:
@@ -142,7 +142,7 @@ static tls_conn_rc_t process_record(tls_conn_t *c, const uint8_t *rec, size_t fu
         }
     }
 
-    if (c->state == TLS_CONN_ESTABLISHED) {
+    if (c->state == TLS_KHANNECTION_ESTABLISHED) {
         uint8_t inner_type = 0;
         size_t plain_len = 0;
         size_t room;
@@ -155,6 +155,15 @@ static tls_conn_rc_t process_record(tls_conn_t *c, const uint8_t *rec, size_t fu
             return conn_fail(c, out, out_cap, out_len, TLS_ALERT_INTERNAL_ERROR);
         }
         room = (app_cap >= *app_len) ? app_cap - *app_len : 0;
+        /* A capacity shortfall is our local error, not the peer's, so report it as
+         * internal_error rather than letting it masquerade as an AEAD failure below.
+         * tls_record_open needs room for the whole inner plaintext = the record body
+         * (full - header) minus the 16-byte tag. (A body too short to hold a tag is
+         * left to tls_record_open, which rejects it as a bad record.) */
+        if (full >= TLS_RECORD_HEADER_LEN + TLS_RECORD_TAG_LEN
+            && room < full - TLS_RECORD_HEADER_LEN - TLS_RECORD_TAG_LEN) {
+            return conn_fail(c, out, out_cap, out_len, TLS_ALERT_INTERNAL_ERROR);
+        }
         /* Deprotect straight into the application buffer (zero-copy for app data). */
         if (!tls_record_open(c->recv_key, c->recv_iv, c->recv_seq, rec, full,
                              app + *app_len, room, &plain_len, &inner_type)) {
@@ -165,7 +174,7 @@ static tls_conn_rc_t process_record(tls_conn_t *c, const uint8_t *rec, size_t fu
         switch (inner_type) {
         case TLS_CONTENT_APPLICATION_DATA:
             *app_len += plain_len;   /* expose the plaintext to the caller */
-            return TLS_CONN_RC_OK;
+            return TLS_KHANNECTION_RC_OK;
         case TLS_CONTENT_ALERT:
             /* The alert body was written at app+*app_len; consume it there without
              * advancing *app_len, so it is never surfaced as application data. */
@@ -179,18 +188,18 @@ static tls_conn_rc_t process_record(tls_conn_t *c, const uint8_t *rec, size_t fu
         }
     }
 
-    /* CLOSED / FAILED never reach here (tls_conn_recv guards first). */
+    /* CLOSED / FAILED never reach here (tls_khannection_recv guards first). */
     return conn_fail(c, out, out_cap, out_len, TLS_ALERT_UNEXPECTED_MESSAGE);
 }
 
-void tls_conn_init(tls_conn_t *c, const tls_server_config_t *cfg) {
+void tls_khannection_init(tls_khannection_t *c, const tls_server_config_t *cfg) {
     if (c == NULL) {
         return;
     }
     memset(c, 0, sizeof *c);
     tls_server_hs_init(&c->hs);
     c->cfg = cfg;
-    c->state = TLS_CONN_HANDSHAKE;
+    c->state = TLS_KHANNECTION_HANDSHAKE;
     c->keys_ready = 0;
     c->in_len = 0;
     c->send_seq = 0;
@@ -198,7 +207,7 @@ void tls_conn_init(tls_conn_t *c, const tls_server_config_t *cfg) {
     c->alert = 0;
 }
 
-tls_conn_rc_t tls_conn_recv(tls_conn_t *c, const uint8_t *data, size_t len,
+tls_khannection_rc_t tls_khannection_recv(tls_khannection_t *c, const uint8_t *data, size_t len,
                             uint8_t *out, size_t out_cap, size_t *out_len,
                             uint8_t *app, size_t app_cap, size_t *app_len) {
     size_t p = 0;
@@ -210,22 +219,28 @@ tls_conn_rc_t tls_conn_recv(tls_conn_t *c, const uint8_t *data, size_t len,
         *app_len = 0;
     }
     if (c == NULL || out == NULL || out_len == NULL || app == NULL || app_len == NULL) {
-        return TLS_CONN_RC_ERROR;
+        return TLS_KHANNECTION_RC_ERROR;
     }
     if (data == NULL && len != 0) {
-        return TLS_CONN_RC_ERROR;
+        return TLS_KHANNECTION_RC_ERROR;
     }
-    if (c->state == TLS_CONN_FAILED) {
-        return TLS_CONN_RC_ERROR;
+    if (c->state == TLS_KHANNECTION_FAILED) {
+        return TLS_KHANNECTION_RC_ERROR;
     }
-    if (c->state == TLS_CONN_CLOSED) {
-        return TLS_CONN_RC_CLOSED;   /* peer already closed; ignore further bytes */
+    if (c->state == TLS_KHANNECTION_CLOSED) {
+        return TLS_KHANNECTION_RC_CLOSED;   /* peer already closed; ignore further bytes */
+    }
+    if (len == 0) {
+        /* Nothing to add. Returning here also avoids forming `data + p` when `data`
+         * is NULL (len == 0 is allowed with a NULL buffer) — NULL pointer arithmetic
+         * is undefined even when the length copied is zero. */
+        return TLS_KHANNECTION_RC_OK;
     }
 
     for (;;) {
         uint16_t rec_len;
         size_t full, take;
-        tls_conn_rc_t rc;
+        tls_khannection_rc_t rc;
 
         /* Accumulate the 5-byte record header. */
         if (c->in_len < TLS_RECORD_HEADER_LEN) {
@@ -243,7 +258,7 @@ tls_conn_rc_t tls_conn_recv(tls_conn_t *c, const uint8_t *data, size_t len,
         if (rec_len > TLS_RECORD_MAX_CIPHERTEXT) {
             return conn_fail(c, out, out_cap, out_len, TLS_ALERT_RECORD_OVERFLOW);
         }
-        full = TLS_RECORD_HEADER_LEN + rec_len;   /* <= TLS_CONN_INBUF_SIZE */
+        full = TLS_RECORD_HEADER_LEN + rec_len;   /* <= TLS_KHANNECTION_INBUF_SIZE */
 
         /* Accumulate the record body. */
         if (c->in_len < full) {
@@ -260,15 +275,15 @@ tls_conn_rc_t tls_conn_recv(tls_conn_t *c, const uint8_t *data, size_t len,
         /* One complete record is buffered. */
         rc = process_record(c, c->inbuf, full, out, out_cap, out_len, app, app_cap, app_len);
         c->in_len = 0;
-        if (rc != TLS_CONN_RC_OK) {
+        if (rc != TLS_KHANNECTION_RC_OK) {
             return rc;   /* CLOSED or ERROR */
         }
     }
 
-    return TLS_CONN_RC_OK;
+    return TLS_KHANNECTION_RC_OK;
 }
 
-tls_conn_rc_t tls_conn_send(tls_conn_t *c, const uint8_t *plaintext, size_t len,
+tls_khannection_rc_t tls_khannection_send(tls_khannection_t *c, const uint8_t *plaintext, size_t len,
                             uint8_t *out, size_t out_cap, size_t *out_len) {
     size_t off = 0;
 
@@ -276,16 +291,16 @@ tls_conn_rc_t tls_conn_send(tls_conn_t *c, const uint8_t *plaintext, size_t len,
         *out_len = 0;
     }
     if (c == NULL || out == NULL || out_len == NULL) {
-        return TLS_CONN_RC_ERROR;
+        return TLS_KHANNECTION_RC_ERROR;
     }
     if (plaintext == NULL && len != 0) {
-        return TLS_CONN_RC_ERROR;
+        return TLS_KHANNECTION_RC_ERROR;
     }
-    if (c->state != TLS_CONN_ESTABLISHED) {
-        return TLS_CONN_RC_ERROR;
+    if (c->state != TLS_KHANNECTION_ESTABLISHED) {
+        return TLS_KHANNECTION_RC_ERROR;
     }
     if (len == 0) {
-        return TLS_CONN_RC_OK;   /* never emit an empty application record */
+        return TLS_KHANNECTION_RC_OK;   /* never emit an empty application record */
     }
 
     do {
@@ -307,37 +322,37 @@ tls_conn_rc_t tls_conn_send(tls_conn_t *c, const uint8_t *plaintext, size_t len,
         off += chunk;
     } while (off < len);
 
-    return TLS_CONN_RC_OK;
+    return TLS_KHANNECTION_RC_OK;
 }
 
-tls_conn_rc_t tls_conn_close_notify(tls_conn_t *c,
+tls_khannection_rc_t tls_khannection_close_notify(tls_khannection_t *c,
                                     uint8_t *out, size_t out_cap, size_t *out_len) {
     if (out_len != NULL) {
         *out_len = 0;
     }
     if (c == NULL || out == NULL || out_len == NULL) {
-        return TLS_CONN_RC_ERROR;
+        return TLS_KHANNECTION_RC_ERROR;
     }
-    if (c->state == TLS_CONN_CLOSED) {
-        return TLS_CONN_RC_CLOSED;
+    if (c->state == TLS_KHANNECTION_CLOSED) {
+        return TLS_KHANNECTION_RC_CLOSED;
     }
-    if (c->state == TLS_CONN_FAILED) {
-        return TLS_CONN_RC_ERROR;
+    if (c->state == TLS_KHANNECTION_FAILED) {
+        return TLS_KHANNECTION_RC_ERROR;
     }
     emit_alert(c, out, out_cap, out_len, ALERT_LEVEL_WARNING, TLS_ALERT_CLOSE_NOTIFY);
-    c->state = TLS_CONN_CLOSED;
-    return TLS_CONN_RC_CLOSED;
+    c->state = TLS_KHANNECTION_CLOSED;
+    return TLS_KHANNECTION_RC_CLOSED;
 }
 
-tls_conn_state_t tls_conn_state(const tls_conn_t *c) {
-    return (c == NULL) ? TLS_CONN_FAILED : c->state;
+tls_khannection_state_t tls_khannection_state(const tls_khannection_t *c) {
+    return (c == NULL) ? TLS_KHANNECTION_FAILED : c->state;
 }
 
-uint8_t tls_conn_alert(const tls_conn_t *c) {
+uint8_t tls_khannection_alert(const tls_khannection_t *c) {
     return (c == NULL) ? 0 : c->alert;
 }
 
-void tls_conn_wipe(tls_conn_t *c) {
+void tls_khannection_wipe(tls_khannection_t *c) {
     if (c == NULL) {
         return;
     }
@@ -349,7 +364,7 @@ void tls_conn_wipe(tls_conn_t *c) {
     secure_zero(c->inbuf, sizeof c->inbuf);
     c->in_len = 0;
     c->keys_ready = 0;
-    c->state = TLS_CONN_FAILED;
+    c->state = TLS_KHANNECTION_FAILED;
     c->alert = 0;
 }
 

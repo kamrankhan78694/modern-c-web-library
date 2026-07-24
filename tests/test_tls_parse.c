@@ -20,7 +20,7 @@
 #include "handshake.h"
 #include "record.h"
 #include "server_handshake.h"
-#include "tls_conn.h"
+#include "tls_khannection.h"
 #endif
 
 static int g_failures = 0;
@@ -1035,7 +1035,7 @@ static void test_server_handshake(void) {
 }
 
 /*
- * TLS connection engine (tls_conn). Reuses the independent-oracle KAT_* vectors
+ * TLS connection engine (tls_khannection). Reuses the independent-oracle KAT_* vectors
  * above: the ClientHello and client Finished are the same fixed inputs, and the
  * connection's application records are sealed/opened with the oracle-derived
  * application keys — so the crypto is checked against the separate derivation while
@@ -1063,36 +1063,36 @@ static size_t conn_make_ch_record(uint8_t *rec) {
 }
 
 /* Drive a fresh connection to ESTABLISHED (ClientHello then client Finished). */
-static void conn_establish(tls_conn_t *c, const tls_server_config_t *cfg) {
+static void conn_establish(tls_khannection_t *c, const tls_server_config_t *cfg) {
     uint8_t out[2048], app[64], ch[5 + sizeof KAT_CH], fin[128];
     size_t ol = 0, al = 0, chl, finl = 0;
     chl = conn_make_ch_record(ch);
-    tls_conn_init(c, cfg);
-    tls_conn_recv(c, ch, chl, out, sizeof out, &ol, app, sizeof app, &al);
+    tls_khannection_init(c, cfg);
+    tls_khannection_recv(c, ch, chl, out, sizeof out, &ol, app, sizeof app, &al);
     seal_client_finished(KAT_CLIENT_FINISHED_VD, fin, sizeof fin, &finl);
-    tls_conn_recv(c, fin, finl, out, sizeof out, &ol, app, sizeof app, &al);
+    tls_khannection_recv(c, fin, finl, out, sizeof out, &ol, app, sizeof app, &al);
 }
 
-static void test_tls_conn(void) {
+static void test_tls_khannection(void) {
     static uint8_t out[40000];
     static uint8_t app[40000];
     tls_server_config_t cfg;
-    tls_conn_t c;
+    tls_khannection_t c;
     uint8_t ch_rec[5 + sizeof KAT_CH];
     size_t ch_len, out_len = 0, app_len = 0;
     static const uint8_t ccs_rec[6] = { 0x14, 0x03, 0x03, 0x00, 0x01, 0x01 };
-    tls_conn_rc_t rc;
+    tls_khannection_rc_t rc;
 
     conn_set_cfg(&cfg);
     ch_len = conn_make_ch_record(ch_rec);
 
     /* ===== Part A: full handshake + application exchange over the engine ===== */
-    tls_conn_init(&c, &cfg);
-    check_true("conn: initial state HANDSHAKE", tls_conn_state(&c) == TLS_CONN_HANDSHAKE);
+    tls_khannection_init(&c, &cfg);
+    check_true("conn: initial state HANDSHAKE", tls_khannection_state(&c) == TLS_KHANNECTION_HANDSHAKE);
 
-    rc = tls_conn_recv(&c, ch_rec, ch_len, out, sizeof out, &out_len, app, sizeof app, &app_len);
+    rc = tls_khannection_recv(&c, ch_rec, ch_len, out, sizeof out, &out_len, app, sizeof app, &app_len);
     check_true("conn: ClientHello accepted, flight emitted",
-               rc == TLS_CONN_RC_OK && tls_conn_state(&c) == TLS_CONN_HANDSHAKE
+               rc == TLS_KHANNECTION_RC_OK && tls_khannection_state(&c) == TLS_KHANNECTION_HANDSHAKE
                && out_len > 0 && app_len == 0);
     {
         size_t sh_len = ((size_t)out[3] << 8) | out[4];
@@ -1108,17 +1108,17 @@ static void test_tls_conn(void) {
                    && fll == sizeof KAT_FLIGHT_PLAIN && memcmp(fl, KAT_FLIGHT_PLAIN, fll) == 0);
     }
 
-    rc = tls_conn_recv(&c, ccs_rec, sizeof ccs_rec, out, sizeof out, &out_len, app, sizeof app, &app_len);
+    rc = tls_khannection_recv(&c, ccs_rec, sizeof ccs_rec, out, sizeof out, &out_len, app, sizeof app, &app_len);
     check_true("conn: client ChangeCipherSpec dropped",
-               rc == TLS_CONN_RC_OK && tls_conn_state(&c) == TLS_CONN_HANDSHAKE && out_len == 0);
+               rc == TLS_KHANNECTION_RC_OK && tls_khannection_state(&c) == TLS_KHANNECTION_HANDSHAKE && out_len == 0);
 
     {
         uint8_t fin[128];
         size_t finl = 0;
         seal_client_finished(KAT_CLIENT_FINISHED_VD, fin, sizeof fin, &finl);
-        rc = tls_conn_recv(&c, fin, finl, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        rc = tls_khannection_recv(&c, fin, finl, out, sizeof out, &out_len, app, sizeof app, &app_len);
         check_true("conn: client Finished -> ESTABLISHED",
-                   rc == TLS_CONN_RC_OK && tls_conn_state(&c) == TLS_CONN_ESTABLISHED);
+                   rc == TLS_KHANNECTION_RC_OK && tls_khannection_state(&c) == TLS_KHANNECTION_ESTABLISHED);
     }
 
     {
@@ -1126,9 +1126,9 @@ static void test_tls_conn(void) {
         uint8_t pt[256];
         size_t ptl = 0;
         uint8_t ct = 0;
-        rc = tls_conn_send(&c, msg, sizeof msg - 1, out, sizeof out, &out_len);
+        rc = tls_khannection_send(&c, msg, sizeof msg - 1, out, sizeof out, &out_len);
         check_true("conn: server app data sealed, decrypts under oracle server_ap key",
-                   rc == TLS_CONN_RC_OK && out_len > 0 && out[0] == 0x17
+                   rc == TLS_KHANNECTION_RC_OK && out_len > 0 && out[0] == 0x17
                    && tls_record_open(KAT_SERVER_AP_KEY, KAT_SERVER_AP_IV, 0,
                                       out, out_len, pt, sizeof pt, &ptl, &ct) == 1
                    && ct == TLS_CONTENT_APPLICATION_DATA
@@ -1141,9 +1141,9 @@ static void test_tls_conn(void) {
         size_t recl = 0;
         tls_record_seal(KAT_CLIENT_AP_KEY, KAT_CLIENT_AP_IV, 0, TLS_CONTENT_APPLICATION_DATA,
                         req, sizeof req - 1, 0, rec, sizeof rec, &recl);
-        rc = tls_conn_recv(&c, rec, recl, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        rc = tls_khannection_recv(&c, rec, recl, out, sizeof out, &out_len, app, sizeof app, &app_len);
         check_true("conn: client app data decrypted",
-                   rc == TLS_CONN_RC_OK && app_len == sizeof req - 1
+                   rc == TLS_KHANNECTION_RC_OK && app_len == sizeof req - 1
                    && memcmp(app, req, app_len) == 0);
     }
 
@@ -1151,10 +1151,10 @@ static void test_tls_conn(void) {
         uint8_t pt[64];
         size_t ptl = 0;
         uint8_t ct = 0;
-        rc = tls_conn_close_notify(&c, out, sizeof out, &out_len);
+        rc = tls_khannection_close_notify(&c, out, sizeof out, &out_len);
         /* send_seq advanced to 1 by the server app record above. */
         check_true("conn: close_notify emits an encrypted alert -> CLOSED",
-                   rc == TLS_CONN_RC_CLOSED && tls_conn_state(&c) == TLS_CONN_CLOSED
+                   rc == TLS_KHANNECTION_RC_CLOSED && tls_khannection_state(&c) == TLS_KHANNECTION_CLOSED
                    && tls_record_open(KAT_SERVER_AP_KEY, KAT_SERVER_AP_IV, 1,
                                       out, out_len, pt, sizeof pt, &ptl, &ct) == 1
                    && ct == TLS_CONTENT_ALERT && ptl == 2 && pt[0] == 1 && pt[1] == 0);
@@ -1166,14 +1166,14 @@ static void test_tls_conn(void) {
     {
         size_t i;
         int frag_ok = 1;
-        tls_conn_init(&c, &cfg);
+        tls_khannection_init(&c, &cfg);
         for (i = 0; i < ch_len; i++) {
-            rc = tls_conn_recv(&c, ch_rec + i, 1, out, sizeof out, &out_len, app, sizeof app, &app_len);
-            if (rc != TLS_CONN_RC_OK) { frag_ok = 0; break; }
+            rc = tls_khannection_recv(&c, ch_rec + i, 1, out, sizeof out, &out_len, app, sizeof app, &app_len);
+            if (rc != TLS_KHANNECTION_RC_OK) { frag_ok = 0; break; }
             if (i + 1 < ch_len && out_len != 0) { frag_ok = 0; break; }
         }
         check_true("conn: ClientHello reassembled from 1-byte fragments",
-                   frag_ok && out_len > 0 && tls_conn_state(&c) == TLS_CONN_HANDSHAKE);
+                   frag_ok && out_len > 0 && tls_khannection_state(&c) == TLS_KHANNECTION_HANDSHAKE);
     }
     /* B2: CCS and Finished coalesced into a single recv both process. */
     {
@@ -1183,18 +1183,18 @@ static void test_tls_conn(void) {
         seal_client_finished(KAT_CLIENT_FINISHED_VD, combo + sizeof ccs_rec,
                              sizeof combo - sizeof ccs_rec, &finl);
         cl = sizeof ccs_rec + finl;
-        rc = tls_conn_recv(&c, combo, cl, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        rc = tls_khannection_recv(&c, combo, cl, out, sizeof out, &out_len, app, sizeof app, &app_len);
         check_true("conn: coalesced CCS+Finished in one recv -> ESTABLISHED",
-                   rc == TLS_CONN_RC_OK && tls_conn_state(&c) == TLS_CONN_ESTABLISHED);
+                   rc == TLS_KHANNECTION_RC_OK && tls_khannection_state(&c) == TLS_KHANNECTION_ESTABLISHED);
     }
     /* B3: a declared record length beyond 2^14+256 is rejected before any body. */
     {
         static const uint8_t big_hdr[5] = { 0x17, 0x03, 0x03, 0xff, 0xff };
-        tls_conn_init(&c, &cfg);
-        rc = tls_conn_recv(&c, big_hdr, sizeof big_hdr, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        tls_khannection_init(&c, &cfg);
+        rc = tls_khannection_recv(&c, big_hdr, sizeof big_hdr, out, sizeof out, &out_len, app, sizeof app, &app_len);
         check_true("conn: over-long record -> record_overflow, FAILED",
-                   rc == TLS_CONN_RC_ERROR && tls_conn_alert(&c) == 22
-                   && tls_conn_state(&c) == TLS_CONN_FAILED);
+                   rc == TLS_KHANNECTION_RC_ERROR && tls_khannection_alert(&c) == 22
+                   && tls_khannection_state(&c) == TLS_KHANNECTION_FAILED);
     }
 
     /* ===== Part C: adversarial / state ===== */
@@ -1207,27 +1207,27 @@ static void test_tls_conn(void) {
         tls_record_seal(KAT_CLIENT_AP_KEY, KAT_CLIENT_AP_IV, 0, TLS_CONTENT_APPLICATION_DATA,
                         req, sizeof req - 1, 0, rec, sizeof rec, &recl);
         rec[7] ^= 0x40;   /* flip a ciphertext byte */
-        rc = tls_conn_recv(&c, rec, recl, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        rc = tls_khannection_recv(&c, rec, recl, out, sizeof out, &out_len, app, sizeof app, &app_len);
         check_true("conn: tampered application record -> bad_record_mac",
-                   rc == TLS_CONN_RC_ERROR && tls_conn_alert(&c) == 20
-                   && tls_conn_state(&c) == TLS_CONN_FAILED);
+                   rc == TLS_KHANNECTION_RC_ERROR && tls_khannection_alert(&c) == 20
+                   && tls_khannection_state(&c) == TLS_KHANNECTION_FAILED);
     }
     /* C2: a non-application record after the handshake is unexpected. */
     {
         static const uint8_t bare_hs[9] = { 0x16, 0x03, 0x03, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00 };
         conn_establish(&c, &cfg);
-        rc = tls_conn_recv(&c, bare_hs, sizeof bare_hs, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        rc = tls_khannection_recv(&c, bare_hs, sizeof bare_hs, out, sizeof out, &out_len, app, sizeof app, &app_len);
         check_true("conn: plaintext record after handshake -> unexpected_message",
-                   rc == TLS_CONN_RC_ERROR && tls_conn_alert(&c) == 10);
+                   rc == TLS_KHANNECTION_RC_ERROR && tls_khannection_alert(&c) == 10);
     }
     /* C3: a malformed ChangeCipherSpec during the handshake is unexpected. */
     {
         static const uint8_t bad_ccs[6] = { 0x14, 0x03, 0x03, 0x00, 0x01, 0x02 };
-        tls_conn_init(&c, &cfg);
-        tls_conn_recv(&c, ch_rec, ch_len, out, sizeof out, &out_len, app, sizeof app, &app_len);
-        rc = tls_conn_recv(&c, bad_ccs, sizeof bad_ccs, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        tls_khannection_init(&c, &cfg);
+        tls_khannection_recv(&c, ch_rec, ch_len, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        rc = tls_khannection_recv(&c, bad_ccs, sizeof bad_ccs, out, sizeof out, &out_len, app, sizeof app, &app_len);
         check_true("conn: malformed CCS -> unexpected_message",
-                   rc == TLS_CONN_RC_ERROR && tls_conn_alert(&c) == 10);
+                   rc == TLS_KHANNECTION_RC_ERROR && tls_khannection_alert(&c) == 10);
     }
     /* C4: a peer close_notify (encrypted) is a graceful shutdown. */
     {
@@ -1237,16 +1237,39 @@ static void test_tls_conn(void) {
         conn_establish(&c, &cfg);
         tls_record_seal(KAT_CLIENT_AP_KEY, KAT_CLIENT_AP_IV, 0, TLS_CONTENT_ALERT,
                         body, 2, 0, rec, sizeof rec, &recl);
-        rc = tls_conn_recv(&c, rec, recl, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        rc = tls_khannection_recv(&c, rec, recl, out, sizeof out, &out_len, app, sizeof app, &app_len);
         check_true("conn: peer close_notify -> CLOSED",
-                   rc == TLS_CONN_RC_CLOSED && tls_conn_state(&c) == TLS_CONN_CLOSED);
+                   rc == TLS_KHANNECTION_RC_CLOSED && tls_khannection_state(&c) == TLS_KHANNECTION_CLOSED);
     }
     /* C5: sending before the handshake completes is refused. */
     {
-        tls_conn_init(&c, &cfg);
-        rc = tls_conn_send(&c, (const uint8_t *)"x", 1, out, sizeof out, &out_len);
+        tls_khannection_init(&c, &cfg);
+        rc = tls_khannection_send(&c, (const uint8_t *)"x", 1, out, sizeof out, &out_len);
         check_true("conn: send before ESTABLISHED refused",
-                   rc == TLS_CONN_RC_ERROR && out_len == 0);
+                   rc == TLS_KHANNECTION_RC_ERROR && out_len == 0);
+    }
+    /* C6: a zero-length recv (a NULL buffer is allowed) is a clean no-op — never
+     * NULL pointer arithmetic. */
+    {
+        tls_khannection_init(&c, &cfg);
+        rc = tls_khannection_recv(&c, NULL, 0, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        check_true("conn: zero-length recv is a no-op",
+                   rc == TLS_KHANNECTION_RC_OK && out_len == 0 && app_len == 0
+                   && tls_khannection_state(&c) == TLS_KHANNECTION_HANDSHAKE);
+    }
+    /* C7: a too-small application buffer is a local capacity fault (internal_error),
+     * distinct from a peer AEAD failure (bad_record_mac). */
+    {
+        static const uint8_t req[] = "hello-world-payload";
+        uint8_t rec[128];
+        uint8_t tiny[4];
+        size_t recl = 0, tol = 0, tal = 0;
+        conn_establish(&c, &cfg);
+        tls_record_seal(KAT_CLIENT_AP_KEY, KAT_CLIENT_AP_IV, 0, TLS_CONTENT_APPLICATION_DATA,
+                        req, sizeof req - 1, 0, rec, sizeof rec, &recl);
+        rc = tls_khannection_recv(&c, rec, recl, out, sizeof out, &tol, tiny, sizeof tiny, &tal);
+        check_true("conn: too-small app buffer -> internal_error",
+                   rc == TLS_KHANNECTION_RC_ERROR && tls_khannection_alert(&c) == 80);
     }
 
     /* ===== Part D: >16 KiB response splits across records and reassembles ===== */
@@ -1261,7 +1284,7 @@ static void test_tls_conn(void) {
             big[i] = (uint8_t)(i * 7 + 1);
         }
         conn_establish(&c, &cfg);
-        rc = tls_conn_send(&c, big, sizeof big, out, sizeof out, &out_len);
+        rc = tls_khannection_send(&c, big, sizeof big, out, sizeof out, &out_len);
         while (off < out_len) {
             size_t rl = 5 + ((((size_t)out[off + 3]) << 8) | out[off + 4]);
             size_t pl = 0;
@@ -1279,7 +1302,7 @@ static void test_tls_conn(void) {
             seq++;
         }
         check_true("conn: >16KiB response split into 2 records, reassembles in order",
-                   rc == TLS_CONN_RC_OK && ok && seq == 2
+                   rc == TLS_KHANNECTION_RC_OK && ok && seq == 2
                    && total == sizeof big && memcmp(pt, big, total) == 0);
     }
 }
@@ -1300,7 +1323,7 @@ int main(void) {
     test_client_hello();
     test_hs_build();
     test_server_handshake();
-    test_tls_conn();
+    test_tls_khannection();
 
     if (g_failures == 0) {
         printf("All TLS parse tests passed.\n");
