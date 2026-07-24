@@ -1120,7 +1120,17 @@ void session_store_destroy(session_store_t *store);
 char *session_create(session_store_t *store, int max_age);
 
 /**
- * Get session by ID
+ * Get session by ID.
+ *
+ * The returned handle is valid only as a short-lived, single-threaded existence/
+ * identity check (e.g. session_get(...) != NULL, session_get_id, session_is_expired
+ * immediately after). Do NOT retain it or use it for data access: another thread
+ * may destroy or expire the session and its fixed slot may be reused for a
+ * different session, so a stored handle can silently alias the wrong session.
+ * For reading/writing session data use the (store, session_id)-keyed
+ * session_get_data / session_set_data / session_remove_data, which re-resolve the
+ * session under the lock on every call.
+ *
  * @param store Session store instance
  * @param session_id Session ID
  * @return Session instance or NULL if not found/expired
@@ -1135,27 +1145,50 @@ session_t *session_get(session_store_t *store, const char *session_id);
 void session_destroy(session_store_t *store, const char *session_id);
 
 /**
- * Set session data
- * @param session Session instance
+ * Set session data.
+ *
+ * Keyed on (store, session_id) rather than a session_t* handle: the session is
+ * re-resolved under the store lock on every call, so a raw session pointer never
+ * escapes the lock and can never be used after the slot is freed or reused for a
+ * different session (see the note on session_get()).
+ *
+ * @param store Session store instance
+ * @param session_id Session ID
  * @param key Data key
  * @param value Data value (will be copied)
+ * @return 0 on success, -1 if the session does not exist / is expired, or on
+ *         allocation failure
  */
-void session_set_data(session_t *session, const char *key, const char *value);
+int session_set_data(session_store_t *store, const char *session_id,
+                     const char *key, const char *value);
 
 /**
- * Get session data
- * @param session Session instance
+ * Get session data.
+ *
+ * Returns a freshly allocated copy of the value (or NULL if the session/key is
+ * not found); the caller must free() it. Returning a copy — rather than a
+ * pointer into the store's internal, lock-protected data — closes the
+ * use-after-free window that existed when a borrowed pointer outlived the lock.
+ *
+ * @param store Session store instance
+ * @param session_id Session ID
  * @param key Data key
- * @return Data value or NULL if not found
+ * @return Newly allocated value (caller frees), or NULL if the session/key is
+ *         not found or the copy could not be allocated
  */
-const char *session_get_data(session_t *session, const char *key);
+char *session_get_data(session_store_t *store, const char *session_id,
+                       const char *key);
 
 /**
- * Remove session data
- * @param session Session instance
+ * Remove session data.
+ *
+ * @param store Session store instance
+ * @param session_id Session ID
  * @param key Data key
+ * @return 0 if the key was removed, -1 if the session/key was not found
  */
-void session_remove_data(session_t *session, const char *key);
+int session_remove_data(session_store_t *store, const char *session_id,
+                        const char *key);
 
 /**
  * Get session ID

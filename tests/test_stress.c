@@ -526,8 +526,8 @@ void test_stress_session_data_operations(void) {
     char *session_id = session_create(store, 3600);
     ASSERT(session_id != NULL);
 
-    session_t *session = session_get(store, session_id);
-    ASSERT(session != NULL);
+    /* Existence check; the handle is not retained for data access. */
+    ASSERT(session_get(store, session_id) != NULL);
 
     char key[32], value[64];
 
@@ -535,16 +535,17 @@ void test_stress_session_data_operations(void) {
     for (int i = 0; i < 100; i++) {
         snprintf(key, sizeof(key), "key%d", i);
         snprintf(value, sizeof(value), "value%d", i);
-        session_set_data(session, key, value);
+        ASSERT(session_set_data(store, session_id, key, value) == 0);
     }
 
-    /* Retrieve and verify all */
+    /* Retrieve and verify all (each returns an owned copy to free) */
     for (int i = 0; i < 100; i++) {
         snprintf(key, sizeof(key), "key%d", i);
         snprintf(value, sizeof(value), "value%d", i);
-        const char *retrieved = session_get_data(session, key);
+        char *retrieved = session_get_data(store, session_id, key);
         ASSERT(retrieved != NULL);
         ASSERT(strcmp(retrieved, value) == 0);
+        free(retrieved);
     }
 
     session_destroy(store, session_id);

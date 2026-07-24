@@ -29,7 +29,6 @@ struct session {
     int max_age;
     session_data_entry_t *data;
     bool in_use;
-    struct session_store *store; /* Back-reference for locking data operations */
 };
 
 /* Session store structure */
@@ -205,7 +204,6 @@ char *session_create(session_store_t *store, int max_age) {
     
     session->data = NULL;
     session->in_use = true;
-    session->store = store;
     store->session_count++;
     
     char *result = strdup(session->session_id);
@@ -276,127 +274,157 @@ void session_destroy(session_store_t *store, const char *session_id) {
     pthread_mutex_unlock(&store->lock);
 }
 
-/* Set session data */
-void session_set_data(session_t *session, const char *key, const char *value) {
-    if (!session || !key || !value || !session->store) {
-        return;
+/* Find an in-use, non-expired session by ID. MUST be called with store->lock
+ * held. Returns the slot or NULL.
+ *
+ * Resolving the session by ID under the lock on every data operation is what
+ * makes the data API immune to the stale-handle / slot-reuse hazards of a raw
+ * session_t*: a session that was destroyed or has expired (in_use == false, or
+ * past its deadline) is reported as not-found, and a fixed slot that was reused
+ * for a different session cannot be mistaken for this one because the IDs
+ * differ. No internal pointer is ever returned to the caller. */
+static session_t *find_active_session_locked(session_store_t *store,
+                                             const char *session_id) {
+    for (size_t i = 0; i < MAX_SESSIONS; i++) {
+        session_t *s = &store->sessions[i];
+        if (s->in_use && strcmp(s->session_id, session_id) == 0) {
+            if (session_is_expired(s)) {
+                /* Reclaim the expired slot on access — the same lazy cleanup
+                 * session_get() performs. Because the keyed data API is now the
+                 * primary access path (callers no longer go through
+                 * session_get()), doing it here too prevents expired sessions
+                 * from lingering in their fixed slots until the next explicit
+                 * session_cleanup_expired(). */
+                free_session_data(s->data);
+                s->data = NULL;
+                s->in_use = false;
+                if (store->session_count > 0) {
+                    store->session_count--;
+                }
+                return NULL;
+            }
+            return s;
+        }
     }
-    
-    pthread_mutex_lock(&session->store->lock);
-    
-    /* Check if key already exists - update value */
-    session_data_entry_t *current = session->data;
-    while (current) {
+    return NULL;
+}
+
+/* Set session data (keyed on store + session_id; see header). */
+int session_set_data(session_store_t *store, const char *session_id,
+                     const char *key, const char *value) {
+    if (!store || !session_id || !key || !value) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&store->lock);
+
+    session_t *session = find_active_session_locked(store, session_id);
+    if (!session) {
+        pthread_mutex_unlock(&store->lock);
+        return -1;
+    }
+
+    /* Update in place if the key already exists. */
+    for (session_data_entry_t *current = session->data; current; current = current->next) {
         if (strcmp(current->key, key) == 0) {
-            /* Update existing value */
             char *new_value = strdup(value);
             if (!new_value) {
-                pthread_mutex_unlock(&session->store->lock);
-                return; /* Keep old value if allocation fails */
+                pthread_mutex_unlock(&store->lock);
+                return -1; /* Keep old value if allocation fails */
             }
             free(current->value);
             current->value = new_value;
-            pthread_mutex_unlock(&session->store->lock);
-            return;
+            pthread_mutex_unlock(&store->lock);
+            return 0;
         }
-        current = current->next;
     }
-    
-    /* Create new entry */
+
+    /* Otherwise prepend a new entry. */
     session_data_entry_t *entry = (session_data_entry_t *)malloc(sizeof(session_data_entry_t));
     if (!entry) {
-        pthread_mutex_unlock(&session->store->lock);
-        return;
+        pthread_mutex_unlock(&store->lock);
+        return -1;
     }
-    
     entry->key = strdup(key);
-    if (!entry->key) {
-        free(entry);
-        pthread_mutex_unlock(&session->store->lock);
-        return;
-    }
-    
     entry->value = strdup(value);
-    if (!entry->value) {
+    if (!entry->key || !entry->value) {
         free(entry->key);
+        free(entry->value);
         free(entry);
-        pthread_mutex_unlock(&session->store->lock);
-        return;
+        pthread_mutex_unlock(&store->lock);
+        return -1;
     }
-    
     entry->next = session->data;
     session->data = entry;
-    
-    pthread_mutex_unlock(&session->store->lock);
+
+    pthread_mutex_unlock(&store->lock);
+    return 0;
 }
 
-/* Get session data */
-const char *session_get_data(session_t *session, const char *key) {
-    if (!session || !key) {
+/* Get session data.
+ * Returns a freshly allocated copy the caller must free() (NULL if not found).
+ * Copying under the lock removes the use-after-free window that a borrowed
+ * pointer into the store's data would leave open once the lock is released. */
+char *session_get_data(session_store_t *store, const char *session_id,
+                       const char *key) {
+    if (!store || !session_id || !key) {
         return NULL;
     }
-    
-    const char *result = NULL;
-    
-    if (session->store) {
-        pthread_mutex_lock(&session->store->lock);
-    }
-    
-    session_data_entry_t *current = session->data;
-    while (current) {
-        if (strcmp(current->key, key) == 0) {
-            result = current->value;
-            break;
+
+    pthread_mutex_lock(&store->lock);
+
+    char *result = NULL;
+    session_t *session = find_active_session_locked(store, session_id);
+    if (session) {
+        for (session_data_entry_t *current = session->data; current; current = current->next) {
+            if (strcmp(current->key, key) == 0) {
+                result = strdup(current->value);
+                break;
+            }
         }
-        current = current->next;
     }
-    
-    if (session->store) {
-        pthread_mutex_unlock(&session->store->lock);
-    }
-    
+
+    pthread_mutex_unlock(&store->lock);
     return result;
 }
 
-/* Remove session data */
-void session_remove_data(session_t *session, const char *key) {
-    if (!session || !key) {
-        return;
+/* Remove session data. Returns 0 if removed, -1 if the session/key was absent. */
+int session_remove_data(session_store_t *store, const char *session_id,
+                        const char *key) {
+    if (!store || !session_id || !key) {
+        return -1;
     }
-    
-    if (session->store) {
-        pthread_mutex_lock(&session->store->lock);
+
+    pthread_mutex_lock(&store->lock);
+
+    session_t *session = find_active_session_locked(store, session_id);
+    if (!session) {
+        pthread_mutex_unlock(&store->lock);
+        return -1;
     }
-    
+
     session_data_entry_t *current = session->data;
     session_data_entry_t *prev = NULL;
-    
+    int removed = -1;
     while (current) {
         if (strcmp(current->key, key) == 0) {
-            /* Remove entry */
             if (prev) {
                 prev->next = current->next;
             } else {
                 session->data = current->next;
             }
-            
             free(current->key);
             free(current->value);
             free(current);
-            
-            if (session->store) {
-                pthread_mutex_unlock(&session->store->lock);
-            }
-            return;
+            removed = 0;
+            break;
         }
-        
         prev = current;
         current = current->next;
     }
-    
-    if (session->store) {
-        pthread_mutex_unlock(&session->store->lock);
-    }
+
+    pthread_mutex_unlock(&store->lock);
+    return removed;
 }
 
 /* Get session ID */

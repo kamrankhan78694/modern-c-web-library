@@ -1221,37 +1221,133 @@ void test_session_data_operations(void) {
     char *sid = session_create(store, 3600);
     ASSERT(sid != NULL);
 
-    session_t *sess = session_get(store, sid);
-    ASSERT(sess != NULL);
+    /* Existence check; the handle itself is not retained for data access. */
+    ASSERT(session_get(store, sid) != NULL);
 
-    /* Set data */
-    session_set_data(sess, "user_id", "42");
-    session_set_data(sess, "username", "testuser");
+    /* Set data (keyed on store + session id) */
+    ASSERT(session_set_data(store, sid, "user_id", "42") == 0);
+    ASSERT(session_set_data(store, sid, "username", "testuser") == 0);
 
-    /* Get data */
-    const char *user_id = session_get_data(sess, "user_id");
+    /* Get data — returns an owned copy the caller must free() */
+    char *user_id = session_get_data(store, sid, "user_id");
     ASSERT(user_id != NULL);
     ASSERT(strcmp(user_id, "42") == 0);
+    free(user_id);
 
-    const char *username = session_get_data(sess, "username");
+    char *username = session_get_data(store, sid, "username");
     ASSERT(username != NULL);
     ASSERT(strcmp(username, "testuser") == 0);
+    free(username);
 
     /* Update data */
-    session_set_data(sess, "user_id", "99");
-    user_id = session_get_data(sess, "user_id");
+    ASSERT(session_set_data(store, sid, "user_id", "99") == 0);
+    user_id = session_get_data(store, sid, "user_id");
     ASSERT(user_id != NULL);
     ASSERT(strcmp(user_id, "99") == 0);
+    free(user_id);
 
     /* Remove data */
-    session_remove_data(sess, "user_id");
-    ASSERT(session_get_data(sess, "user_id") == NULL);
+    ASSERT(session_remove_data(store, sid, "user_id") == 0);
+    ASSERT(session_get_data(store, sid, "user_id") == NULL);
 
     /* Other data should still be there */
-    ASSERT(session_get_data(sess, "username") != NULL);
+    username = session_get_data(store, sid, "username");
+    ASSERT(username != NULL);
+    free(username);
 
     /* Get non-existent key */
-    ASSERT(session_get_data(sess, "nonexistent") == NULL);
+    ASSERT(session_get_data(store, sid, "nonexistent") == NULL);
+
+    free(sid);
+    session_store_destroy(store);
+
+    PASS();
+}
+
+/* Regression (audit #11): session_get_data must return an INDEPENDENT owned copy,
+ * not a borrowed pointer into the store's internal data. If it were borrowed,
+ * overwriting the value (which frees the old internal string) or destroying the
+ * session (which frees the data list) would leave the caller holding a dangling
+ * pointer — a use-after-free ASan flags immediately. */
+void test_session_get_data_owned_copy(void) {
+    TEST("session_get_data returns an independent owned copy (UAF-safe)");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    char *sid = session_create(store, 3600);
+    ASSERT(sid != NULL);
+
+    ASSERT(session_set_data(store, sid, "k", "original") == 0);
+
+    char *copy = session_get_data(store, sid, "k");
+    ASSERT(copy != NULL);
+    ASSERT(strcmp(copy, "original") == 0);
+
+    /* Overwrite: frees the old internal value. A borrowed copy would dangle. */
+    ASSERT(session_set_data(store, sid, "k", "replaced") == 0);
+    ASSERT(strcmp(copy, "original") == 0);   /* copy is unaffected */
+
+    /* Destroy: frees the whole data list. A borrowed copy would dangle. */
+    session_destroy(store, sid);
+    ASSERT(strcmp(copy, "original") == 0);   /* copy is still valid */
+
+    free(copy);
+    free(sid);
+    session_store_destroy(store);
+
+    PASS();
+}
+
+/* Regression (audit #11): data operations keyed on a destroyed/expired session
+ * (or an unknown id) must fail safely — reads return NULL, writes/removes return
+ * -1 — rather than resurrecting data on a dead slot or aliasing a reused slot. */
+void test_session_data_ops_on_dead_session(void) {
+    TEST("session data ops on destroyed/unknown session fail safely");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    char *sid = session_create(store, 3600);
+    ASSERT(sid != NULL);
+    ASSERT(session_set_data(store, sid, "k", "v") == 0);
+
+    session_destroy(store, sid);
+
+    /* The id no longer resolves to an active session. */
+    ASSERT(session_get_data(store, sid, "k") == NULL);
+    ASSERT(session_set_data(store, sid, "k", "v2") == -1);   /* no resurrection */
+    ASSERT(session_remove_data(store, sid, "k") == -1);
+
+    /* An unknown id resolves to nothing either. */
+    ASSERT(session_get_data(store, "no-such-session-id", "k") == NULL);
+    ASSERT(session_set_data(store, "no-such-session-id", "k", "v") == -1);
+
+    free(sid);
+    session_store_destroy(store);
+
+    PASS();
+}
+
+/* Regression (Copilot review of audit #11): keyed data access must reclaim an
+ * expired session's fixed slot the same way session_get() does, so that with the
+ * keyed API as the primary path expired sessions don't linger until an explicit
+ * session_cleanup_expired(). */
+void test_session_keyed_access_reclaims_expired(void) {
+    TEST("keyed data access reclaims an expired session slot");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    char *sid = session_create(store, 1);   /* expires after ~1s */
+    ASSERT(sid != NULL);
+    ASSERT(session_set_data(store, sid, "k", "v") == 0);
+
+    sleep(2);   /* let the session expire */
+
+    /* Keyed access on the expired session returns NULL and reclaims the slot. */
+    ASSERT(session_get_data(store, sid, "k") == NULL);
+
+    /* The access above already reclaimed the slot, so an explicit cleanup finds
+     * nothing left to free. (Without the reclaim this would return 1.) */
+    ASSERT(session_cleanup_expired(store) == 0);
 
     free(sid);
     session_store_destroy(store);
@@ -1355,11 +1451,11 @@ void test_session_null_handling(void) {
     /* All functions should handle NULL gracefully */
     ASSERT(session_create(NULL, 3600) == NULL);
     ASSERT(session_get(NULL, "test") == NULL);
-    ASSERT(session_get_data(NULL, "key") == NULL);
+    ASSERT(session_get_data(NULL, "test", "key") == NULL);
     ASSERT(session_get_id(NULL) == NULL);
     session_destroy(NULL, "test");
-    session_set_data(NULL, "key", "value");
-    session_remove_data(NULL, "key");
+    ASSERT(session_set_data(NULL, "test", "key", "value") == -1);
+    ASSERT(session_remove_data(NULL, "test", "key") == -1);
 
     PASS();
 }
@@ -4474,6 +4570,9 @@ int main(void) {
     test_session_store_create_destroy();
     test_session_create_get();
     test_session_data_operations();
+    test_session_get_data_owned_copy();
+    test_session_data_ops_on_dead_session();
+    test_session_keyed_access_reclaims_expired();
     test_session_destroy_session();
     test_session_expiration();
     test_session_cleanup();
