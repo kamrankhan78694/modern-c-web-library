@@ -527,7 +527,7 @@ static double _parse_quality(const char *param) {
     }
     
     param += 2;
-    while (*param == ' ' || *param == '\t') {   /* tolerate "q= 0.8" like strtod did */
+    while (*param && isspace((unsigned char)*param)) {   /* match strtod's leading-ws skip */
         param++;
     }
 
