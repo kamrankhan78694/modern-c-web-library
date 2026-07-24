@@ -2755,6 +2755,16 @@ void test_input_validate_email(void) {
     ASSERT(input_validate_email("")                     == false);
     ASSERT(input_validate_email(NULL)                   == false);
 
+    /* Control characters / whitespace must be rejected (header/log injection). */
+    ASSERT(input_validate_email("user@example.com\r\nBcc: evil@x.com") == false); /* CRLF injection */
+    ASSERT(input_validate_email("user\r@example.com")   == false); /* bare CR */
+    ASSERT(input_validate_email("user\n@example.com")   == false); /* bare LF */
+    ASSERT(input_validate_email("user\t@example.com")   == false); /* HTAB */
+    ASSERT(input_validate_email("user @example.com")    == false); /* space */
+    ASSERT(input_validate_email("user@exa mple.com")    == false); /* interior space */
+    ASSERT(input_validate_email("user@example.com\x01") == false); /* C0 control */
+    ASSERT(input_validate_email("user@example.com\x7f") == false); /* DEL */
+
     PASS();
 }
 
