@@ -90,6 +90,7 @@ set(WEBLIB_SOURCES_TLS
     src/tls/x25519.c
     src/tls/sha512.c
     src/tls/ed25519.c
+    src/tls/ed25519_key.c
 )
 
 if(EMSCRIPTEN)
