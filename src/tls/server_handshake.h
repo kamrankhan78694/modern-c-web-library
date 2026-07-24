@@ -134,7 +134,9 @@ void tls_server_hs_init(tls_server_hs_t *hs);
  * On success (phase START only): validates the offered parameters, performs the
  * X25519 key agreement (with the §7.4.2 all-zero check), runs the key schedule,
  * builds and transcript-absorbs the server flight, and writes the response to
- * `out` (capacity `out_cap`), setting *out_len to its length. The response is:
+ * `out` (capacity `out_cap`), setting *out_len to its length. `out` and `out_len`
+ * must be non-NULL — a NULL `out_len` is rejected with internal_error so a caller
+ * always learns the response length. The response is:
  *
  *     ServerHello record  (TLSPlaintext, ContentType handshake)
  *   || protected flight   (one TLSCiphertext, ContentType application_data,

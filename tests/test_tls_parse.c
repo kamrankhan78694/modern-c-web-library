@@ -949,6 +949,14 @@ static void test_server_handshake(void) {
                                                out, 10, &out_len) == 0
                && tls_server_hs_alert(&hs) == TLS_ALERT_INTERNAL_ERROR);
 
+    /* B4b: a NULL out_len is a usage error (the caller must always learn the
+     * response length) -> internal_error, never a "successful" unknown-length send. */
+    tls_server_hs_init(&hs);
+    check_true("srv hs: NULL out_len -> internal_error",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH, sizeof KAT_CH,
+                                               out, sizeof out, NULL) == 0
+               && tls_server_hs_alert(&hs) == TLS_ALERT_INTERNAL_ERROR);
+
     /* ===== Part C: parameter negotiation (correct alerts) ===== */
     {
         static const uint8_t p_ver[]  = {0x00,0x2b,0x00,0x03,0x02,0x03,0x04};
@@ -982,14 +990,19 @@ static void test_server_handshake(void) {
         long off;
         memcpy(ch, KAT_CH, sizeof KAT_CH);
         off = find_bytes(ch, sizeof ch, p_share, sizeof p_share);
-        if (off >= 0 && (size_t)off + 4 + 32 <= sizeof ch) {
+        if (off < 0 || (size_t)off + 4 + 32 > sizeof ch) {
+            /* The anchor must exist. Without this guard, a ClientHello-layout change
+             * would leave the share unmodified and the test would fail with a
+             * misleading alert mismatch instead of a clear "anchor missing". */
+            check_true("srv hs: all-zero ECDH share test anchor located", 0);
+        } else {
             memset(ch + off + 4, 0x00, 32);   /* all-zero key_exchange */
+            tls_server_hs_init(&hs);
+            check_true("srv hs: all-zero ECDH share -> illegal_parameter",
+                       tls_server_hs_read_client_hello(&hs, &cfg, ch, sizeof ch,
+                                                       out, sizeof out, &out_len) == 0
+                       && tls_server_hs_alert(&hs) == TLS_ALERT_ILLEGAL_PARAMETER);
         }
-        tls_server_hs_init(&hs);
-        check_true("srv hs: all-zero ECDH share -> illegal_parameter",
-                   tls_server_hs_read_client_hello(&hs, &cfg, ch, sizeof ch,
-                                                   out, sizeof out, &out_len) == 0
-                   && tls_server_hs_alert(&hs) == TLS_ALERT_ILLEGAL_PARAMETER);
     }
 
     /* D2: a Finished with the wrong verify_data (but valid AEAD) -> decrypt_error.

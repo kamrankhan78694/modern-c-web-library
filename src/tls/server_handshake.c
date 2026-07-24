@@ -110,9 +110,11 @@ int tls_server_hs_read_client_hello(tls_server_hs_t *hs,
     if (hs->phase != TLS_SERVER_HS_START) {
         return fail(hs, TLS_ALERT_UNEXPECTED_MESSAGE);
     }
-    if (cfg == NULL || ch_msg == NULL || out == NULL ||
+    if (cfg == NULL || ch_msg == NULL || out == NULL || out_len == NULL ||
         cfg->cert_der == NULL || cfg->ed25519_seed == NULL || cfg->ed25519_pub == NULL ||
         cfg->server_eph_sk == NULL || cfg->server_random == NULL) {
+        /* out_len is required: a caller must always learn the response length so it
+         * never sends an unknown/unbounded number of bytes (cf. tls_record_seal). */
         return fail(hs, TLS_ALERT_INTERNAL_ERROR);
     }
 
@@ -255,9 +257,7 @@ int tls_server_hs_read_client_hello(tls_server_hs_t *hs,
     }
     out_used += rec_len;
 
-    if (out_len != NULL) {
-        *out_len = out_used;
-    }
+    *out_len = out_used;   /* out_len is guaranteed non-NULL (checked above) */
     hs->phase = TLS_SERVER_HS_WAIT_FINISHED;
     ok = 1;
 
