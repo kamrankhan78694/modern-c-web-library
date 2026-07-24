@@ -3186,9 +3186,12 @@ void test_health_check_endpoint(void) {
     ASSERT(strstr(buf, "\"status\"") != NULL);
     ASSERT(strstr(buf, "\"ok\"") != NULL);
     ASSERT(strstr(buf, "\"uptime_seconds\"") != NULL);
-    /* Exactly one Content-Type: application/json — not a second, conflicting
-     * text/plain from send_text (audit #34). */
-    ASSERT(strstr(buf, "application/json") != NULL);
+    /* Exactly one Content-Type header, application/json — not a second,
+     * conflicting or duplicate Content-Type from send_text (audit #34). */
+    const char *ct = strstr(buf, "Content-Type:");
+    ASSERT(ct != NULL);
+    ASSERT(strstr(ct, "application/json") != NULL);
+    ASSERT(strstr(ct + 1, "\r\nContent-Type:") == NULL); /* no duplicate header line */
     ASSERT(strstr(buf, "text/plain") == NULL);
 
     http_server_stop(server);
