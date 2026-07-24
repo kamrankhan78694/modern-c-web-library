@@ -741,6 +741,24 @@ static void test_record(void) {
     check_true("record seal rejects too-small output",
                tls_record_seal(key, iv, 0, TLS_CONTENT_HANDSHAKE,
                                (const uint8_t *)c0, strlen(c0), 0, out, 10, &out_len) == 0);
+
+    /* Illegal inner content types are rejected (only alert/handshake/appdata). */
+    check_true("record seal rejects invalid content type",
+               tls_record_seal(key, iv, 0, 99, (const uint8_t *)c0, strlen(c0), 0,
+                               out, sizeof out, &out_len) == 0);
+    check_true("record seal rejects change_cipher_spec inner type",
+               tls_record_seal(key, iv, 0, TLS_CONTENT_CHANGE_CIPHER_SPEC,
+                               (const uint8_t *)c0, strlen(c0), 0, out, sizeof out, &out_len) == 0);
+
+    /* Content past the 2^14 plaintext limit is rejected. */
+    {
+        static uint8_t big[TLS_RECORD_MAX_PLAINTEXT + 1];
+        static uint8_t bigout[TLS_RECORD_MAX_PLAINTEXT + 64];
+        memset(big, 0x41, sizeof big);
+        check_true("record seal rejects content over 2^14",
+                   tls_record_seal(key, iv, 0, TLS_CONTENT_APPLICATION_DATA,
+                                   big, sizeof big, 0, bigout, sizeof bigout, &out_len) == 0);
+    }
 }
 #endif /* WEBLIB_TLS */
 

@@ -28,6 +28,9 @@
 /* RFC 8446 §5.2: TLSCiphertext.length (the encrypted_record) MUST NOT exceed
  * 2^14 + 256 bytes. */
 #define TLS_RECORD_MAX_CIPHERTEXT (16384 + 256)
+/* RFC 8446 §5.1: TLSPlaintext.content (the inner content, excluding the
+ * ContentType byte and any padding) MUST NOT exceed 2^14 bytes. */
+#define TLS_RECORD_MAX_PLAINTEXT 16384
 
 /* TLS 1.3 inner ContentType values (RFC 8446 §5.1). */
 #define TLS_CONTENT_CHANGE_CIPHER_SPEC 20
@@ -36,12 +39,13 @@
 #define TLS_CONTENT_APPLICATION_DATA   23
 
 /*
- * Seal one record: encrypt `content` (length `content_len`) of inner type
- * `content_type` with `padding_len` trailing zero-padding bytes, writing the full
- * TLSCiphertext (5-byte header + encrypted_record) to `out`. On success returns 1
- * and sets *out_len to the total record size. Returns 0 on a NULL/oversized
- * argument, a record that would exceed the 2^14+256 limit, `out` too small, or an
- * AEAD failure (in which case `out` is zeroed).
+ * Seal one record: encrypt `content` (length `content_len`, at most 2^14) of
+ * inner type `content_type` (alert, handshake, or application_data) with
+ * `padding_len` trailing zero-padding bytes, writing the full TLSCiphertext
+ * (5-byte header + encrypted_record) to `out`. On success returns 1 and sets
+ * *out_len to the total record size. Returns 0 on a NULL argument, an illegal
+ * `content_type`, a content/record that would exceed the 2^14 / 2^14+256 limits,
+ * `out` too small, or an AEAD failure (in which case `out` is zeroed).
  */
 int tls_record_seal(const uint8_t key[TLS_RECORD_KEY_LEN],
                     const uint8_t iv[TLS_RECORD_IV_LEN], uint64_t seq,
@@ -53,8 +57,10 @@ int tls_record_seal(const uint8_t key[TLS_RECORD_KEY_LEN],
  * writing the recovered content to `out`, the inner ContentType to *content_type,
  * and the content length to *content_len. Returns 1 on success, 0 on a malformed
  * header, an AEAD authentication failure (no plaintext is released), an all-zero
- * inner plaintext (no ContentType), or `out` too small. The trailing zero padding
- * is removed in constant time with respect to the padding length (§5.4).
+ * inner plaintext (no ContentType), an illegal recovered ContentType or content
+ * exceeding 2^14, or `out` too small. The trailing zero padding is removed in
+ * constant time with respect to the padding length (§5.4). Outputs are written
+ * only on success.
  */
 int tls_record_open(const uint8_t key[TLS_RECORD_KEY_LEN],
                     const uint8_t iv[TLS_RECORD_IV_LEN], uint64_t seq,

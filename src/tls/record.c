@@ -31,6 +31,15 @@ static void record_nonce(const uint8_t iv[TLS_RECORD_IV_LEN], uint64_t seq,
     }
 }
 
+/* The inner ContentType of a TLS 1.3 protected record is alert, handshake, or
+ * application_data. change_cipher_spec is only ever an unprotected record, and
+ * other values are invalid — reject them either way. */
+static int is_valid_inner_type(uint8_t t) {
+    return t == TLS_CONTENT_ALERT ||
+           t == TLS_CONTENT_HANDSHAKE ||
+           t == TLS_CONTENT_APPLICATION_DATA;
+}
+
 int tls_record_seal(const uint8_t key[TLS_RECORD_KEY_LEN],
                     const uint8_t iv[TLS_RECORD_IV_LEN], uint64_t seq,
                     uint8_t content_type, const uint8_t *content, size_t content_len,
@@ -44,9 +53,12 @@ int tls_record_seal(const uint8_t key[TLS_RECORD_KEY_LEN],
     if (content == NULL && content_len != 0) {
         return 0;
     }
-    /* Bound each length so the additions below cannot overflow, then enforce the
-     * RFC 8446 §5.2 ciphertext-size limit. */
-    if (content_len > TLS_RECORD_MAX_CIPHERTEXT || padding_len > TLS_RECORD_MAX_CIPHERTEXT) {
+    if (!is_valid_inner_type(content_type)) {
+        return 0;
+    }
+    /* RFC 8446 §5.1 caps the plaintext content at 2^14; bound padding too so the
+     * additions below cannot overflow, then enforce the §5.2 ciphertext limit. */
+    if (content_len > TLS_RECORD_MAX_PLAINTEXT || padding_len > TLS_RECORD_MAX_CIPHERTEXT) {
         return 0;
     }
     inner_len = content_len + 1 + padding_len;         /* content || type || zeros */
@@ -154,8 +166,18 @@ int tls_record_open(const uint8_t key[TLS_RECORD_KEY_LEN],
         return 0;
     }
 
-    *content_type = out[type_pos - 1];
-    *content_len = type_pos - 1;           /* content precedes the type byte, in place */
+    {
+        uint8_t type = out[type_pos - 1];
+        size_t len = type_pos - 1;         /* content precedes the type byte */
+        /* Reject a malformed inner plaintext: an illegal ContentType or content
+         * exceeding the 2^14 plaintext limit. Outputs are set only on success. */
+        if (!is_valid_inner_type(type) || len > TLS_RECORD_MAX_PLAINTEXT) {
+            secure_zero(out, inner_len);
+            return 0;
+        }
+        *content_type = type;
+        *content_len = len;                /* content is in place at out[0..len) */
+    }
     return 1;
 }
 
