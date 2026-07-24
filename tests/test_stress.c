@@ -1252,7 +1252,14 @@ void test_stress_listen_failure_cleanup(void) {
         }
         http_server_set_thread_count(server, 1);
 
-        int rc = http_server_listen(server, 19044);
+        /* Port 0 => the OS assigns a free ephemeral port, so bind()/listen()
+         * succeed regardless of what else is bound. This is essential: if we
+         * hard-coded a port and it happened to be busy, listen() would fail
+         * EARLY (before server->running is set true) and the buggy code path
+         * would never be reached — the test would pass as a false negative.
+         * With port 0 the only remaining failure point is the post-startup
+         * thread-pool creation we are deliberately forcing. */
+        int rc = http_server_listen(server, 0);
         if (rc == 0) {
             /* Could not force the failure — tear the running server down cleanly
              * and report SKIP (this path must itself be crash-free). */
