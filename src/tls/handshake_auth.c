@@ -16,10 +16,13 @@
 #include "ed25519.h"
 #include <string.h>
 
-/* Server CertificateVerify content preamble (RFC 8446 §4.4.3). */
+/* Server CertificateVerify content preamble (RFC 8446 §4.4.3). Lengths are
+ * derived from the label literal and the hash size so the layout can't silently
+ * drift if either changes. */
 #define CV_CONTEXT     "TLS 1.3, server CertificateVerify"
-#define CV_CONTEXT_LEN 33                                   /* strlen(CV_CONTEXT) */
-#define CV_CONTENT_LEN (64 + CV_CONTEXT_LEN + 1 + 32)       /* = 130 */
+#define CV_CONTEXT_LEN (sizeof(CV_CONTEXT) - 1)             /* label length, sans NUL */
+#define CV_PAD_LEN     64                                   /* octet 0x20 * 64 (fixed) */
+#define CV_CONTENT_LEN (CV_PAD_LEN + CV_CONTEXT_LEN + 1 + SHA256_DIGEST_SIZE)  /* = 130 */
 
 void tls_transcript_init(tls_transcript_t *t) {
     sha256_init(&t->sha);
@@ -48,10 +51,10 @@ void tls_finished_verify_data(const uint8_t finished_key[32],
  * bytes are public (derived from the transcript), so no wiping is needed. */
 static void cert_verify_content(const uint8_t transcript_hash[32],
                                 uint8_t content[CV_CONTENT_LEN]) {
-    memset(content, 0x20, 64);
-    memcpy(content + 64, CV_CONTEXT, CV_CONTEXT_LEN);
-    content[64 + CV_CONTEXT_LEN] = 0x00;
-    memcpy(content + 64 + CV_CONTEXT_LEN + 1, transcript_hash, 32);
+    memset(content, 0x20, CV_PAD_LEN);
+    memcpy(content + CV_PAD_LEN, CV_CONTEXT, CV_CONTEXT_LEN);
+    content[CV_PAD_LEN + CV_CONTEXT_LEN] = 0x00;
+    memcpy(content + CV_PAD_LEN + CV_CONTEXT_LEN + 1, transcript_hash, SHA256_DIGEST_SIZE);
 }
 
 void tls_sign_server_cert_verify(const uint8_t seed[32], const uint8_t pubkey[32],
