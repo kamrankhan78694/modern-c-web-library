@@ -1460,12 +1460,13 @@ void test_session_cookie_idle_timeout(void) {
     session_store_t *store = session_store_create();
     ASSERT(store != NULL);
 
-    /* Idle reclamation: an untouched session cookie is reclaimed after the idle
-     * window (before the fix, max_age==0 never expired -> cleanup returned 0). */
+    /* Idle reclamation: a session cookie left idle past the timeout (measured
+     * from its last access, the session_get below) is reclaimed. Before the fix,
+     * max_age==0 never expired -> cleanup returned 0. */
     char *sid = session_create(store, 0);
     ASSERT(sid != NULL);
     session_store_set_idle_timeout(store, 1);
-    ASSERT(session_get(store, sid) != NULL);        /* alive now */
+    ASSERT(session_get(store, sid) != NULL);        /* alive now; refreshes last_accessed */
     sleep(2);                                        /* idle past the 1s window */
     ASSERT(session_cleanup_expired(store) == 1);     /* reclaimed */
     ASSERT(session_get(store, sid) == NULL);

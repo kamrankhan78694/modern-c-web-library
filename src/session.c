@@ -239,7 +239,13 @@ static bool _session_expired_locked(const session_store_t *store,
     if (s->max_age > 0) {
         return s->expires_at > 0 && now >= s->expires_at;
     }
-    return store->idle_timeout > 0 && (now - s->last_accessed) >= store->idle_timeout;
+    /* Guard `now > last_accessed` before subtracting: if the wall clock moved
+     * backwards (or time_t is unsigned) the difference could otherwise underflow
+     * and reclaim a fresh session. When now <= last_accessed the session is by
+     * definition not idle, so it is kept. */
+    return store->idle_timeout > 0 &&
+           now > s->last_accessed &&
+           (now - s->last_accessed) >= (time_t)store->idle_timeout;
 }
 
 session_t *session_get(session_store_t *store, const char *session_id) {
