@@ -23,11 +23,14 @@ void car25519(gf o) {
         c = o[i] >> 16;
         o[(i + 1) * (i < 15)] += c - 1 + 37 * (c - 1) * (i == 15);
         /* c can be negative, so fold the carry back with multiplication rather
-         * than `c << 16`: a left shift of a negative value is undefined behavior
-         * (flagged by UBSan). c * 2^16 is arithmetically identical for every
-         * in-range c and cannot overflow int64 given TweetNaCl's limb bounds
-         * (|c| < 2^40, so |c * 2^16| < 2^56 << INT64_MAX). */
-        o[i] -= c * 65536;
+         * than `c << 16`: left-shifting a negative value is undefined behavior
+         * (flagged by UBSan). Scaling by the limb radix 2^16 is defined and
+         * arithmetically identical for every in-range c, and cannot overflow
+         * int64 given TweetNaCl's limb bounds (|c| < 2^40, so |c * 2^16| stays
+         * well below INT64_MAX). The parentheses matter: `*` binds tighter than
+         * `<<`, so `c * ((int64_t)1 << 16)` scales c, whereas dropping them would
+         * re-form the very `c << 16` shift this avoids. */
+        o[i] -= c * ((int64_t)1 << 16);
     }
 }
 
