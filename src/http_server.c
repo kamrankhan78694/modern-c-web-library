@@ -408,9 +408,14 @@ int http_server_listen(http_server_t *server, uint16_t port) {
 
         /* Arm the idle/slow-loris reaper (audit #2). It re-arms itself, so one
          * timer is always pending — which also bounds shutdown latency by keeping
-         * the poll wait finite. */
-        event_loop_add_timeout(server->event_loop, ASYNC_REAPER_INTERVAL_MS,
-                               async_reaper_cb, server);
+         * the poll wait finite. If it can't be armed, async mode would run with no
+         * idle bound and a stop() could not wake the poll, so fail the listen. */
+        if (event_loop_add_timeout(server->event_loop, ASYNC_REAPER_INTERVAL_MS,
+                                   async_reaper_cb, server) < 0) {
+            fprintf(stderr, "Failed to arm async idle reaper\n");
+            _listen_fail_cleanup(server);
+            return -1;
+        }
 
         /* Run event loop in main thread (blocks until stopped). */
         event_loop_run(server->event_loop);
@@ -2459,8 +2464,15 @@ static void async_reaper_cb(int timer_fd, int events, void *user_data) {
     }
 
     if (server->running) {
-        event_loop_add_timeout(server->event_loop, ASYNC_REAPER_INTERVAL_MS,
-                               async_reaper_cb, server);
+        /* One-shot timers are removed before this callback runs, so re-arming
+         * keeps exactly one reaper timer pending and cannot exhaust MAX_TIMERS on
+         * its own. Surface a failure (e.g. the user filled the timer table) rather
+         * than silently dropping the reap-and-shutdown-wake guarantee. */
+        if (event_loop_add_timeout(server->event_loop, ASYNC_REAPER_INTERVAL_MS,
+                                   async_reaper_cb, server) < 0) {
+            fprintf(stderr, "Failed to re-arm async idle reaper; idle connections "
+                            "will not be reaped\n");
+        }
     }
 }
 

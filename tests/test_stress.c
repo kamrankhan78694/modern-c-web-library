@@ -1263,7 +1263,7 @@ void test_stress_async_idle_reaper(void) {
      * idle connection: a blocking recv then returns 0 (EOF) rather than timing
      * out. n < 0 (the 4s recv timeout fired) means it was NOT reaped -> fail. */
     struct timeval tv = { 4, 0 };
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    ASSERT(setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0);
     char buf[64];
     ssize_t n = recv(sock, buf, sizeof(buf), 0);
     ASSERT(n >= 0);   /* 0 = reaped/closed; not a timeout */
