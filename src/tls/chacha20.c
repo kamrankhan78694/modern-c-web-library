@@ -74,6 +74,11 @@ void chacha20_block(const uint8_t key[32], uint32_t counter,
     for (i = 0; i < 16; i++) {
         store32_le(out + 4 * i, x[i] + state[i]);
     }
+
+    /* Wipe key-derived working state from the stack (state holds the key words,
+     * x the mixed state), matching the hygiene of the SHA-256/HMAC module. */
+    secure_zero(state, sizeof(state));
+    secure_zero(x, sizeof(x));
 }
 
 void chacha20_encrypt(const uint8_t key[32], uint32_t counter,

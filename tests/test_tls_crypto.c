@@ -68,11 +68,22 @@ static void test_chacha20_encrypt(void) {
         "Ladies and Gentlemen of the class of '99: If I could offer you "
         "only one tip for the future, sunscreen would be it.";
     uint8_t ct[114];
+    uint8_t rt[114];
+    size_t ptlen = strlen(pt);
     int i;
     for (i = 0; i < 32; i++) key[i] = (uint8_t)i;
 
-    chacha20_encrypt(key, 1, nonce, (const uint8_t *)pt, strlen(pt), ct);
-    check_hex("chacha20_encrypt (RFC 8439 2.4.2)", ct, sizeof(ct),
+    /* Guard the single message length so a future edit to `pt` can't silently
+     * overflow ct/rt or compare uninitialized tail bytes. */
+    if (ptlen != sizeof(ct)) {
+        printf("FAIL: chacha20 test plaintext is %zu bytes, expected %zu\n",
+               ptlen, sizeof(ct));
+        g_failures++;
+        return;
+    }
+
+    chacha20_encrypt(key, 1, nonce, (const uint8_t *)pt, ptlen, ct);
+    check_hex("chacha20_encrypt (RFC 8439 2.4.2)", ct, ptlen,
               "6e2e359a2568f98041ba0728dd0d6981"
               "e97e7aec1d4360c20a27afccfd9fae0b"
               "f91b65c5524733ab8f593dabcd62b357"
@@ -83,15 +94,12 @@ static void test_chacha20_encrypt(void) {
               "874d");
 
     /* Round-trip: decrypting the ciphertext restores the plaintext. */
-    {
-        uint8_t rt[114];
-        chacha20_encrypt(key, 1, nonce, ct, sizeof(ct), rt);
-        if (memcmp(rt, pt, sizeof(ct)) != 0) {
-            printf("FAIL: chacha20 encrypt/decrypt round-trip\n");
-            g_failures++;
-        } else {
-            printf("PASS: chacha20 encrypt/decrypt round-trip\n");
-        }
+    chacha20_encrypt(key, 1, nonce, ct, ptlen, rt);
+    if (memcmp(rt, pt, ptlen) != 0) {
+        printf("FAIL: chacha20 encrypt/decrypt round-trip\n");
+        g_failures++;
+    } else {
+        printf("PASS: chacha20 encrypt/decrypt round-trip\n");
     }
 }
 #endif /* WEBLIB_TLS */
