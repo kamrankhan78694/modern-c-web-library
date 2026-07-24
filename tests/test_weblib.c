@@ -1,6 +1,7 @@
 #include "kamran.k"
 #include "db_pool.h"
 #include "thread_pool.h"
+#include "crypto/sha256.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1912,6 +1913,75 @@ void test_apikey_auth_create_destroy(void) {
     /* Destroy should be safe even without create */
     apikey_auth_middleware_destroy();
     apikey_auth_middleware_destroy();
+
+    PASS();
+}
+
+/* Compare a byte buffer against a lowercase-hex string (exact length + value). */
+static bool _hex_eq(const uint8_t *buf, size_t buflen, const char *hex) {
+    if (strlen(hex) != buflen * 2) return false;
+    for (size_t i = 0; i < buflen; i++) {
+        char pair[3] = { hex[i * 2], hex[i * 2 + 1], '\0' };
+        char *end = NULL;
+        unsigned long v = strtoul(pair, &end, 16);
+        if (end != pair + 2 || buf[i] != (uint8_t)v) return false;
+    }
+    return true;
+}
+
+/* SHA-256 known-answer tests (FIPS 180-4 / RFC 6234). Verifies the shared crypto
+ * module directly against the authoritative vectors — previously the SHA-256 code
+ * was only exercised indirectly through JWT signature checks. */
+void test_sha256_kat(void) {
+    TEST("sha256 (RFC 6234 known-answer)");
+
+    uint8_t d[SHA256_DIGEST_SIZE];
+
+    sha256((const uint8_t *)"abc", 3, d);
+    ASSERT(_hex_eq(d, sizeof(d), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+
+    sha256((const uint8_t *)"", 0, d);
+    ASSERT(_hex_eq(d, sizeof(d), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+
+    sha256((const uint8_t *)"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56, d);
+    ASSERT(_hex_eq(d, sizeof(d), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"));
+
+    /* Streaming must equal one-shot: feed "abc" one byte at a time. */
+    sha256_ctx_t ctx;
+    sha256_init(&ctx);
+    sha256_update(&ctx, (const uint8_t *)"a", 1);
+    sha256_update(&ctx, (const uint8_t *)"b", 1);
+    sha256_update(&ctx, (const uint8_t *)"c", 1);
+    sha256_final(&ctx, d);
+    ASSERT(_hex_eq(d, sizeof(d), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+
+    PASS();
+}
+
+/* HMAC-SHA256 known-answer tests (RFC 4231). */
+void test_hmac_sha256_kat(void) {
+    TEST("hmac_sha256 (RFC 4231 known-answer)");
+
+    uint8_t mac[SHA256_DIGEST_SIZE];
+
+    /* Test Case 1: key = 0x0b x20, data = "Hi There". */
+    uint8_t key1[20];
+    memset(key1, 0x0b, sizeof(key1));
+    hmac_sha256(key1, sizeof(key1), (const uint8_t *)"Hi There", 8, mac);
+    ASSERT(_hex_eq(mac, sizeof(mac), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"));
+
+    /* Test Case 2: key = "Jefe", data = "what do ya want for nothing?". */
+    hmac_sha256((const uint8_t *)"Jefe", 4,
+                (const uint8_t *)"what do ya want for nothing?", 28, mac);
+    ASSERT(_hex_eq(mac, sizeof(mac), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"));
+
+    /* Test Case with a key longer than the block size (>64 bytes) exercises the
+     * key-is-hashed-first branch. Vector from RFC 4231 Test Case 6 (131-byte key). */
+    uint8_t key_long[131];
+    memset(key_long, 0xaa, sizeof(key_long));
+    hmac_sha256(key_long, sizeof(key_long),
+                (const uint8_t *)"Test Using Larger Than Block-Size Key - Hash Key First", 54, mac);
+    ASSERT(_hex_eq(mac, sizeof(mac), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"));
 
     PASS();
 }
@@ -4988,6 +5058,8 @@ int main(void) {
     /* Phase 6: Authentication middleware tests */
     test_basic_auth_create_destroy();
     test_apikey_auth_create_destroy();
+    test_sha256_kat();
+    test_hmac_sha256_kat();
     test_jwt_auth_create_destroy();
     test_jwt_auth_verify();
 
