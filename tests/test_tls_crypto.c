@@ -11,9 +11,35 @@
 
 #ifdef WEBLIB_TLS
 #include "chacha20.h"
+#include "poly1305.h"
 #endif
 
 static int g_failures = 0;
+
+static int hexval(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;   /* not a hex digit */
+}
+
+/* Decode exactly out_len bytes of hex from `hex`. Fails (marks g_failures, zeroes
+ * out) if the string is too short or contains a non-hex character — never reads
+ * past the terminating NUL. */
+static void from_hex(const char *hex, uint8_t *out, size_t out_len) {
+    size_t i;
+    for (i = 0; i < out_len; i++) {
+        int hi = 0, lo = 0;
+        if (hex[i * 2] == '\0' || hex[i * 2 + 1] == '\0' ||
+            (hi = hexval(hex[i * 2])) < 0 || (lo = hexval(hex[i * 2 + 1])) < 0) {
+            printf("FAIL: from_hex: short or non-hex input\n");
+            g_failures++;
+            memset(out, 0, out_len);
+            return;
+        }
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+}
 
 static void to_hex(const uint8_t *buf, size_t len, char *out) {
     static const char hexchars[] = "0123456789abcdef";
@@ -102,6 +128,54 @@ static void test_chacha20_encrypt(void) {
         printf("PASS: chacha20 encrypt/decrypt round-trip\n");
     }
 }
+
+/* Poly1305 one-time authenticator — RFC 8439 §2.5.2 plus edge cases (empty,
+ * exact block boundary, multi-block, all-zero, and r==0 -> tag==s). */
+static void test_poly1305(void) {
+    uint8_t key[32];
+    uint8_t tag[16];
+
+    /* §2.5.2: 34-byte message = two full blocks + a 2-byte partial. */
+    {
+        const char *msg = "Cryptographic Forum Research Group";
+        from_hex("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b", key, 32);
+        poly1305_mac(key, (const uint8_t *)msg, strlen(msg), tag);
+        check_hex("poly1305 (RFC 8439 2.5.2)", tag, 16, "a8061dc1305136c6c22b8baf0c0127a9");
+    }
+
+    /* Empty message: h stays 0, so tag == s (the HIGH 16 key bytes, 0103...f51b). */
+    poly1305_mac(key, (const uint8_t *)"", 0, tag);
+    check_hex("poly1305 (empty message)", tag, 16, "0103808afb0db2fd4abff6af4149f51b");
+
+    /* Exactly one full block (no partial tail). */
+    poly1305_mac(key, (const uint8_t *)"AAAAAAAAAAAAAAAA", 16, tag);
+    check_hex("poly1305 (16-byte exact block)", tag, 16, "de2bee86006afbcacfa53531f0e8a349");
+
+    /* Three full blocks. */
+    {
+        uint8_t m48[48];
+        memset(m48, 'A', sizeof(m48));
+        poly1305_mac(key, m48, sizeof(m48), tag);
+        check_hex("poly1305 (48-byte, 3 blocks)", tag, 16, "15ca928ec41e68d06bc625c742b0c956");
+    }
+
+    /* RFC 8439 A.3 #1: all-zero key + 64-byte zero message -> all-zero tag. */
+    {
+        uint8_t zk[32] = { 0 };
+        uint8_t zm[64] = { 0 };
+        poly1305_mac(zk, zm, sizeof(zm), tag);
+        check_hex("poly1305 (A.3 #1, all zero)", tag, 16, "00000000000000000000000000000000");
+    }
+
+    /* r == 0 (clamped) -> accumulator stays 0 -> tag == s. Exercises the case
+     * where no reduction subtraction is needed. */
+    {
+        const char *msg = "any message here, r is zero so tag=s";
+        from_hex("0000000000000000000000000000000036e5f6b5c5e06070f0efca96227a863e", key, 32);
+        poly1305_mac(key, (const uint8_t *)msg, strlen(msg), tag);
+        check_hex("poly1305 (r=0 -> tag=s)", tag, 16, "36e5f6b5c5e06070f0efca96227a863e");
+    }
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -111,6 +185,7 @@ int main(void) {
 #else
     test_chacha20_block();
     test_chacha20_encrypt();
+    test_poly1305();
 
     if (g_failures == 0) {
         printf("All TLS crypto KATs passed.\n");
