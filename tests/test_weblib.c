@@ -2017,6 +2017,11 @@ void test_base64_kat(void) {
     ASSERT(base64_decode(NULL, 4, out, sizeof(out)) == -1);
     ASSERT(base64_decode("Zm9v", 4, NULL, sizeof(out)) == -1);
 
+    /* Structurally invalid / empty inputs are errors, never silent success. */
+    ASSERT(base64_decode("    \r\n\t", 7, out, sizeof(out)) == -1);   /* all whitespace */
+    ASSERT(base64_decode("====", 4, out, sizeof(out)) == -1);         /* padding only */
+    ASSERT(base64_decode("Zm9vY", 5, out, sizeof(out)) == -1);        /* lone trailing symbol */
+
     PASS();
 }
 

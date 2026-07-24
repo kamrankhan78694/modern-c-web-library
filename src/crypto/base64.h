@@ -18,10 +18,15 @@
 /*
  * Decode standard Base64 (RFC 4648, the '+' '/' alphabet) from `input`
  * (`input_len` bytes) into `output` (capacity `output_len` bytes). ASCII
- * whitespace in the input is skipped, so PEM line-wrapped bodies decode directly;
- * decoding stops at the first '=' padding byte. Returns the number of decoded
- * bytes on success, or -1 on an invalid alphabet byte or if `output` is too
- * small. A NULL argument or `input_len == 0` returns -1.
+ * whitespace is skipped, so PEM line-wrapped bodies decode directly; decoding
+ * stops at the first '=' padding byte. Returns the number of decoded bytes
+ * (always >= 1) on success, or -1 on error.
+ *
+ * Errors (all return -1, fail-closed): a NULL argument or input_len == 0; an
+ * invalid alphabet byte; a truncated group (a lone trailing Base64 symbol); an
+ * output buffer too small; or an input that decodes to zero bytes (all
+ * whitespace / padding only). Callers therefore never need to separately check
+ * for an empty or truncated result.
  */
 int base64_decode(const char *input, size_t input_len,
                   unsigned char *output, size_t output_len);

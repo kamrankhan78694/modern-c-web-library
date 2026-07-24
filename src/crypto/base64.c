@@ -69,7 +69,9 @@ int base64_decode(const char *input, size_t input_len,
         }
 
         if (buf_count == 4) {
-            if (j + 3 > output_len) {
+            /* Overflow-safe capacity check: never form j + 3 (which could wrap
+             * for a huge j). j <= output_len is an invariant, so subtract. */
+            if (j > output_len || output_len - j < 3) {
                 return -1;   /* output buffer too small */
             }
             output[j++] = (unsigned char)((buf[0] << 2) | (buf[1] >> 4));
@@ -79,19 +81,31 @@ int base64_decode(const char *input, size_t input_len,
         }
     }
 
+    /* A lone trailing symbol cannot encode a byte: reject it rather than
+     * silently truncating (structurally invalid Base64). */
+    if (buf_count == 1) {
+        return -1;
+    }
+
     /* A trailing 2- or 3-symbol group encodes 1 or 2 final bytes. */
     if (buf_count >= 2) {
-        if (j + 1 > output_len) {
+        if (j > output_len || output_len - j < 1) {
             return -1;
         }
         output[j++] = (unsigned char)((buf[0] << 2) | (buf[1] >> 4));
 
         if (buf_count >= 3) {
-            if (j + 1 > output_len) {
+            if (j > output_len || output_len - j < 1) {
                 return -1;
             }
             output[j++] = (unsigned char)((buf[1] << 4) | (buf[2] >> 2));
         }
+    }
+
+    /* Decoding nothing (all whitespace, or padding only) is a malformed/empty
+     * body, not success — callers never receive a 0-length result. */
+    if (j == 0) {
+        return -1;
     }
 
     return (int)j;
