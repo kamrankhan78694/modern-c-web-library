@@ -18,6 +18,7 @@
 #include "sha512.h"
 #include "ed25519.h"
 #include "key_schedule.h"
+#include "record.h"
 #include "crypto/sha256.h"
 #endif
 
@@ -672,6 +673,93 @@ static void test_key_schedule(void) {
     check_hex("ks s_hs finished_key", fin, 32,
               "3517ba1c0647b82fe6db82add2ed8314b1ea4acb2c821f1dbcc1ffd557a975f6");
 }
+
+/* TLS 1.3 record protection (RFC 8446 §5). The sealed wire bytes are compared to
+ * an independent ChaCha20-Poly1305 record reference (itself validated against the
+ * RFC 8439 AEAD vector); the key/iv are a real key-schedule write_key/write_iv. */
+static void test_record(void) {
+    uint8_t key[32], iv[12];
+    uint8_t out[128], dec[128];
+    size_t out_len = 0, clen = 0;
+    uint8_t ctype = 0;
+    const char *c0 = "hello TLS 1.3 record";   /* 20 bytes */
+    const char *c1 = "application data";       /* 16 bytes */
+
+    from_hex("65b1acab64981f4a389f7cbb61960e188cba36c394347b6f2dec27815679627e", key, 32);
+    from_hex("49a58cdfb9fb269bfc6d10a7", iv, 12);
+
+    /* Seal seq 0, handshake, no padding — compare the whole record to the ref. */
+    check_true("record seal(seq0) ok",
+               tls_record_seal(key, iv, 0, TLS_CONTENT_HANDSHAKE,
+                               (const uint8_t *)c0, strlen(c0), 0,
+                               out, sizeof out, &out_len) == 1);
+    check_hex("record seal(seq0) wire (independent ref)", out, out_len,
+              "170303002522aa5fdade138fde8c5edbb5cb002c78c8ed69591ec672af40fc4d2087461f32eaa73adabb");
+    check_true("record open(seq0) round-trips",
+               tls_record_open(key, iv, 0, out, out_len, dec, sizeof dec, &clen, &ctype) == 1
+               && clen == strlen(c0) && ctype == TLS_CONTENT_HANDSHAKE
+               && memcmp(dec, c0, clen) == 0);
+
+    /* Seal seq 1, application_data, 4 padding bytes. */
+    check_true("record seal(seq1, pad4) ok",
+               tls_record_seal(key, iv, 1, TLS_CONTENT_APPLICATION_DATA,
+                               (const uint8_t *)c1, strlen(c1), 4,
+                               out, sizeof out, &out_len) == 1);
+    check_hex("record seal(seq1, pad4) wire (independent ref)", out, out_len,
+              "1703030025c8e36769115bdc08ec7dddf99e500cd6d4d189a16fb15c9a373e7d8ef0f9d7013f9b871449");
+    check_true("record open(seq1) strips padding, recovers type",
+               tls_record_open(key, iv, 1, out, out_len, dec, sizeof dec, &clen, &ctype) == 1
+               && clen == strlen(c1) && ctype == TLS_CONTENT_APPLICATION_DATA
+               && memcmp(dec, c1, clen) == 0);
+
+    /* Tamper a ciphertext byte -> AEAD auth failure, no plaintext released. */
+    out[10] ^= 0x01;
+    check_true("record open rejects tampered ciphertext",
+               tls_record_open(key, iv, 1, out, out_len, dec, sizeof dec, &clen, &ctype) == 0);
+    out[10] ^= 0x01;
+
+    /* Wrong sequence number -> wrong nonce -> auth failure. */
+    check_true("record open rejects wrong sequence number",
+               tls_record_open(key, iv, 2, out, out_len, dec, sizeof dec, &clen, &ctype) == 0);
+
+    /* Malformed records. */
+    check_true("record open rejects too-short record",
+               tls_record_open(key, iv, 1, out, 20, dec, sizeof dec, &clen, &ctype) == 0);
+    {
+        uint8_t bad[128];
+        memcpy(bad, out, out_len);
+        bad[0] = 0x16;   /* opaque_type must be 23 */
+        check_true("record open rejects wrong opaque_type",
+                   tls_record_open(key, iv, 1, bad, out_len, dec, sizeof dec, &clen, &ctype) == 0);
+        memcpy(bad, out, out_len);
+        bad[4] ^= 0x01;  /* header length no longer matches the record */
+        check_true("record open rejects length mismatch",
+                   tls_record_open(key, iv, 1, bad, out_len, dec, sizeof dec, &clen, &ctype) == 0);
+    }
+
+    /* Seal into an undersized buffer is rejected. */
+    check_true("record seal rejects too-small output",
+               tls_record_seal(key, iv, 0, TLS_CONTENT_HANDSHAKE,
+                               (const uint8_t *)c0, strlen(c0), 0, out, 10, &out_len) == 0);
+
+    /* Illegal inner content types are rejected (only alert/handshake/appdata). */
+    check_true("record seal rejects invalid content type",
+               tls_record_seal(key, iv, 0, 99, (const uint8_t *)c0, strlen(c0), 0,
+                               out, sizeof out, &out_len) == 0);
+    check_true("record seal rejects change_cipher_spec inner type",
+               tls_record_seal(key, iv, 0, TLS_CONTENT_CHANGE_CIPHER_SPEC,
+                               (const uint8_t *)c0, strlen(c0), 0, out, sizeof out, &out_len) == 0);
+
+    /* Content past the 2^14 plaintext limit is rejected. */
+    {
+        static uint8_t big[TLS_RECORD_MAX_PLAINTEXT + 1];
+        static uint8_t bigout[TLS_RECORD_MAX_PLAINTEXT + 64];
+        memset(big, 0x41, sizeof big);
+        check_true("record seal rejects content over 2^14",
+                   tls_record_seal(key, iv, 0, TLS_CONTENT_APPLICATION_DATA,
+                                   big, sizeof big, 0, bigout, sizeof bigout, &out_len) == 0);
+    }
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -688,6 +776,7 @@ int main(void) {
     test_x25519();
     test_ed25519();
     test_key_schedule();
+    test_record();
 
     if (g_failures == 0) {
         printf("All TLS crypto KATs passed.\n");
