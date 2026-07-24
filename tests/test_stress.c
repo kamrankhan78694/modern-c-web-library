@@ -1121,12 +1121,14 @@ void test_stress_host_header_enforcement(void) {
 
     /* HTTP/1.0 + Connection: keep-alive, NO Host -> still served, NOT 400 (the
      * old code would have required Host because keep-alive set keep_alive=true).
-     * keep-alive means the server holds the socket open, so the client read just
-     * times out after receiving the 200. */
+     * The server holds this keep-alive socket open, so a full-size drain would
+     * block until the 2s recv timeout; use a small buffer so _stress_send_request
+     * returns as soon as it fills (the status line + headers exceed 128 bytes). */
     const char *ka_1_0 =
         "GET /test HTTP/1.0\r\nConnection: keep-alive\r\n\r\n";
-    ASSERT(_stress_send_request(port, ka_1_0, response, sizeof(response)) == 0);
-    ASSERT(strstr(response, "200 OK") != NULL);
+    char ka_response[128];
+    ASSERT(_stress_send_request(port, ka_1_0, ka_response, sizeof(ka_response)) == 0);
+    ASSERT(strstr(ka_response, "200 OK") != NULL);
 
     http_server_stop(server);
     usleep(100000);
