@@ -1968,6 +1968,16 @@ void test_jwt_auth_create_destroy(void) {
  * the "alg" key and its value). A structural parse must reject it; a lenient skip
  * that treats ':' like whitespace would accept it. */
 #define JWT_ALG_NO_COLON "eyJhbGciIkhTMjU2In0.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5fQ.e8_VDkko9gFLk-HO1bo1QpuDUilzF66p8A26jdNh6BA"
+/* Validly-signed tokens exercising strict exp/nbf claim validation. Each is rejected
+ * only by the claim checks (alg/signature are fine):
+ *   ZERO    exp=0        -> at/before epoch = expired (no positive-only skip)
+ *   STRING  exp="9999.." -> present but a quoted string, not an integer
+ *   GARBAGE exp=9999..abc-> integer prefix with trailing garbage
+ *   NBFSTR  nbf="9999.." -> present-but-non-integer nbf (exp itself valid/future) */
+#define JWT_EXP_ZERO     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjowfQ.9bCfFADcsL8Ok2dN6ZlMsrB4thCkp1-J4eZ2_snAJLE"
+#define JWT_EXP_STRING   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjoiOTk5OTk5OTk5OSJ9.E_TSFaWjg6DdtrW9TIMz0Ahw2E4Q91u1my_iPq0Qxzw"
+#define JWT_EXP_GARBAGE  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5YWJjfQ.luT8G7r8RZlY2Cmqa9CYUGaYv5afPe8e5FOdwJFB_Ck"
+#define JWT_NBF_STRING   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5LCJuYmYiOiI5OTk5OTk5OTk5In0.jxTPLugrKJQGqQmA1te8TQJ10oAKN-Oxp14fU60cb7U"
 
 /* Run the JWT middleware over a request carrying `Authorization: Bearer <token>`
  * and return whether it authorized the request (true) or rejected it (false/401). */
@@ -2020,6 +2030,13 @@ void test_jwt_auth_verify(void) {
     /* Structural-parse guard: a malformed header with no ':' after the "alg" key
      * is rejected (a lenient colon-skip would wrongly accept it). */
     ASSERT(_jwt_authorizes(mw, JWT_ALG_NO_COLON) == false);
+
+    /* Strict claim validation: a present exp/nbf that is non-positive, a quoted
+     * string, or has trailing garbage must be rejected — not silently ignored. */
+    ASSERT(_jwt_authorizes(mw, JWT_EXP_ZERO) == false);     /* exp=0 -> expired */
+    ASSERT(_jwt_authorizes(mw, JWT_EXP_STRING) == false);   /* exp is a string */
+    ASSERT(_jwt_authorizes(mw, JWT_EXP_GARBAGE) == false);  /* exp=9999999999abc */
+    ASSERT(_jwt_authorizes(mw, JWT_NBF_STRING) == false);   /* nbf is a string */
 
     jwt_auth_middleware_destroy();
 
