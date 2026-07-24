@@ -40,6 +40,11 @@ int hkdf_expand(const uint8_t prk[HKDF_SHA256_LEN],
     if (okm_len == 0) {
         return 1;
     }
+    /* Guard the scratch-buffer size against size_t overflow (info_len is
+     * caller-controlled); an overflow would under-size the malloc below. */
+    if (info_len > SIZE_MAX - HKDF_SHA256_LEN - 1) {
+        return 0;
+    }
 
     /* Scratch for one HMAC input: T(prev) || info || counter. */
     buf_len = HKDF_SHA256_LEN + info_len + 1;
