@@ -80,6 +80,7 @@ option(WEBLIB_ENABLE_TLS "Build the experimental pure-C TLS 1.3 layer (native-on
 set(WEBLIB_SOURCES_TLS
     src/tls/tls.c
     src/tls/chacha20.c
+    src/tls/poly1305.c
 )
 
 if(EMSCRIPTEN)
