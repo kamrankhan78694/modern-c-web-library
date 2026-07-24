@@ -20,7 +20,12 @@
 
 typedef struct {
     uint64_t state[8];
-    uint64_t count;      /* total message bytes (bit length is count*8) */
+    /* Total message bytes. This is a 64-bit byte counter, so the maximum
+     * supported message length is 2^64-1 bytes (~1.8e19). SHA-512's padding
+     * carries a 128-bit *bit* length; the bits above what a 64-bit byte count can
+     * express are always 0 here — that ceiling is unreachable for any real input
+     * (and vastly exceeds the tiny messages Ed25519 hashes). */
+    uint64_t count;
     uint8_t  buffer[SHA512_BLOCK_SIZE];
 } sha512_ctx_t;
 

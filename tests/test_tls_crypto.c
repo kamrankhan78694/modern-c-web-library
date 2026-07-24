@@ -410,6 +410,21 @@ static void test_sha512(void) {
                       "fa7b12b47d77b694de488ace8d9a65967dc96df599727d3292a8d9d447709c97");
         }
     }
+
+    /* Input sensitivity: a single-bit change in the message must change the
+     * digest. A committed guard against a degenerate/stub or constant-returning
+     * implementation (complements the dev-time known-answer negative controls). */
+    {
+        uint8_t da[SHA512_DIGEST_SIZE];
+        uint8_t db[SHA512_DIGEST_SIZE];
+        sha512((const uint8_t *)"abc", 3, da);
+        sha512((const uint8_t *)"abd", 3, db);   /* 'c' ^ 0x07 = 'd' */
+        if (memcmp(da, db, sizeof(da)) == 0) {
+            printf("FAIL: sha512 not input-sensitive (digest unchanged)\n"); g_failures++;
+        } else {
+            printf("PASS: sha512 input-sensitive (1-byte change alters digest)\n");
+        }
+    }
 }
 
 /* X25519 ECDH (RFC 7748) — §5.2 scalar-mult vectors, §6.1 base point + agreement,
