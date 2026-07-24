@@ -793,10 +793,16 @@ static jwt_claim_status_t jwt_claim_int(const char *payload_json, const char *ke
     if (!json_skip_to_value(&v)) {
         return JWT_CLAIM_INVALID;      /* no key:value separator */
     }
+    /* A JSON number starts with '-' or a digit. strtol() would also accept a leading
+     * '+' and further leading whitespace, neither of which is valid JSON, so gate the
+     * first byte explicitly. */
+    if (*v != '-' && !(*v >= '0' && *v <= '9')) {
+        return JWT_CLAIM_INVALID;      /* not a bare number (quoted string, '+', ...) */
+    }
     char *endptr = NULL;
     long val = strtol(v, &endptr, 10);
     if (endptr == v) {
-        return JWT_CLAIM_INVALID;      /* not a bare number (e.g. a quoted string) */
+        return JWT_CLAIM_INVALID;      /* e.g. a lone '-' */
     }
     /* The integer must be terminated by optional whitespace then a value delimiter;
      * anything else (e.g. "123abc") is malformed. */

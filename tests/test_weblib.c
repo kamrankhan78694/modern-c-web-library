@@ -1978,6 +1978,8 @@ void test_jwt_auth_create_destroy(void) {
 #define JWT_EXP_STRING   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjoiOTk5OTk5OTk5OSJ9.E_TSFaWjg6DdtrW9TIMz0Ahw2E4Q91u1my_iPq0Qxzw"
 #define JWT_EXP_GARBAGE  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5YWJjfQ.luT8G7r8RZlY2Cmqa9CYUGaYv5afPe8e5FOdwJFB_Ck"
 #define JWT_NBF_STRING   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5LCJuYmYiOiI5OTk5OTk5OTk5In0.jxTPLugrKJQGqQmA1te8TQJ10oAKN-Oxp14fU60cb7U"
+/* exp with a leading '+': strtol tolerates it but JSON does not. */
+#define JWT_EXP_PLUS     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjorOTk5OTk5OTk5OX0.fblFCsz1pZkpFEkZ4Dptv_R_UE71Mjdwi3sSuZFCGBw"
 
 /* Run the JWT middleware over a request carrying `Authorization: Bearer <token>`
  * and return whether it authorized the request (true) or rejected it (false/401). */
@@ -2037,6 +2039,7 @@ void test_jwt_auth_verify(void) {
     ASSERT(_jwt_authorizes(mw, JWT_EXP_STRING) == false);   /* exp is a string */
     ASSERT(_jwt_authorizes(mw, JWT_EXP_GARBAGE) == false);  /* exp=9999999999abc */
     ASSERT(_jwt_authorizes(mw, JWT_NBF_STRING) == false);   /* nbf is a string */
+    ASSERT(_jwt_authorizes(mw, JWT_EXP_PLUS) == false);     /* exp=+9999999999 */
 
     jwt_auth_middleware_destroy();
 
