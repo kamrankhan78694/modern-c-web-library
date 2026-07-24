@@ -72,10 +72,21 @@ set(WEBLIB_SOURCES_NATIVE_ONLY
     src/benchmark.c
 )
 
+# Experimental pure-C TLS 1.3 layer (native-only, UNAUDITED). OFF by default: with
+# the option off, nothing below is added and the build is byte-identical to a
+# no-TLS build. Mirrors the WEBLIB_SOURCES_NATIVE_ONLY split (see src/tls/README.md).
+option(WEBLIB_ENABLE_TLS "Build the experimental pure-C TLS 1.3 layer (native-only, UNAUDITED)" OFF)
+set(WEBLIB_SOURCES_TLS
+    src/tls/tls.c
+)
+
 if(EMSCRIPTEN)
     set(WEBLIB_SOURCES ${WEBLIB_SOURCES_WASM_SAFE})
 else()
     set(WEBLIB_SOURCES ${WEBLIB_SOURCES_WASM_SAFE} ${WEBLIB_SOURCES_NATIVE_ONLY})
+    if(WEBLIB_ENABLE_TLS)
+        list(APPEND WEBLIB_SOURCES ${WEBLIB_SOURCES_TLS})
+    endif()
 endif()
 
 # Create static library
@@ -95,6 +106,12 @@ target_compile_definitions(weblib PRIVATE
     CMAKE_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
+# Experimental TLS layer: define WEBLIB_TLS only when explicitly enabled on a
+# native target (its sources were added to WEBLIB_SOURCES above under the same guard).
+if(WEBLIB_ENABLE_TLS AND NOT EMSCRIPTEN)
+    target_compile_definitions(weblib PRIVATE WEBLIB_TLS)
+endif()
+
 if(NOT EMSCRIPTEN)
     # Create shared library (not supported for WASM)
     add_library(weblib_shared SHARED ${WEBLIB_SOURCES})
@@ -109,6 +126,9 @@ if(NOT EMSCRIPTEN)
         CMAKE_VERSION_MINOR=${PROJECT_VERSION_MINOR}
         CMAKE_VERSION_PATCH=${PROJECT_VERSION_PATCH}
     )
+    if(WEBLIB_ENABLE_TLS)
+        target_compile_definitions(weblib_shared PRIVATE WEBLIB_TLS)
+    endif()
 endif()
 
 # Build examples
