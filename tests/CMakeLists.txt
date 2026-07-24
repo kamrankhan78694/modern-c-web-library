@@ -45,6 +45,13 @@ if(NOT EMSCRIPTEN)
         target_compile_definitions(test_tls PRIVATE WEBLIB_TLS)
         target_link_libraries(test_tls weblib ${PLATFORM_LIBS})
         add_test(NAME TlsTests COMMAND test_tls)
+
+        # TLS crypto primitive known-answer tests (ChaCha20, ... each vs its RFC vector)
+        add_executable(test_tls_crypto test_tls_crypto.c)
+        target_include_directories(test_tls_crypto PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/tls)
+        target_compile_definitions(test_tls_crypto PRIVATE WEBLIB_TLS)
+        target_link_libraries(test_tls_crypto weblib ${PLATFORM_LIBS})
+        add_test(NAME TlsCryptoTests COMMAND test_tls_crypto)
     endif()
 endif()
 
