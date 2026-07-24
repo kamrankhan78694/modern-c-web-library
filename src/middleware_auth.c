@@ -709,6 +709,24 @@ void apikey_auth_middleware_destroy(void)
 
 static jwt_auth_config_t *g_jwt_auth_config = NULL;
 
+/* Advance *pp past optional whitespace, exactly one ':' name/value separator, and
+ * more optional whitespace — i.e. to the first byte of a JSON member's value.
+ * Requiring precisely one colon keeps this a real structural parse: a member with
+ * no separator ({"alg""HS256"}) or a repeated one ({"alg":::"HS256"}) is malformed
+ * JSON and is rejected rather than leniently accepted. Returns false if the single
+ * required colon is absent. */
+static bool json_skip_to_value(const char **pp) {
+    const char *v = *pp;
+    while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\r') v++;
+    if (*v != ':') {
+        return false;                 /* missing name:value separator */
+    }
+    v++;
+    while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\r') v++;
+    *pp = v;
+    return true;
+}
+
 /* Return true only if the JWT header's "alg" parameter is exactly the string
  * "HS256". A PARSED check (find the "alg" key, read its quoted value) rather than
  * a substring match: HMAC-SHA256 is the only algorithm this verifier supports,
@@ -731,8 +749,8 @@ static bool jwt_header_alg_is_hs256(const char *header_json) {
         return false;                 /* no alg header -> reject */
     }
     const char *v = key + 5;          /* past the "alg" key token */
-    while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\r' || *v == ':') {
-        v++;
+    if (!json_skip_to_value(&v)) {
+        return false;                 /* malformed: no name:value separator */
     }
     if (*v != '"') {
         return false;                 /* alg value must be a JSON string */
@@ -761,8 +779,8 @@ static bool jwt_claim_int(const char *payload_json, const char *key, long *out) 
         return false;
     }
     const char *v = found + keylen;
-    while (*v == ' ' || *v == ':' || *v == '\t' || *v == '\n' || *v == '\r') {
-        v++;
+    if (!json_skip_to_value(&v)) {
+        return false;                 /* malformed: no key:value separator */
     }
     char *endptr = NULL;
     long val = strtol(v, &endptr, 10);

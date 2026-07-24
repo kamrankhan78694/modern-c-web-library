@@ -1879,6 +1879,10 @@ void test_jwt_auth_create_destroy(void) {
 /* Identical header.payload to JWT_VALID_EXP but signed with a DIFFERENT secret,
  * so only the HMAC signature differs — isolates the signature-verification gate. */
 #define JWT_BAD_SIG      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5fQ.VPFqsu6N89mLUKTsD4tXMRStoLRZw2zavoNy58X1YT4"
+/* Validly HMAC-signed but with a MALFORMED header {"alg""HS256"} (no ':' between
+ * the "alg" key and its value). A structural parse must reject it; a lenient skip
+ * that treats ':' like whitespace would accept it. */
+#define JWT_ALG_NO_COLON "eyJhbGciIkhTMjU2In0.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5fQ.e8_VDkko9gFLk-HO1bo1QpuDUilzF66p8A26jdNh6BA"
 
 /* Run the JWT middleware over a request carrying `Authorization: Bearer <token>`
  * and return whether it authorized the request (true) or rejected it (false/401). */
@@ -1928,6 +1932,9 @@ void test_jwt_auth_verify(void) {
      * "HS256" appears only inside another field's value. A substring alg check
      * would accept this validly-HMAC'd token; the parsed check rejects it. */
     ASSERT(_jwt_authorizes(mw, JWT_ALG_NONE) == false);
+    /* Structural-parse guard: a malformed header with no ':' after the "alg" key
+     * is rejected (a lenient colon-skip would wrongly accept it). */
+    ASSERT(_jwt_authorizes(mw, JWT_ALG_NO_COLON) == false);
 
     jwt_auth_middleware_destroy();
 
