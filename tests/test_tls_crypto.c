@@ -16,6 +16,7 @@
 #include "hkdf.h"
 #include "x25519.h"
 #include "sha512.h"
+#include "ed25519.h"
 #endif
 
 static int g_failures = 0;
@@ -69,6 +70,16 @@ static void check_hex(const char *label, const uint8_t *got, size_t len,
         g_failures++;
     } else {
         printf("PASS: %s\n", label);
+    }
+}
+
+/* Boolean expectation (for verify accept/reject outcomes). */
+static void check_true(const char *label, int cond) {
+    if (cond) {
+        printf("PASS: %s\n", label);
+    } else {
+        printf("FAIL: %s\n", label);
+        g_failures++;
     }
 }
 
@@ -495,6 +506,96 @@ static void test_x25519(void) {
         }
     }
 }
+
+/* RFC 8032 §7.1 — Ed25519 detached sign/verify known-answer tests.
+ * The RFC TEST2/TEST3 vectors and all constants were cross-checked against an
+ * independent from-scratch reference before being hardcoded here. */
+static void test_ed25519(void) {
+    uint8_t seed[32], pk[32], sig[64], got_pk[32], got_sig[64];
+    uint8_t msg[64];
+    int i;
+
+    /* --- RFC 8032 TEST 2: 1-byte message 0x72 (sign + verify). --- */
+    from_hex("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", seed, 32);
+    msg[0] = 0x72;
+    ed25519_public_key(got_pk, seed);
+    check_hex("ed25519 public key (RFC 8032 TEST2)", got_pk, 32,
+              "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c");
+    from_hex("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c", pk, 32);
+    ed25519_sign(got_sig, msg, 1, seed, pk);
+    check_hex("ed25519 sign (RFC 8032 TEST2)", got_sig, 64,
+              "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da"
+              "085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00");
+    check_true("ed25519 verify accepts valid (TEST2)",
+               ed25519_verify(got_sig, msg, 1, pk) == 1);
+
+    /* --- RFC 8032 TEST 3: 2-byte message af82 (sign + verify + tamper). --- */
+    from_hex("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7", seed, 32);
+    msg[0] = 0xaf; msg[1] = 0x82;
+    ed25519_public_key(got_pk, seed);
+    check_hex("ed25519 public key (RFC 8032 TEST3)", got_pk, 32,
+              "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025");
+    from_hex("fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025", pk, 32);
+    ed25519_sign(got_sig, msg, 2, seed, pk);
+    check_hex("ed25519 sign (RFC 8032 TEST3)", got_sig, 64,
+              "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac"
+              "18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a");
+    check_true("ed25519 verify accepts valid (TEST3)",
+               ed25519_verify(got_sig, msg, 2, pk) == 1);
+
+    /* Negative controls: tampered signature, tampered message, wrong key. */
+    got_sig[10] ^= 0x01;
+    check_true("ed25519 verify rejects tampered signature",
+               ed25519_verify(got_sig, msg, 2, pk) == 0);
+    got_sig[10] ^= 0x01;   /* restore valid signature */
+    msg[0] ^= 0x01;
+    check_true("ed25519 verify rejects tampered message",
+               ed25519_verify(got_sig, msg, 2, pk) == 0);
+    msg[0] ^= 0x01;        /* restore message */
+    {
+        uint8_t bad_pk[32];
+        memcpy(bad_pk, pk, 32);
+        bad_pk[0] ^= 0x01;
+        check_true("ed25519 verify rejects wrong public key",
+                   ed25519_verify(got_sig, msg, 2, bad_pk) == 0);
+    }
+
+    /* --- RFC 8032 TEST 1: empty message, verify-only against the published
+     * public key + signature (exercises the n == 0 / NULL-message path). --- */
+    from_hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", pk, 32);
+    from_hex("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b", sig, 64);
+    check_true("ed25519 verify accepts valid (RFC 8032 TEST1, empty message)",
+               ed25519_verify(sig, NULL, 0, pk) == 1);
+
+    /* --- 64-byte message (reference-impl-generated vector, cross-validated)
+     * to exercise a multi-word message length end to end. --- */
+    from_hex("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7", seed, 32);
+    for (i = 0; i < 64; i++) msg[i] = (uint8_t)i;
+    ed25519_public_key(got_pk, seed);
+    from_hex("fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025", pk, 32);
+    ed25519_sign(got_sig, msg, 64, seed, pk);
+    check_hex("ed25519 sign (64-byte message)", got_sig, 64,
+              "c7e0ff26d1d24bb61a5ce86aeb8a12438f2332e388842db63cccf86d6e334114"
+              "d2ad120d14f47f7afe3110e8c9ba00d79ba40cfcf6b4741c212ecdb387444006");
+    check_true("ed25519 verify accepts valid (64-byte message)",
+               ed25519_verify(got_sig, msg, 64, pk) == 1);
+
+    /* Robustness: a NULL message with n > 0 is an invalid call and must fail
+     * deterministically (not dereference NULL) — sign zeroes the signature and
+     * verify returns 0 (Copilot review). seed/pk from the 64-byte case above. */
+    {
+        uint8_t bad[64];
+        int k, allzero = 1;
+        memset(bad, 0xEE, sizeof bad);
+        ed25519_sign(bad, NULL, 5, seed, pk);
+        for (k = 0; k < 64; k++) {
+            if (bad[k] != 0) allzero = 0;
+        }
+        check_true("ed25519 sign (NULL msg, n>0) yields zeroed signature", allzero);
+        check_true("ed25519 verify (NULL msg, n>0) rejects",
+                   ed25519_verify(got_sig, NULL, 5, pk) == 0);
+    }
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -509,6 +610,7 @@ int main(void) {
     test_hkdf();
     test_sha512();
     test_x25519();
+    test_ed25519();
 
     if (g_failures == 0) {
         printf("All TLS crypto KATs passed.\n");
