@@ -2022,6 +2022,11 @@ void test_base64_kat(void) {
     ASSERT(base64_decode("====", 4, out, sizeof(out)) == -1);         /* padding only */
     ASSERT(base64_decode("Zm9vY", 5, out, sizeof(out)) == -1);        /* lone trailing symbol */
 
+    /* Padding must end the data: no non-whitespace after '=', at most two '='. */
+    ASSERT(base64_decode("Zg==X", 5, out, sizeof(out)) == -1);        /* data after padding */
+    ASSERT(base64_decode("Zm9v====", 8, out, sizeof(out)) == -1);     /* > 2 padding bytes */
+    ASSERT(base64_decode("Zg== \r\n", 7, out, sizeof(out)) == 1 && out[0] == 'f');  /* trailing ws OK */
+
     PASS();
 }
 

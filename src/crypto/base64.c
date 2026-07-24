@@ -55,8 +55,23 @@ int base64_decode(const char *input, size_t input_len,
             continue;
         }
 
-        /* Padding marks the end of data. */
+        /* Padding marks the end of data. RFC 4648 allows at most two '=' at the
+         * very end, followed by nothing but whitespace. Reject any data after the
+         * padding (a lenient "stop at first '=' and ignore the rest" would let a
+         * caller silently accept a truncated "...==GARBAGE" body) — fail closed. */
         if (c == '=') {
+            size_t k;
+            int pad = 1;
+            for (k = i + 1; k < input_len; k++) {
+                unsigned char d = (unsigned char)input[k];
+                if (d == '=') {
+                    if (++pad > 2) {
+                        return -1;
+                    }
+                } else if (!b64_is_space(d)) {
+                    return -1;
+                }
+            }
             break;
         }
 
