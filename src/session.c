@@ -288,7 +288,22 @@ static session_t *find_active_session_locked(session_store_t *store,
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
         session_t *s = &store->sessions[i];
         if (s->in_use && strcmp(s->session_id, session_id) == 0) {
-            return session_is_expired(s) ? NULL : s;
+            if (session_is_expired(s)) {
+                /* Reclaim the expired slot on access — the same lazy cleanup
+                 * session_get() performs. Because the keyed data API is now the
+                 * primary access path (callers no longer go through
+                 * session_get()), doing it here too prevents expired sessions
+                 * from lingering in their fixed slots until the next explicit
+                 * session_cleanup_expired(). */
+                free_session_data(s->data);
+                s->data = NULL;
+                s->in_use = false;
+                if (store->session_count > 0) {
+                    store->session_count--;
+                }
+                return NULL;
+            }
+            return s;
         }
     }
     return NULL;

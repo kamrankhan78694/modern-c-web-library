@@ -1173,7 +1173,8 @@ int session_set_data(session_store_t *store, const char *session_id,
  * @param store Session store instance
  * @param session_id Session ID
  * @param key Data key
- * @return Newly allocated value (caller frees) or NULL if not found
+ * @return Newly allocated value (caller frees), or NULL if the session/key is
+ *         not found or the copy could not be allocated
  */
 char *session_get_data(session_store_t *store, const char *session_id,
                        const char *key);

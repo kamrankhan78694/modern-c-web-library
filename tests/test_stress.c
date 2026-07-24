@@ -526,8 +526,8 @@ void test_stress_session_data_operations(void) {
     char *session_id = session_create(store, 3600);
     ASSERT(session_id != NULL);
 
-    session_t *session = session_get(store, session_id);
-    ASSERT(session != NULL);
+    /* Existence check; the handle is not retained for data access. */
+    ASSERT(session_get(store, session_id) != NULL);
 
     char key[32], value[64];
 

@@ -1221,8 +1221,8 @@ void test_session_data_operations(void) {
     char *sid = session_create(store, 3600);
     ASSERT(sid != NULL);
 
-    session_t *sess = session_get(store, sid);
-    ASSERT(sess != NULL);
+    /* Existence check; the handle itself is not retained for data access. */
+    ASSERT(session_get(store, sid) != NULL);
 
     /* Set data (keyed on store + session id) */
     ASSERT(session_set_data(store, sid, "user_id", "42") == 0);
@@ -1320,6 +1320,34 @@ void test_session_data_ops_on_dead_session(void) {
     /* An unknown id resolves to nothing either. */
     ASSERT(session_get_data(store, "no-such-session-id", "k") == NULL);
     ASSERT(session_set_data(store, "no-such-session-id", "k", "v") == -1);
+
+    free(sid);
+    session_store_destroy(store);
+
+    PASS();
+}
+
+/* Regression (Copilot review of audit #11): keyed data access must reclaim an
+ * expired session's fixed slot the same way session_get() does, so that with the
+ * keyed API as the primary path expired sessions don't linger until an explicit
+ * session_cleanup_expired(). */
+void test_session_keyed_access_reclaims_expired(void) {
+    TEST("keyed data access reclaims an expired session slot");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+    char *sid = session_create(store, 1);   /* expires after ~1s */
+    ASSERT(sid != NULL);
+    ASSERT(session_set_data(store, sid, "k", "v") == 0);
+
+    sleep(2);   /* let the session expire */
+
+    /* Keyed access on the expired session returns NULL and reclaims the slot. */
+    ASSERT(session_get_data(store, sid, "k") == NULL);
+
+    /* The access above already reclaimed the slot, so an explicit cleanup finds
+     * nothing left to free. (Without the reclaim this would return 1.) */
+    ASSERT(session_cleanup_expired(store) == 0);
 
     free(sid);
     session_store_destroy(store);
@@ -4544,6 +4572,7 @@ int main(void) {
     test_session_data_operations();
     test_session_get_data_owned_copy();
     test_session_data_ops_on_dead_session();
+    test_session_keyed_access_reclaims_expired();
     test_session_destroy_session();
     test_session_expiration();
     test_session_cleanup();
