@@ -1078,6 +1078,63 @@ void test_stress_request_target_control_bytes(void) {
     PASS();
 }
 
+/* Regression (audit #20): Host-header enforcement (RFC 7230 §5.4) must key on the
+ * HTTP version, not the keep_alive flag (which the Connection header toggles).
+ * Before the fix, "HTTP/1.1 + Connection: close" skipped the mandatory Host
+ * check, and "HTTP/1.0 + Connection: keep-alive" wrongly required it. */
+void test_stress_host_header_enforcement(void) {
+    TEST("Host header enforced by HTTP version, not keep-alive");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/test", dummy_handler);
+    http_server_set_router(server, router);
+
+    uint16_t port = 19012;
+    ASSERT(http_server_listen(server, port) == 0);
+    usleep(200000);
+
+    char response[4096];
+
+    /* HTTP/1.1 + Connection: close, NO Host -> 400. The key regression: the old
+     * code keyed on keep_alive, which Connection: close had toggled off, so this
+     * mandatory check was skipped. */
+    const char *close_no_host =
+        "GET /test HTTP/1.1\r\nConnection: close\r\n\r\n";
+    ASSERT(_stress_send_request(port, close_no_host, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "400") != NULL);
+
+    /* HTTP/1.1 with Host present -> served. */
+    const char *ok_1_1 =
+        "GET /test HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    ASSERT(_stress_send_request(port, ok_1_1, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "200 OK") != NULL);
+
+    /* HTTP/1.0 without Host -> served (1.0 does not require Host). */
+    const char *ok_1_0 =
+        "GET /test HTTP/1.0\r\n\r\n";
+    ASSERT(_stress_send_request(port, ok_1_0, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "200 OK") != NULL);
+    ASSERT(strstr(response, "400") == NULL);
+
+    /* HTTP/1.0 + Connection: keep-alive, NO Host -> still served, NOT 400 (the
+     * old code would have required Host because keep-alive set keep_alive=true).
+     * keep-alive means the server holds the socket open, so the client read just
+     * times out after receiving the 200. */
+    const char *ka_1_0 =
+        "GET /test HTTP/1.0\r\nConnection: keep-alive\r\n\r\n";
+    ASSERT(_stress_send_request(port, ka_1_0, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "200 OK") != NULL);
+
+    http_server_stop(server);
+    usleep(100000);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 void test_stress_many_headers(void) {
     TEST("request with many headers (90 headers)");
 
@@ -1586,6 +1643,7 @@ int main(void) {
         test_stress_listen_failure_cleanup();
         test_stress_transfer_encoding_smuggling();
         test_stress_request_target_control_bytes();
+        test_stress_host_header_enforcement();
     }
 
     /* Input Validation Stress Tests */
