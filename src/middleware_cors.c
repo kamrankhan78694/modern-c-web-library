@@ -70,23 +70,24 @@ static void _set_cors_headers(http_response_t *res, const char *origin, bool is_
 
     /* Set Access-Control-Allow-Origin */
     if (config->allowed_origins == NULL) {
-        /* Wildcard mode: when credentials are allowed, must echo specific origin
-         * (browsers reject Access-Control-Allow-Origin: * with credentials) */
-        if (config->allow_credentials && origin != NULL) {
-            http_response_set_header(res, "Access-Control-Allow-Origin", origin);
-            http_response_set_header(res, "Vary", "Origin");
-        } else {
-            http_response_set_header(res, "Access-Control-Allow-Origin", "*");
-        }
+        /* Wildcard mode. cors_middleware_create() refuses wildcard + credentials,
+         * so credentials are never in play here: always emit the literal '*' and
+         * never reflect the caller's Origin. Reflecting the Origin together with
+         * Access-Control-Allow-Credentials: true is exactly the CWE-942 hole this
+         * avoids by construction. */
+        http_response_set_header(res, "Access-Control-Allow-Origin", "*");
     } else if (origin != NULL) {
-        /* Specific origin is allowed */
+        /* Specific allowed origin. */
         http_response_set_header(res, "Access-Control-Allow-Origin", origin);
         /* Vary header to indicate origin-based response */
         http_response_set_header(res, "Vary", "Origin");
     }
 
-    /* Set Access-Control-Allow-Credentials if enabled */
-    if (config->allow_credentials) {
+    /* Access-Control-Allow-Credentials is only valid alongside a specific
+     * origin that was actually echoed into Access-Control-Allow-Origin; it must
+     * never accompany the wildcard '*' (which is why the wildcard branch above
+     * carries no credentials) and never be emitted without an ACAO. */
+    if (config->allow_credentials && config->allowed_origins != NULL && origin != NULL) {
         http_response_set_header(res, "Access-Control-Allow-Credentials", "true");
     }
 
@@ -229,6 +230,22 @@ static char *_strdup_optional(const char *src) {
  */
 middleware_fn_t cors_middleware_create(const cors_options_t *options) {
     if (options == NULL) {
+        return NULL;
+    }
+
+    /* Security (CWE-942): reject a wildcard origin combined with credentials.
+     * There is no safe way to allow credentialed requests from *any* origin:
+     * doing so forces the server to reflect the caller's Origin back with
+     * Access-Control-Allow-Credentials: true, which lets any website read a
+     * victim's authenticated responses. Fail closed so the dangerous config
+     * cannot be constructed — credentialed CORS requires an explicit
+     * allowed_origins list. Checked before touching any existing config so a
+     * rejected call never tears down a previously-valid one. */
+    if (options->allow_credentials && options->allowed_origins == NULL) {
+        fprintf(stderr,
+                "cors_middleware_create: refusing allow_credentials with a "
+                "wildcard origin (CWE-942); provide an explicit allowed_origins "
+                "list to use credentials\n");
         return NULL;
     }
 

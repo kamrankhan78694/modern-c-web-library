@@ -50,6 +50,22 @@ static const char *_test_find_header(void *headers, const char *name_lower) {
     return NULL;
 }
 
+/*
+ * Test-local helper: prepend a header node onto an http_header_node list, using
+ * the same layout header_list_add() builds. Name is stored lowercased because
+ * http_request_get_header() lowercases the lookup key. Lets a test synthesize a
+ * request header (e.g. Origin) without the internal parser.
+ */
+static void _test_add_header(void **headers, const char *name_lower, const char *value) {
+    _test_hdr_node_t *n = (_test_hdr_node_t *)calloc(1, sizeof(_test_hdr_node_t));
+    if (!n) return;
+    n->name = strdup(name_lower);
+    n->raw_name = strdup(name_lower);
+    n->value = strdup(value);
+    n->next = (_test_hdr_node_t *)*headers;
+    *headers = n;
+}
+
 /* Dummy handler for testing */
 static void dummy_handler(http_request_t *req, http_response_t *res) {
     (void)req;
@@ -935,6 +951,85 @@ void test_cors_create_destroy(void) {
     cors_middleware_destroy();
 
     /* Double destroy should be safe */
+    cors_middleware_destroy();
+
+    PASS();
+}
+
+/* Regression (audit #22, CWE-942): the CORS middleware must refuse a wildcard
+ * origin (allowed_origins == NULL) combined with credentials, so it can never
+ * reflect an arbitrary Origin back with Access-Control-Allow-Credentials: true.
+ * Credentialed CORS must use an explicit origin allow-list. */
+void test_cors_rejects_wildcard_with_credentials(void) {
+    TEST("cors refuses wildcard origin + credentials (CWE-942)");
+
+    /* Dangerous combo: wildcard + credentials -> refused (returns NULL). */
+    cors_options_t bad = {
+        .allowed_origins = NULL,
+        .allowed_methods = "GET, POST",
+        .allow_credentials = true,
+        .max_age = 3600
+    };
+    ASSERT(cors_middleware_create(&bad) == NULL);
+
+    /* Wildcard WITHOUT credentials is still fine. */
+    cors_options_t wildcard_ok = {
+        .allowed_origins = NULL,
+        .allowed_methods = "GET, POST",
+        .allow_credentials = false,
+        .max_age = 3600
+    };
+    middleware_fn_t mw = cors_middleware_create(&wildcard_ok);
+    ASSERT(mw != NULL);
+    cors_middleware_destroy();
+
+    /* Explicit origins WITH credentials is the safe, supported combo. */
+    const char *origins[] = {"https://app.example.com", NULL};
+    cors_options_t creds_ok = {
+        .allowed_origins = origins,
+        .allowed_methods = "GET, POST",
+        .allow_credentials = true,
+        .max_age = 3600
+    };
+    mw = cors_middleware_create(&creds_ok);
+    ASSERT(mw != NULL);
+    cors_middleware_destroy();
+
+    PASS();
+}
+
+/* Regression (audit #22 defense-in-depth): in wildcard mode the handler must
+ * emit a literal Access-Control-Allow-Origin: * — never reflect the request
+ * Origin — and must not emit Access-Control-Allow-Credentials. This guards the
+ * runtime path even though create-time refusal already blocks wildcard+creds. */
+void test_cors_wildcard_does_not_reflect(void) {
+    TEST("cors wildcard emits '*' and never reflects Origin / credentials");
+
+    cors_options_t opts = {
+        .allowed_origins = NULL,          /* wildcard */
+        .allowed_methods = "GET, POST",
+        .allow_credentials = false,
+        .max_age = 3600
+    };
+    middleware_fn_t mw = cors_middleware_create(&opts);
+    ASSERT(mw != NULL);
+
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    _test_add_header(&req.headers, "origin", "http://evil.example");
+
+    http_response_t res = {0};
+    bool cont = mw(&req, &res, NULL);
+    ASSERT(cont == true);
+
+    const char *acao = _test_find_header(res.headers, "access-control-allow-origin");
+    const char *acac = _test_find_header(res.headers, "access-control-allow-credentials");
+    ASSERT(acao != NULL);
+    ASSERT(strcmp(acao, "*") == 0);            /* literal '*', NOT the reflected Origin */
+    ASSERT(acac == NULL);                       /* no credentials advertised in wildcard mode */
+
+    _test_free_header_list(res.headers);
+    _test_free_header_list(req.headers);
     cors_middleware_destroy();
 
     PASS();
@@ -4552,6 +4647,8 @@ int main(void) {
     
     /* Phase 5: CORS middleware tests */
     test_cors_create_destroy();
+    test_cors_rejects_wildcard_with_credentials();
+    test_cors_wildcard_does_not_reflect();
     test_cors_handler();
     
     /* Phase 5: Rate limiting tests */
