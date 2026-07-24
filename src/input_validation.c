@@ -61,6 +61,18 @@ bool input_validate_integer(const char *str, long long min_val, long long max_va
 bool input_validate_email(const char *str) {
     if (str == NULL || str[0] == '\0') return false;
 
+    /* Reject control characters (incl. CR/LF and HTAB), DEL, and spaces anywhere
+     * in the address. A raw CR/LF or other control byte in a value that a caller
+     * later places into an email header, a log line, or another protocol field
+     * is a header/log-injection primitive (CRLF injection) — and no legitimate
+     * addr-spec contains these unquoted. High bytes (0x80-0xFF) are left alone so
+     * internationalized (EAI/UTF-8) local/domain parts still validate. */
+    for (const unsigned char *p = (const unsigned char *)str; *p != '\0'; p++) {
+        if (*p < 0x20 || *p == 0x7f || *p == ' ') {
+            return false;
+        }
+    }
+
     /* Find '@' */
     const char *at = strchr(str, '@');
     if (at == NULL) return false;       /* no '@' */
