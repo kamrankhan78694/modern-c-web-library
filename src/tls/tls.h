@@ -34,8 +34,12 @@ extern "C" {
  * build pipeline (option WEBLIB_ENABLE_TLS -> -DWEBLIB_TLS -> compiled native
  * source -> linkable symbol -> smoke test) be verified end to end before any
  * cryptography exists. It performs no cryptographic or network operation.
+ *
+ * Naming: the tls_ prefix matches the subsystem-prefixed convention used across
+ * the library (http_server_*, websocket_*, ...) and the planned TLS API
+ * (tls_accept/tls_read/tls_write/tls_shutdown).
  */
-const char *wl_tls_build_info(void);
+const char *tls_build_info(void);
 
 #ifdef __cplusplus
 }

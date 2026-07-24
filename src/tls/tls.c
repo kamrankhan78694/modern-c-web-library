@@ -14,7 +14,7 @@
 
 #ifdef WEBLIB_TLS
 
-const char *wl_tls_build_info(void) {
+const char *tls_build_info(void) {
     return "modern-c-web-library TLS 1.3 (EXPERIMENTAL, UNAUDITED) — scaffold only; "
            "planned suite TLS_CHACHA20_POLY1305_SHA256, group X25519, sig Ed25519";
 }
@@ -25,6 +25,6 @@ const char *wl_tls_build_info(void) {
  * branch above always applies in practice. This typedef keeps the translation
  * unit non-empty if the file is ever compiled without the define, avoiding an
  * "ISO C forbids an empty translation unit" warning under -pedantic. */
-typedef int wl_tls_translation_unit_not_empty;
+typedef int tls_translation_unit_not_empty;
 
 #endif /* WEBLIB_TLS */

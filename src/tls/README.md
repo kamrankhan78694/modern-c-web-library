@@ -46,7 +46,7 @@ ctest --test-dir build-tls
 ## Roadmap (incremental, each step independently verifiable)
 
 - **Phase 0 (this scaffold):** build option + `-DWEBLIB_TLS` wiring + a linkable
-  smoke symbol (`wl_tls_build_info`). Default build proven unchanged.
+  smoke symbol (`tls_build_info`). Default build proven unchanged.
 - **Phase 0 (next):** shared crypto module — promote the existing static SHA-256 /
   HMAC-SHA256 / base64 out of `middleware_auth.c` / `websocket.c`; transport
   choke-point (`conn_read` / `conn_write`) proving no behavior change.
@@ -57,5 +57,7 @@ ctest --test-dir build-tls
 - **Phase 4:** integration (`http_server_enable_tls`), config, `curl` / `openssl
   s_client` interop, ClientHello fuzzing, honest security labeling.
 
-Standing design reference: `docs/audit/TLS-RECON.md` (crypto inventory, socket
-seams, build integration).
+Design references in-repo: the "Pure C TLS (not OpenSSL)" ADR in
+[`NEXT_PHASE.md`](../../NEXT_PHASE.md) and the Phase 11 TLS plan in
+[`TODO.md`](../../TODO.md). (The detailed crypto/transport/build recon lives in
+the maintainers' internal working notes, not in the public tree.)

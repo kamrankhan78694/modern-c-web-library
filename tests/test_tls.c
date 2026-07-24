@@ -19,16 +19,16 @@ int main(void) {
     printf("FAIL: test_tls built without WEBLIB_TLS defined\n");
     return 1;
 #else
-    const char *info = wl_tls_build_info();
+    const char *info = tls_build_info();
 
     printf("TLS build info: %s\n", info ? info : "(null)");
 
     if (info == NULL) {
-        printf("FAIL: wl_tls_build_info() returned NULL\n");
+        printf("FAIL: tls_build_info() returned NULL\n");
         failures++;
     } else {
         if (info[0] == '\0') {
-            printf("FAIL: wl_tls_build_info() returned an empty string\n");
+            printf("FAIL: tls_build_info() returned an empty string\n");
             failures++;
         }
         /* The banner must keep advertising its unaudited/experimental status so the
