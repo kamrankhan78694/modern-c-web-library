@@ -1137,6 +1137,79 @@ void test_stress_host_header_enforcement(void) {
     PASS();
 }
 
+/* Echoes req->path so a test can verify the path the router/handler actually saw. */
+static void _echo_path_handler(http_request_t *req, http_response_t *res) {
+    http_response_send_text(res, HTTP_OK, req->path ? req->path : "");
+}
+
+/* Regression (audit #19): the request path must be canonicalized (collapse '//',
+ * strip trailing '/') before routing, so distinct wire forms cannot alias — and
+ * so literal (strcmp) and :param (segment) routes behave consistently. */
+void test_stress_path_normalization(void) {
+    TEST("request path is canonicalized before routing");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/a/b", _echo_path_handler);    /* literal */
+    router_add_route(router, HTTP_GET, "/p/:id", _echo_path_handler);  /* :param  */
+    router_add_route(router, HTTP_GET, "/", _echo_path_handler);       /* root    */
+    http_server_set_router(server, router);
+
+    uint16_t port = 19013;
+    ASSERT(http_server_listen(server, port) == 0);
+    usleep(200000);
+
+    char response[4096];
+
+    /* Each weird form canonicalizes, routes to the same handler, and the handler
+     * sees the canonical path (echoed in the body). Without normalization the
+     * literal route's strcmp would 404 the '//' and trailing-slash forms. */
+    struct { const char *req_path; const char *canonical; } cases[] = {
+        { "/a/b",     "/a/b" },
+        { "/a//b",    "/a/b" },
+        { "//a//b",   "/a/b" },
+        { "/a/b/",    "/a/b" },
+        { "//a//b//", "/a/b" },
+        { "/a///b/",  "/a/b" },
+        { "/p/9",     "/p/9" },   /* :param route */
+        { "/p//9/",   "/p/9" },   /* :param, weird -> canonical */
+        { NULL, NULL }
+    };
+    for (int i = 0; cases[i].req_path != NULL; i++) {
+        char req[256];
+        snprintf(req, sizeof(req),
+                 "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                 cases[i].req_path);
+        ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
+        ASSERT(strstr(response, "200 OK") != NULL);
+        ASSERT(strstr(response, cases[i].canonical) != NULL);  /* echoed canonical path */
+    }
+
+    /* Root "/" and its all-slash forms collapse to "/" and hit the root handler. */
+    const char *roots[] = { "/", "//", "///", NULL };
+    for (int i = 0; roots[i] != NULL; i++) {
+        char req[256];
+        snprintf(req, sizeof(req),
+                 "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", roots[i]);
+        ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
+        ASSERT(strstr(response, "200 OK") != NULL);
+    }
+
+    /* Normalization must not over-match: an unregistered path still 404s. */
+    const char *miss =
+        "GET /a/b/extra HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    ASSERT(_stress_send_request(port, miss, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "404") != NULL);
+
+    http_server_stop(server);
+    usleep(100000);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 void test_stress_many_headers(void) {
     TEST("request with many headers (90 headers)");
 
@@ -1646,6 +1719,7 @@ int main(void) {
         test_stress_transfer_encoding_smuggling();
         test_stress_request_target_control_bytes();
         test_stress_host_header_enforcement();
+        test_stress_path_normalization();
     }
 
     /* Input Validation Stress Tests */
