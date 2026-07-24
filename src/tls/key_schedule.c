@@ -14,6 +14,7 @@
 
 #include "hkdf.h"
 #include "crypto/sha256.h"
+#include "kamran.k"       /* secure_zero */
 #include <string.h>
 
 void tls13_extract(const uint8_t *salt, size_t salt_len,
@@ -29,18 +30,24 @@ void tls13_empty_transcript_hash(uint8_t out[TLS13_SECRET_LEN]) {
 int tls13_derive_secret(const uint8_t secret[TLS13_SECRET_LEN], const char *label,
                         const uint8_t transcript_hash[TLS13_SECRET_LEN],
                         uint8_t out[TLS13_SECRET_LEN]) {
-    return hkdf_expand_label(secret, label, strlen(label),
-                             transcript_hash, TLS13_SECRET_LEN,
-                             out, TLS13_SECRET_LEN);
+    if (!hkdf_expand_label(secret, label, strlen(label),
+                           transcript_hash, TLS13_SECRET_LEN,
+                           out, TLS13_SECRET_LEN)) {
+        secure_zero(out, TLS13_SECRET_LEN);   /* no partial secret on failure */
+        return 0;
+    }
+    return 1;
 }
 
 int tls13_traffic_keys(const uint8_t secret[TLS13_SECRET_LEN],
                        uint8_t *key, size_t key_len,
                        uint8_t iv[TLS13_IV_LEN]) {
-    if (!hkdf_expand_label(secret, "key", 3, NULL, 0, key, key_len)) {
-        return 0;
-    }
-    if (!hkdf_expand_label(secret, "iv", 2, NULL, 0, iv, TLS13_IV_LEN)) {
+    if (!hkdf_expand_label(secret, "key", 3, NULL, 0, key, key_len) ||
+        !hkdf_expand_label(secret, "iv", 2, NULL, 0, iv, TLS13_IV_LEN)) {
+        /* Never leave a partially-derived key/IV in the caller's buffers: if the
+         * IV step fails after the key was written, both are zeroed. */
+        secure_zero(key, key_len);
+        secure_zero(iv, TLS13_IV_LEN);
         return 0;
     }
     return 1;
@@ -48,7 +55,11 @@ int tls13_traffic_keys(const uint8_t secret[TLS13_SECRET_LEN],
 
 int tls13_finished_key(const uint8_t base_key[TLS13_SECRET_LEN],
                        uint8_t out[TLS13_SECRET_LEN]) {
-    return hkdf_expand_label(base_key, "finished", 8, NULL, 0, out, TLS13_SECRET_LEN);
+    if (!hkdf_expand_label(base_key, "finished", 8, NULL, 0, out, TLS13_SECRET_LEN)) {
+        secure_zero(out, TLS13_SECRET_LEN);
+        return 0;
+    }
+    return 1;
 }
 
 #endif /* WEBLIB_TLS */

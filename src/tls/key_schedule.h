@@ -48,7 +48,8 @@ int tls13_derive_secret(const uint8_t secret[TLS13_SECRET_LEN], const char *labe
  * Per-connection traffic key and IV from a *_traffic_secret (RFC 8446 §7.3):
  *   key = HKDF-Expand-Label(secret, "key", "", key_len)   (32 for ChaCha20)
  *   iv  = HKDF-Expand-Label(secret, "iv",  "", 12)
- * Returns 1 on success, 0 on failure.
+ * Returns 1 on success, 0 on failure. On failure both `key` and `iv` are zeroed,
+ * so a partially-derived key is never left in the caller's buffers.
  */
 int tls13_traffic_keys(const uint8_t secret[TLS13_SECRET_LEN],
                        uint8_t *key, size_t key_len,
