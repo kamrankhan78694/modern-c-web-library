@@ -14,6 +14,8 @@
 #ifdef WEBLIB_TLS
 #include "der.h"
 #include "pem.h"
+#include "ed25519_key.h"
+#include "ed25519.h"
 #endif
 
 static int g_failures = 0;
@@ -238,6 +240,88 @@ static void test_pem_decode(void) {
                pem_decode(NULL, lf_pem, strlen(lf_pem), out, sizeof out, &out_len) == -1
                && pem_decode("CERTIFICATE", NULL, 10, out, sizeof out, &out_len) == -1);
 }
+
+/* Ed25519 key parsing: PKCS#8 private key + SubjectPublicKeyInfo public key.
+ * The vectors are the RFC 8032 TEST2 keypair wrapped in the standard DER
+ * templates, cross-checked with OpenSSL (which parses them as valid Ed25519 keys
+ * and derives the same public key from the private seed). */
+static void test_ed25519_key(void) {
+    static const uint8_t pkcs8[] = {
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70,
+        0x04, 0x22, 0x04, 0x20, 0x4c, 0xcd, 0x08, 0x9b, 0x28, 0xff, 0x96, 0xda,
+        0x9d, 0xb6, 0xc3, 0x46, 0xec, 0x11, 0x4e, 0x0f, 0x5b, 0x8a, 0x31, 0x9f,
+        0x35, 0xab, 0xa6, 0x24, 0xda, 0x8c, 0xf6, 0xed, 0x4f, 0xb8, 0xa6, 0xfb
+    };
+    static const uint8_t spki[] = {
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+        0x3d, 0x40, 0x17, 0xc3, 0xe8, 0x43, 0x89, 0x5a, 0x92, 0xb7, 0x0a, 0xa7,
+        0x4d, 0x1b, 0x7e, 0xbc, 0x9c, 0x98, 0x2c, 0xcf, 0x2e, 0xc4, 0x96, 0x8c,
+        0xc0, 0xcd, 0x55, 0xf1, 0x2a, 0xf4, 0x66, 0x0c
+    };
+    static const uint8_t seed[32] = {
+        0x4c, 0xcd, 0x08, 0x9b, 0x28, 0xff, 0x96, 0xda, 0x9d, 0xb6, 0xc3, 0x46,
+        0xec, 0x11, 0x4e, 0x0f, 0x5b, 0x8a, 0x31, 0x9f, 0x35, 0xab, 0xa6, 0x24,
+        0xda, 0x8c, 0xf6, 0xed, 0x4f, 0xb8, 0xa6, 0xfb
+    };
+    static const uint8_t pub[32] = {
+        0x3d, 0x40, 0x17, 0xc3, 0xe8, 0x43, 0x89, 0x5a, 0x92, 0xb7, 0x0a, 0xa7,
+        0x4d, 0x1b, 0x7e, 0xbc, 0x9c, 0x98, 0x2c, 0xcf, 0x2e, 0xc4, 0x96, 0x8c,
+        0xc0, 0xcd, 0x55, 0xf1, 0x2a, 0xf4, 0x66, 0x0c
+    };
+    static const uint8_t spki_bad_oid[] = {   /* OID last byte 0x70 -> 0x71 */
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x71, 0x03, 0x21, 0x00,
+        0x3d, 0x40, 0x17, 0xc3, 0xe8, 0x43, 0x89, 0x5a, 0x92, 0xb7, 0x0a, 0xa7,
+        0x4d, 0x1b, 0x7e, 0xbc, 0x9c, 0x98, 0x2c, 0xcf, 0x2e, 0xc4, 0x96, 0x8c,
+        0xc0, 0xcd, 0x55, 0xf1, 0x2a, 0xf4, 0x66, 0x0c
+    };
+    static const uint8_t garbage[] = { 0x30, 0x03, 0x99, 0x88, 0x77 };
+    uint8_t got_seed[32], got_pub[32], derived[32];
+
+    check_true("ed25519_key: PKCS#8 -> seed",
+               ed25519_parse_pkcs8(pkcs8, sizeof pkcs8, got_seed) == 0
+               && memcmp(got_seed, seed, 32) == 0);
+
+    /* End to end: the extracted seed must derive the expected public key. */
+    ed25519_public_key(derived, got_seed);
+    check_true("ed25519_key: PKCS#8 seed derives the expected public key",
+               memcmp(derived, pub, 32) == 0);
+
+    check_true("ed25519_key: SPKI -> public key",
+               ed25519_parse_spki(spki, sizeof spki, got_pub) == 0
+               && memcmp(got_pub, pub, 32) == 0);
+
+    check_true("ed25519_key: PKCS#8-derived key matches SPKI key",
+               memcmp(derived, got_pub, 32) == 0);
+
+    /* Rejections. */
+    check_true("ed25519_key: SPKI wrong OID rejected",
+               ed25519_parse_spki(spki_bad_oid, sizeof spki_bad_oid, got_pub) == -1);
+    check_true("ed25519_key: truncated PKCS#8 rejected",
+               ed25519_parse_pkcs8(pkcs8, sizeof pkcs8 - 5, got_seed) == -1);
+    check_true("ed25519_key: truncated SPKI rejected",
+               ed25519_parse_spki(spki, sizeof spki - 3, got_pub) == -1);
+    check_true("ed25519_key: garbage PKCS#8 rejected",
+               ed25519_parse_pkcs8(garbage, sizeof garbage, got_seed) == -1);
+    check_true("ed25519_key: NULL arguments rejected",
+               ed25519_parse_pkcs8(NULL, 10, got_seed) == -1
+               && ed25519_parse_spki(spki, sizeof spki, NULL) == -1);
+
+    /* End-to-end server key-loading flow: a PEM "PRIVATE KEY" file decodes to
+     * DER (pem_decode) which parses to the same seed (ed25519_parse_pkcs8). The
+     * PEM was verified with OpenSSL. */
+    {
+        static const char key_pem[] =
+            "-----BEGIN PRIVATE KEY-----\n"
+            "MC4CAQAwBQYDK2VwBCIEIEzNCJso/5banbbDRuwRTg9bijGfNaumJNqM9u1PuKb7\n"
+            "-----END PRIVATE KEY-----\n";
+        unsigned char der[128];
+        size_t der_len = 0;
+        check_true("ed25519_key: PEM PRIVATE KEY -> DER -> seed (end to end)",
+                   pem_decode("PRIVATE KEY", key_pem, strlen(key_pem), der, sizeof der, &der_len) == 0
+                   && ed25519_parse_pkcs8(der, der_len, got_seed) == 0
+                   && memcmp(got_seed, seed, 32) == 0);
+    }
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -250,6 +334,7 @@ int main(void) {
     test_der_rejects_malformed();
     test_der_tag_enforcement();
     test_pem_decode();
+    test_ed25519_key();
 
     if (g_failures == 0) {
         printf("All TLS parse tests passed.\n");
