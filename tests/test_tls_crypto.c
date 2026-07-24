@@ -19,6 +19,7 @@
 #include "ed25519.h"
 #include "key_schedule.h"
 #include "record.h"
+#include "handshake_auth.h"
 #include "crypto/sha256.h"
 #endif
 
@@ -760,6 +761,57 @@ static void test_record(void) {
                                    big, sizeof big, 0, bigout, sizeof bigout, &out_len) == 0);
     }
 }
+/* Handshake authentication crypto (RFC 8446 §4.4): transcript hash, Finished
+ * MAC, and server CertificateVerify signature — cross-checked against an
+ * independent reference (SHA-256/HMAC via hashlib, Ed25519 via the ref impl). */
+static void test_hs_auth(void) {
+    tls_transcript_t tr;
+    uint8_t out[32], th[32], sig[64], seed[32], pub[32], fin_key[32], expect[32];
+    int i;
+
+    /* Transcript hash: absorbing "msg1" then "msg2" == SHA-256("msg1msg2"). */
+    tls_transcript_init(&tr);
+    tls_transcript_update(&tr, (const uint8_t *)"msg1", 4);
+    tls_transcript_update(&tr, (const uint8_t *)"msg2", 4);
+    tls_transcript_current(&tr, out);
+    check_hex("hs_auth transcript hash", out, 32,
+              "afd6fb1fc4ec8c2ff174b28911d601be62ad40470c0a436394e3360f90ba1a44");
+
+    /* current() must not disturb the running state: another update continues it. */
+    tls_transcript_update(&tr, (const uint8_t *)"msg3", 4);
+    tls_transcript_current(&tr, out);
+    sha256((const uint8_t *)"msg1msg2msg3", 12, expect);
+    check_true("hs_auth transcript continues after snapshot",
+               memcmp(out, expect, 32) == 0);
+
+    /* Finished verify_data = HMAC-SHA256(finished_key, transcript_hash). */
+    for (i = 0; i < 32; i++) {
+        fin_key[i] = (uint8_t)(0x10 + i);
+    }
+    sha256((const uint8_t *)"transcript", 10, th);
+    check_hex("hs_auth transcript_hash input", th, 32,
+              "54e6289e14c7b0e7ad9acc2dfc4c1e3d027d0eef7f5c4c3fe7c292761d0e06a6");
+    tls_finished_verify_data(fin_key, th, out);
+    check_hex("hs_auth finished verify_data", out, 32,
+              "fff1f2a9f570345a08332d8bfdf117a2bef0783fbdb7ca7d36a3c2e5a4ffaf69");
+
+    /* CertificateVerify: Ed25519 over the RFC 8446 §4.4.3 content preamble. */
+    from_hex("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb", seed, 32);
+    ed25519_public_key(pub, seed);
+    tls_sign_server_cert_verify(seed, pub, th, sig);
+    check_hex("hs_auth CertificateVerify signature", sig, 64,
+              "6a09cf1bb46ac2a1a956ffea8fdb4eaf230a8be2db43b5e5a07b263a5d01ee14"
+              "3ab3e13dcb35d829613e9db383d331476abedc22c3f1ebdae685749daf889c02");
+    check_true("hs_auth CertificateVerify verifies",
+               tls_verify_server_cert_verify(pub, th, sig) == 1);
+    {   /* a different transcript hash must fail verification */
+        uint8_t bad[32];
+        memcpy(bad, th, 32);
+        bad[0] ^= 0x01;
+        check_true("hs_auth CertificateVerify rejects wrong transcript",
+                   tls_verify_server_cert_verify(pub, bad, sig) == 0);
+    }
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -777,6 +829,7 @@ int main(void) {
     test_ed25519();
     test_key_schedule();
     test_record();
+    test_hs_auth();
 
     if (g_failures == 0) {
         printf("All TLS crypto KATs passed.\n");
