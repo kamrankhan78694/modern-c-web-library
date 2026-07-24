@@ -338,6 +338,27 @@ static void test_hkdf(void) {
                       "6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba");
         }
     }
+
+    /* Invalid-input guards: a NULL pointer paired with a non-zero length must be
+     * rejected (returning 0) rather than dereferenced. */
+    {
+        uint8_t junk[32];
+        if (hkdf_expand(prk, NULL, 5, junk, 32) != 0) {
+            printf("FAIL: hkdf_expand accepted NULL info with non-zero length\n"); g_failures++;
+        } else {
+            printf("PASS: hkdf_expand rejects NULL info + non-zero length\n");
+        }
+        if (hkdf_expand_label(prk, NULL, 5, NULL, 0, junk, 32) != 0) {
+            printf("FAIL: hkdf_expand_label accepted NULL label with non-zero length\n"); g_failures++;
+        } else {
+            printf("PASS: hkdf_expand_label rejects NULL label + non-zero length\n");
+        }
+        if (hkdf_expand_label(prk, "x", 1, NULL, 5, junk, 32) != 0) {
+            printf("FAIL: hkdf_expand_label accepted NULL context with non-zero length\n"); g_failures++;
+        } else {
+            printf("PASS: hkdf_expand_label rejects NULL context + non-zero length\n");
+        }
+    }
 }
 #endif /* WEBLIB_TLS */
 

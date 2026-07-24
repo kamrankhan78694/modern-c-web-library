@@ -33,6 +33,11 @@ int hkdf_expand(const uint8_t prk[HKDF_SHA256_LEN],
     size_t done = 0;
     size_t i;
 
+    /* A NULL info is only valid with info_len 0 (otherwise the memcpy below would
+     * dereference NULL). */
+    if (info == NULL && info_len > 0) {
+        return 0;
+    }
     /* RFC 5869: L <= 255 * HashLen. */
     if (okm_len > (size_t)255 * HKDF_SHA256_LEN) {
         return 0;
@@ -95,6 +100,10 @@ int hkdf_expand_label(const uint8_t secret[HKDF_SHA256_LEN],
 
     if (out_len > 0xffff || full_label_len < 7 || full_label_len > 255 ||
         context_len > 255) {
+        return 0;
+    }
+    /* A NULL label/context is only valid with a zero length. */
+    if ((label == NULL && label_len > 0) || (context == NULL && context_len > 0)) {
         return 0;
     }
 
