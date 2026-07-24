@@ -13,6 +13,7 @@
 #include "chacha20.h"
 #include "poly1305.h"
 #include "chacha20poly1305.h"
+#include "hkdf.h"
 #endif
 
 static int g_failures = 0;
@@ -271,6 +272,94 @@ static void test_chacha20poly1305(void) {
         check_aead_rejected("aead rejects tampered AAD", r, out, sizeof(out));
     }
 }
+
+/* HKDF-SHA256 (RFC 5869) + TLS 1.3 HKDF-Expand-Label (RFC 8446), checked against
+ * RFC 5869 §A.1/A.3 and the RFC 8448 TLS 1.3 trace (early_secret / derived). */
+static void test_hkdf(void) {
+    uint8_t prk[32];
+    uint8_t okm[64];
+
+    /* RFC 5869 A.1: Extract + Expand (L=42 spans two HMAC blocks). */
+    {
+        uint8_t ikm[22];
+        uint8_t salt[13];
+        uint8_t info[10];
+        memset(ikm, 0x0b, sizeof(ikm));
+        from_hex("000102030405060708090a0b0c", salt, sizeof(salt));
+        from_hex("f0f1f2f3f4f5f6f7f8f9", info, sizeof(info));
+
+        hkdf_extract(salt, sizeof(salt), ikm, sizeof(ikm), prk);
+        check_hex("hkdf_extract (RFC 5869 A.1 PRK)", prk, 32,
+                  "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5");
+        if (!hkdf_expand(prk, info, sizeof(info), okm, 42)) {
+            printf("FAIL: hkdf_expand A.1 returned 0\n"); g_failures++;
+        } else {
+            check_hex("hkdf_expand (RFC 5869 A.1 OKM)", okm, 42,
+                      "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56e"
+                      "cc4c5bf34007208d5b887185865");
+        }
+    }
+
+    /* RFC 5869 A.3: zero-length salt and info (empty salt == HashLen zeros). */
+    {
+        uint8_t ikm[22];
+        memset(ikm, 0x0b, sizeof(ikm));
+
+        hkdf_extract(NULL, 0, ikm, sizeof(ikm), prk);
+        check_hex("hkdf_extract (RFC 5869 A.3 PRK, empty salt)", prk, 32,
+                  "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04");
+        if (!hkdf_expand(prk, NULL, 0, okm, 42)) {
+            printf("FAIL: hkdf_expand A.3 returned 0\n"); g_failures++;
+        } else {
+            check_hex("hkdf_expand (RFC 5869 A.3 OKM, empty info)", okm, 42,
+                      "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f"
+                      "3c738d2d9d201395faa4b61a96c8");
+        }
+    }
+
+    /* RFC 8448 TLS 1.3: early_secret = HKDF-Extract(0^32, 0^32);
+     * derived = HKDF-Expand-Label(early_secret, "derived", SHA256(""), 32). */
+    {
+        uint8_t zeros[32] = { 0 };
+        uint8_t early[32];
+        uint8_t empty_hash[32];
+        uint8_t derived[32];
+
+        hkdf_extract(zeros, sizeof(zeros), zeros, sizeof(zeros), early);
+        check_hex("hkdf early_secret (RFC 8448 Extract)", early, 32,
+                  "33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a");
+
+        from_hex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                 empty_hash, 32);   /* SHA256("") */
+        if (!hkdf_expand_label(early, "derived", 7, empty_hash, 32, derived, 32)) {
+            printf("FAIL: hkdf_expand_label returned 0\n"); g_failures++;
+        } else {
+            check_hex("hkdf_expand_label \"derived\" (RFC 8448)", derived, 32,
+                      "6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba");
+        }
+    }
+
+    /* Invalid-input guards: a NULL pointer paired with a non-zero length must be
+     * rejected (returning 0) rather than dereferenced. */
+    {
+        uint8_t junk[32];
+        if (hkdf_expand(prk, NULL, 5, junk, 32) != 0) {
+            printf("FAIL: hkdf_expand accepted NULL info with non-zero length\n"); g_failures++;
+        } else {
+            printf("PASS: hkdf_expand rejects NULL info + non-zero length\n");
+        }
+        if (hkdf_expand_label(prk, NULL, 5, NULL, 0, junk, 32) != 0) {
+            printf("FAIL: hkdf_expand_label accepted NULL label with non-zero length\n"); g_failures++;
+        } else {
+            printf("PASS: hkdf_expand_label rejects NULL label + non-zero length\n");
+        }
+        if (hkdf_expand_label(prk, "x", 1, NULL, 5, junk, 32) != 0) {
+            printf("FAIL: hkdf_expand_label accepted NULL context with non-zero length\n"); g_failures++;
+        } else {
+            printf("PASS: hkdf_expand_label rejects NULL context + non-zero length\n");
+        }
+    }
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -282,6 +371,7 @@ int main(void) {
     test_chacha20_encrypt();
     test_poly1305();
     test_chacha20poly1305();
+    test_hkdf();
 
     if (g_failures == 0) {
         printf("All TLS crypto KATs passed.\n");
