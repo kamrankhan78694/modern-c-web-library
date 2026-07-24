@@ -1212,6 +1212,22 @@ bool session_is_expired(session_t *session);
 int session_cleanup_expired(session_store_t *store);
 
 /**
+ * Set the idle timeout used to reclaim session-cookie (max_age == 0) sessions.
+ *
+ * A session created with max_age == 0 has no absolute expiry, so without an idle
+ * timeout such sessions accumulate and permanently consume the store's fixed slot
+ * pool. By default the store reclaims a session-cookie session that has been idle
+ * (not accessed via session_get / the keyed data API) for 1800 seconds. Pass a
+ * different value to tune it, or <= 0 to disable idle reclamation entirely
+ * (restoring the never-expire behavior). Does not affect max_age > 0 sessions,
+ * which keep their absolute deadline.
+ *
+ * @param store Session store instance
+ * @param seconds Idle timeout in seconds (<= 0 disables idle reclamation)
+ */
+void session_store_set_idle_timeout(session_store_t *store, int seconds);
+
+/**
  * Get session from request (via cookie)
  * @param store Session store instance
  * @param req Request object

@@ -1450,6 +1450,41 @@ void test_session_keyed_access_reclaims_expired(void) {
     PASS();
 }
 
+/* Regression (audit #26): a session-cookie (max_age == 0) has no absolute expiry,
+ * so without an idle timeout it permanently consumes a fixed slot (slot-exhaustion
+ * DoS). It must now be reclaimed after the configurable idle timeout, while a
+ * timeout of <= 0 preserves the old never-expire behavior. */
+void test_session_cookie_idle_timeout(void) {
+    TEST("session-cookie (max_age=0) idle-timeout reclamation");
+
+    session_store_t *store = session_store_create();
+    ASSERT(store != NULL);
+
+    /* Idle reclamation: an untouched session cookie is reclaimed after the idle
+     * window (before the fix, max_age==0 never expired -> cleanup returned 0). */
+    char *sid = session_create(store, 0);
+    ASSERT(sid != NULL);
+    session_store_set_idle_timeout(store, 1);
+    ASSERT(session_get(store, sid) != NULL);        /* alive now */
+    sleep(2);                                        /* idle past the 1s window */
+    ASSERT(session_cleanup_expired(store) == 1);     /* reclaimed */
+    ASSERT(session_get(store, sid) == NULL);
+    free(sid);
+
+    /* idle_timeout <= 0 disables idle reclamation (never-expire preserved). */
+    session_store_set_idle_timeout(store, 0);
+    char *sid2 = session_create(store, 0);
+    ASSERT(sid2 != NULL);
+    sleep(2);
+    ASSERT(session_cleanup_expired(store) == 0);     /* not reclaimed */
+    ASSERT(session_get(store, sid2) != NULL);
+    free(sid2);
+
+    session_store_destroy(store);
+
+    PASS();
+}
+
 /* Test session destroy */
 void test_session_destroy_session(void) {
     TEST("session (destroy session)");
@@ -4670,6 +4705,7 @@ int main(void) {
     test_session_get_data_owned_copy();
     test_session_data_ops_on_dead_session();
     test_session_keyed_access_reclaims_expired();
+    test_session_cookie_idle_timeout();
     test_session_destroy_session();
     test_session_expiration();
     test_session_cleanup();
