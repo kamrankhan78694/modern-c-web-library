@@ -13,6 +13,7 @@
 #define MAX_SESSIONS 1024
 #define SESSION_ID_LENGTH 32
 #define SESSION_COOKIE_NAME "MCWL_SESSION"
+#define SESSION_DEFAULT_IDLE_TIMEOUT 1800  /* 30 min idle reclaim for session cookies */
 
 /* Session data entry */
 typedef struct session_data_entry {
@@ -26,6 +27,8 @@ struct session {
     char session_id[SESSION_ID_LENGTH + 1];
     time_t created_at;
     time_t expires_at;
+    time_t last_accessed;   /* refreshed on every access; drives the idle timeout
+                               for session-cookie (max_age == 0) sessions */
     int max_age;
     session_data_entry_t *data;
     bool in_use;
@@ -35,6 +38,9 @@ struct session {
 struct session_store {
     session_t sessions[MAX_SESSIONS];
     size_t session_count;
+    int idle_timeout;       /* seconds; reclaim a max_age==0 session idle this long
+                               so the fixed slot pool cannot be permanently
+                               exhausted. <=0 disables idle reclamation. */
     pthread_mutex_t lock;
 };
 
@@ -97,7 +103,8 @@ session_store_t *session_store_create(void) {
     }
     
     store->session_count = 0;
-    
+    store->idle_timeout = SESSION_DEFAULT_IDLE_TIMEOUT;
+
     /* Initialize all sessions as unused */
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
         store->sessions[i].in_use = false;
@@ -203,6 +210,7 @@ char *session_create(session_store_t *store, int max_age) {
     }
     
     session->data = NULL;
+    session->last_accessed = session->created_at;
     session->in_use = true;
     store->session_count++;
     
@@ -214,20 +222,47 @@ char *session_create(session_store_t *store, int max_age) {
 }
 
 /* Get session by ID */
+/* Whether an in-use session should be reclaimed, as of `now`. MUST be called
+ * with store->lock held.
+ *
+ * Unlike the public session_is_expired() (which only knows absolute deadlines
+ * and therefore treats a session cookie as immortal), this is store-aware:
+ *   - max_age > 0  -> absolute deadline (created_at + max_age), as before;
+ *   - max_age == 0 -> session cookie: no absolute deadline, but reclaimed once it
+ *     has been idle for store->idle_timeout seconds. Without this a store used in
+ *     session-cookie mode fills its fixed 1024 slots and never self-heals until
+ *     the process restarts — a slot-exhaustion DoS (audit #26). An idle_timeout
+ *     of <= 0 disables idle reclamation (restores the old never-expire behavior).
+ */
+static bool _session_expired_locked(const session_store_t *store,
+                                    const session_t *s, time_t now) {
+    if (s->max_age > 0) {
+        return s->expires_at > 0 && now >= s->expires_at;
+    }
+    /* Guard `now > last_accessed` before subtracting: if the wall clock moved
+     * backwards (or time_t is unsigned) the difference could otherwise underflow
+     * and reclaim a fresh session. When now <= last_accessed the session is by
+     * definition not idle, so it is kept. */
+    return store->idle_timeout > 0 &&
+           now > s->last_accessed &&
+           (now - s->last_accessed) >= (time_t)store->idle_timeout;
+}
+
 session_t *session_get(session_store_t *store, const char *session_id) {
     if (!store || !session_id) {
         return NULL;
     }
-    
+
     pthread_mutex_lock(&store->lock);
-    
+    time_t now = time(NULL);
+
     /* Find session with matching ID */
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
-        if (store->sessions[i].in_use && 
+        if (store->sessions[i].in_use &&
             strcmp(store->sessions[i].session_id, session_id) == 0) {
-            
+
             /* Check if expired - auto-cleanup to prevent slot exhaustion */
-            if (session_is_expired(&store->sessions[i])) {
+            if (_session_expired_locked(store, &store->sessions[i], now)) {
                 free_session_data(store->sessions[i].data);
                 store->sessions[i].data = NULL;
                 store->sessions[i].in_use = false;
@@ -237,12 +272,13 @@ session_t *session_get(session_store_t *store, const char *session_id) {
                 pthread_mutex_unlock(&store->lock);
                 return NULL;
             }
-            
+
+            store->sessions[i].last_accessed = now;   /* refresh the idle timer */
             pthread_mutex_unlock(&store->lock);
             return &store->sessions[i];
         }
     }
-    
+
     pthread_mutex_unlock(&store->lock);
     return NULL;
 }
@@ -285,10 +321,11 @@ void session_destroy(session_store_t *store, const char *session_id) {
  * differ. No internal pointer is ever returned to the caller. */
 static session_t *find_active_session_locked(session_store_t *store,
                                              const char *session_id) {
+    time_t now = time(NULL);
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
         session_t *s = &store->sessions[i];
         if (s->in_use && strcmp(s->session_id, session_id) == 0) {
-            if (session_is_expired(s)) {
+            if (_session_expired_locked(store, s, now)) {
                 /* Reclaim the expired slot on access — the same lazy cleanup
                  * session_get() performs. Because the keyed data API is now the
                  * primary access path (callers no longer go through
@@ -303,6 +340,7 @@ static session_t *find_active_session_locked(session_store_t *store,
                 }
                 return NULL;
             }
+            s->last_accessed = now;   /* data access refreshes the idle timer */
             return s;
         }
     }
@@ -457,11 +495,12 @@ int session_cleanup_expired(session_store_t *store) {
     }
     
     pthread_mutex_lock(&store->lock);
-    
+    time_t now = time(NULL);
+
     int cleaned = 0;
-    
+
     for (size_t i = 0; i < MAX_SESSIONS; i++) {
-        if (store->sessions[i].in_use && session_is_expired(&store->sessions[i])) {
+        if (store->sessions[i].in_use && _session_expired_locked(store, &store->sessions[i], now)) {
             free_session_data(store->sessions[i].data);
             store->sessions[i].data = NULL;
             store->sessions[i].in_use = false;
@@ -473,8 +512,19 @@ int session_cleanup_expired(session_store_t *store) {
     }
     
     pthread_mutex_unlock(&store->lock);
-    
+
     return cleaned;
+}
+
+/* Configure the idle timeout (seconds) used to reclaim session-cookie
+ * (max_age == 0) sessions. <= 0 disables idle reclamation. */
+void session_store_set_idle_timeout(session_store_t *store, int seconds) {
+    if (!store) {
+        return;
+    }
+    pthread_mutex_lock(&store->lock);
+    store->idle_timeout = seconds;
+    pthread_mutex_unlock(&store->lock);
 }
 
 /* Parse cookie header to extract session ID */
