@@ -83,6 +83,7 @@ set(WEBLIB_SOURCES_TLS
     src/tls/der.c
     src/tls/wire.c
     src/tls/handshake.c
+    src/tls/handshake_auth.c
     src/tls/pem.c
     src/tls/chacha20.c
     src/tls/poly1305.c
