@@ -2,6 +2,7 @@
 #include "db_pool.h"
 #include "thread_pool.h"
 #include "crypto/sha256.h"
+#include "crypto/base64.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1982,6 +1983,44 @@ void test_hmac_sha256_kat(void) {
     hmac_sha256(key_long, sizeof(key_long),
                 (const uint8_t *)"Test Using Larger Than Block-Size Key - Hash Key First", 54, mac);
     ASSERT(_hex_eq(mac, sizeof(mac), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"));
+
+    PASS();
+}
+
+/* Base64 decode known-answer tests: RFC 4648 section 10 vectors (decode
+ * direction) plus PEM-style whitespace skipping and the error guards. */
+void test_base64_kat(void) {
+    TEST("base64_decode (RFC 4648 known-answer)");
+
+    unsigned char out[32];
+
+    /* RFC 4648 section 10 vectors. (Empty input returns -1 by this decoder's
+     * contract — PEM/Basic-auth never present an empty body.) */
+    ASSERT(base64_decode("", 0, out, sizeof(out)) == -1);
+    ASSERT(base64_decode("Zg==", 4, out, sizeof(out)) == 1 && memcmp(out, "f", 1) == 0);
+    ASSERT(base64_decode("Zm8=", 4, out, sizeof(out)) == 2 && memcmp(out, "fo", 2) == 0);
+    ASSERT(base64_decode("Zm9v", 4, out, sizeof(out)) == 3 && memcmp(out, "foo", 3) == 0);
+    ASSERT(base64_decode("Zm9vYg==", 8, out, sizeof(out)) == 4 && memcmp(out, "foob", 4) == 0);
+    ASSERT(base64_decode("Zm9vYmE=", 8, out, sizeof(out)) == 5 && memcmp(out, "fooba", 5) == 0);
+    ASSERT(base64_decode("Zm9vYmFy", 8, out, sizeof(out)) == 6 && memcmp(out, "foobar", 6) == 0);
+
+    /* Whitespace (incl. CR/LF) is skipped, so a PEM-wrapped body decodes directly. */
+    ASSERT(base64_decode("Zm9v\r\nYmFy", 10, out, sizeof(out)) == 6 && memcmp(out, "foobar", 6) == 0);
+
+    /* An invalid alphabet byte is rejected. */
+    ASSERT(base64_decode("Zm9v!!!!", 8, out, sizeof(out)) == -1);
+
+    /* Too-small output buffer is rejected (needs 3 bytes, given 2). */
+    ASSERT(base64_decode("Zm9v", 4, out, 2) == -1);
+
+    /* NULL arguments are rejected. */
+    ASSERT(base64_decode(NULL, 4, out, sizeof(out)) == -1);
+    ASSERT(base64_decode("Zm9v", 4, NULL, sizeof(out)) == -1);
+
+    /* Structurally invalid / empty inputs are errors, never silent success. */
+    ASSERT(base64_decode("    \r\n\t", 7, out, sizeof(out)) == -1);   /* all whitespace */
+    ASSERT(base64_decode("====", 4, out, sizeof(out)) == -1);         /* padding only */
+    ASSERT(base64_decode("Zm9vY", 5, out, sizeof(out)) == -1);        /* lone trailing symbol */
 
     PASS();
 }
@@ -5060,6 +5099,7 @@ int main(void) {
     test_apikey_auth_create_destroy();
     test_sha256_kat();
     test_hmac_sha256_kat();
+    test_base64_kat();
     test_jwt_auth_create_destroy();
     test_jwt_auth_verify();
 

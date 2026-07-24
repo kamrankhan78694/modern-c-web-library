@@ -17,34 +17,15 @@
 
 #include "kamran.k"
 #include "crypto/sha256.h"   /* SHA-256 + HMAC-SHA256 (promoted to shared module) */
+#include "crypto/base64.h"   /* standard Base64 decode (promoted to shared module) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <ctype.h>
 #include <time.h>
 
-/* ===== Base64 Decoding (RFC 4648) ===== */
-
-static const unsigned char base64_decode_table[256] = {
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 62, 64, 64, 64, 63,
-    52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 64, 64, 64, 64, 64, 64,
-    64,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14,
-    15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 64, 64, 64, 64, 64,
-    64, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-    41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 64, 64, 64, 64, 64,
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
-    64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64
-};
+/* ===== Base64URL Decoding (RFC 4648) — standard Base64 lives in crypto/base64 ===== */
 
 static const unsigned char base64url_decode_table[256] = {
     64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
@@ -64,76 +45,6 @@ static const unsigned char base64url_decode_table[256] = {
     64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
     64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64
 };
-
-/**
- * base64_decode - Decode standard Base64 string
- * @input: Base64 encoded string
- * @input_len: Length of input string
- * @output: Buffer to store decoded data
- * @output_len: Size of output buffer
- * 
- * Returns: Number of decoded bytes, or -1 on error
- */
-static int base64_decode(const char *input, size_t input_len, unsigned char *output, size_t output_len)
-{
-    if (!input || !output || input_len == 0) {
-        return -1;
-    }
-
-    size_t i = 0, j = 0;
-    unsigned char buf[4];
-    int buf_count = 0;
-
-    for (i = 0; i < input_len; i++) {
-        unsigned char c = (unsigned char)input[i];
-        
-        /* Skip whitespace */
-        if (isspace(c)) {
-            continue;
-        }
-        
-        /* Handle padding */
-        if (c == '=') {
-            break;
-        }
-        
-        unsigned char val = base64_decode_table[c];
-        if (val == 64) {
-            return -1; /* Invalid character */
-        }
-        
-        buf[buf_count++] = val;
-        
-        if (buf_count == 4) {
-            if (j + 3 > output_len) {
-                return -1; /* Output buffer too small */
-            }
-            
-            output[j++] = (buf[0] << 2) | (buf[1] >> 4);
-            output[j++] = (buf[1] << 4) | (buf[2] >> 2);
-            output[j++] = (buf[2] << 6) | buf[3];
-            
-            buf_count = 0;
-        }
-    }
-    
-    /* Handle remaining bytes */
-    if (buf_count >= 2) {
-        if (j + 1 > output_len) {
-            return -1;
-        }
-        output[j++] = (buf[0] << 2) | (buf[1] >> 4);
-        
-        if (buf_count >= 3) {
-            if (j + 1 > output_len) {
-                return -1;
-            }
-            output[j++] = (buf[1] << 4) | (buf[2] >> 2);
-        }
-    }
-    
-    return (int)j;
-}
 
 /**
  * base64url_decode - Decode Base64URL string (RFC 4648)
