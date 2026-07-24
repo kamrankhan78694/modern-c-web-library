@@ -368,7 +368,7 @@ static void test_wire(void) {
 
     /* --- reader: read every field back --- */
     {
-        tls_reader r, body;
+        tls_reader_t r, body;
         uint8_t u8 = 0;
         uint16_t u16 = 0;
         uint32_t u24 = 0;
@@ -389,7 +389,7 @@ static void test_wire(void) {
     /* --- reader rejections --- */
     {
         static const uint8_t trunc[] = { 0x01 };            /* u16 needs 2 bytes */
-        tls_reader r, body;
+        tls_reader_t r, body;
         uint16_t u16 = 0;
         tls_reader_init(&r, trunc, sizeof trunc);
         check_true("wire read u16 truncated fails", tls_read_u16(&r, &u16) == 0);
@@ -397,7 +397,7 @@ static void test_wire(void) {
     }
     {
         static const uint8_t badvec[] = { 0x00, 0x05, 0xaa };  /* vec len 5, 1 byte body */
-        tls_reader r, body;
+        tls_reader_t r, body;
         tls_reader_init(&r, badvec, sizeof badvec);
         check_true("wire vector overrun fails", tls_read_vector(&r, 2, &body) == 0);
         tls_reader_init(&r, badvec, sizeof badvec);
@@ -407,7 +407,7 @@ static void test_wire(void) {
     /* --- writer: build the same framing and compare to `framed` --- */
     {
         uint8_t buf[64];
-        tls_writer w;
+        tls_writer_t w;
         size_t out_len = 0, marker;
         static const uint8_t vbody[] = { 0xaa, 0xbb, 0xcc };
         tls_writer_init(&w, buf, sizeof buf);
@@ -427,7 +427,7 @@ static void test_wire(void) {
     /* --- writer overflow + u24 range --- */
     {
         uint8_t buf[3];
-        tls_writer w;
+        tls_writer_t w;
         tls_writer_init(&w, buf, sizeof buf);
         tls_write_u16(&w, 0x1234);      /* 2 of 3 bytes */
         tls_write_u16(&w, 0x5678);      /* needs 2 more, only 1 left -> overflow */
@@ -435,6 +435,24 @@ static void test_wire(void) {
 
         tls_writer_init(&w, buf, sizeof buf);
         check_true("wire write u24 over 0xFFFFFF fails", tls_write_u24(&w, 0x1000000u) == 0);
+    }
+
+    /* --- invalid vector widths fail fast --- */
+    {
+        uint8_t buf[16];
+        tls_writer_t w;
+        size_t m;
+        tls_writer_init(&w, buf, sizeof buf);
+        (void)tls_writer_open_vector(&w, 0);            /* width must be 1..3 */
+        check_true("wire open_vector invalid width clears ok",
+                   tls_writer_finish(&w, NULL) == 0);
+
+        tls_writer_init(&w, buf, sizeof buf);
+        m = tls_writer_open_vector(&w, 2);
+        tls_write_u8(&w, 0xaa);
+        tls_writer_close_vector(&w, m, 4);              /* invalid close width */
+        check_true("wire close_vector invalid width clears ok",
+                   tls_writer_finish(&w, NULL) == 0);
     }
 }
 #endif /* WEBLIB_TLS */
