@@ -1339,6 +1339,9 @@ typedef struct jwt_auth_config {
     const char *secret;          /* HMAC-SHA256 secret key */
     size_t secret_len;           /* Secret key length */
     const char *header_name;     /* Header name (default: "Authorization") */
+    bool require_exp;            /* if true, reject a token that has no exp claim
+                                    (default false — exp remains optional per
+                                    RFC 7519, but strict callers can require it) */
 } jwt_auth_config_t;
 
 /**

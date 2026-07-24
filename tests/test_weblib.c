@@ -1864,6 +1864,85 @@ void test_jwt_auth_create_destroy(void) {
     PASS();
 }
 
+/* HS256 JWTs signed with JWT_TEST_SECRET (generated offline via HMAC-SHA256 over
+ * the exact base64url `header.payload`). Header/payload are chosen to exercise the
+ * alg/exp/nbf hardening in parse_jwt_token() — audit finding #32. Every token below
+ * carries a *valid* HMAC-SHA256 signature, so each assertion isolates one claim
+ * check rather than a signature mismatch. */
+#define JWT_TEST_SECRET "test-jwt-secret-0123456789"
+#define JWT_VALID_EXP    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5fQ.1S-DqJFMD1KXliurgo-QhUSDn3ALevStVN384iHy36A"
+#define JWT_NO_EXP       "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1In0.6RGrNIPesWnxkwWH5JlP_fH7INktz6XGM6vEySxWah0"
+#define JWT_EXPIRED      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjoxfQ.8NjcsSJ7rP8HTHu01MltkchCtgiaoMYgsVipujwY6Zc"
+#define JWT_FUTURE_NBF   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5LCJuYmYiOjk5OTk5OTk5OTl9.Z0TIpqNNWC3jwaS__rghJIYYaGYibq39l7gXeDwciuo"
+#define JWT_ALG_HS384    "eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5fQ.kUv6SgP8oAsgTUZj5bvK7QB3FCTxE5SRsZwuLJsCifA"
+#define JWT_ALG_NONE     "eyJhbGciOiJub25lIiwibm90ZSI6IkhTMjU2In0.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5fQ.hRfopXAWpAFoPocoGWBNyugSqvpmQqToBhzha-qWHNQ"
+/* Identical header.payload to JWT_VALID_EXP but signed with a DIFFERENT secret,
+ * so only the HMAC signature differs — isolates the signature-verification gate. */
+#define JWT_BAD_SIG      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1IiwiZXhwIjo5OTk5OTk5OTk5fQ.VPFqsu6N89mLUKTsD4tXMRStoLRZw2zavoNy58X1YT4"
+
+/* Run the JWT middleware over a request carrying `Authorization: Bearer <token>`
+ * and return whether it authorized the request (true) or rejected it (false/401). */
+static bool _jwt_authorizes(middleware_fn_t mw, const char *token) {
+    http_request_t req = {0};
+    http_response_t res = {0};
+    char auth[1024];
+    snprintf(auth, sizeof(auth), "Bearer %s", token);
+    _test_add_header(&req.headers, "authorization", auth);
+
+    bool ok = mw(&req, &res, NULL);
+
+    _test_free_header_list(req.headers);
+    _test_free_header_list(res.headers);   /* 401 path sets WWW-Authenticate */
+    free(res.body);                        /* 401 path sets a body; NULL on success */
+    return ok;
+}
+
+/* Test auth middleware - JWT verification (alg/exp/nbf hardening, audit #32) */
+void test_jwt_auth_verify(void) {
+    TEST("jwt_auth (verify: alg/exp/nbf)");
+
+    jwt_auth_config_t cfg = {
+        .secret = JWT_TEST_SECRET,
+        .secret_len = sizeof(JWT_TEST_SECRET) - 1,
+        .header_name = NULL,
+        .require_exp = false
+    };
+    middleware_fn_t mw = jwt_auth_middleware_create(&cfg);
+    ASSERT(mw != NULL);
+
+    /* Correctly-signed HS256 token with a far-future exp -> authorized. */
+    ASSERT(_jwt_authorizes(mw, JWT_VALID_EXP) == true);
+    /* A token whose HMAC was computed with a different secret is rejected — the
+     * signature is verified, not merely decoded. */
+    ASSERT(_jwt_authorizes(mw, JWT_BAD_SIG) == false);
+    /* exp is OPTIONAL by default (RFC 7519); a token without one still verifies. */
+    ASSERT(_jwt_authorizes(mw, JWT_NO_EXP) == true);
+    /* Expired token rejected on its exp claim. */
+    ASSERT(_jwt_authorizes(mw, JWT_EXPIRED) == false);
+    /* Not-yet-valid token rejected on its nbf claim. */
+    ASSERT(_jwt_authorizes(mw, JWT_FUTURE_NBF) == false);
+    /* alg must be exactly HS256: an HS384 header is rejected even though the token
+     * carries a valid HMAC-SHA256 signature. */
+    ASSERT(_jwt_authorizes(mw, JWT_ALG_HS384) == false);
+    /* alg-confusion guard: header is {"alg":"none","note":"HS256"} — the literal
+     * "HS256" appears only inside another field's value. A substring alg check
+     * would accept this validly-HMAC'd token; the parsed check rejects it. */
+    ASSERT(_jwt_authorizes(mw, JWT_ALG_NONE) == false);
+
+    jwt_auth_middleware_destroy();
+
+    /* With require_exp enabled, an otherwise-valid token that omits exp is
+     * rejected, while one that carries exp still authorizes. */
+    cfg.require_exp = true;
+    mw = jwt_auth_middleware_create(&cfg);
+    ASSERT(mw != NULL);
+    ASSERT(_jwt_authorizes(mw, JWT_NO_EXP) == false);
+    ASSERT(_jwt_authorizes(mw, JWT_VALID_EXP) == true);
+    jwt_auth_middleware_destroy();
+
+    PASS();
+}
+
 /* Test db_pool from PR #17 */
 void test_db_pool_create_destroy(void) {
     TEST("db_pool (create/destroy)");
@@ -4741,6 +4820,7 @@ int main(void) {
     test_basic_auth_create_destroy();
     test_apikey_auth_create_destroy();
     test_jwt_auth_create_destroy();
+    test_jwt_auth_verify();
 
     /* Phase 6: Database connection pool tests */
     test_db_pool_create_destroy();
