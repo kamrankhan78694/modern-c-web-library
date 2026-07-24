@@ -36,6 +36,16 @@ if(NOT EMSCRIPTEN)
 
     # Add worker test to CTest
     add_test(NAME WorkerTests COMMAND test_worker)
+
+    # Experimental TLS scaffold smoke test -- only when TLS is enabled. Verifies the
+    # option -> -DWEBLIB_TLS -> compiled native source -> linkable symbol wiring.
+    if(WEBLIB_ENABLE_TLS)
+        add_executable(test_tls test_tls.c)
+        target_include_directories(test_tls PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/tls)
+        target_compile_definitions(test_tls PRIVATE WEBLIB_TLS)
+        target_link_libraries(test_tls weblib ${PLATFORM_LIBS})
+        add_test(NAME TlsTests COMMAND test_tls)
+    endif()
 endif()
 
 # WASM capability test (runs on both native and WASM builds)
