@@ -3186,6 +3186,10 @@ void test_health_check_endpoint(void) {
     ASSERT(strstr(buf, "\"status\"") != NULL);
     ASSERT(strstr(buf, "\"ok\"") != NULL);
     ASSERT(strstr(buf, "\"uptime_seconds\"") != NULL);
+    /* Exactly one Content-Type: application/json — not a second, conflicting
+     * text/plain from send_text (audit #34). */
+    ASSERT(strstr(buf, "application/json") != NULL);
+    ASSERT(strstr(buf, "text/plain") == NULL);
 
     http_server_stop(server);
     http_server_destroy(server);
