@@ -647,9 +647,59 @@ static json_value_t *parse_string(const char **str) {
     return value;
 }
 
+/* strtod() for a pre-validated JSON number token [s, s+len). JSON always uses '.'
+ * as its decimal separator, but strtod() honors LC_NUMERIC: under a locale whose
+ * separator is not '.' (e.g. ',' in de_DE/fr_FR) it stops at the '.', so "3.14"
+ * reads back as 3 and the caller's span check then rejects the number. Rewrite that
+ * single '.' as the locale's decimal separator on a copy so strtod() consumes the
+ * whole token, then map the end pointer back. localeconv()->decimal_point is a C
+ * string that may be multi-byte, so the full separator is spliced in and the end
+ * pointer is corrected for the resulting length change. Two zero-copy fast paths
+ * cover the vast majority of calls: a '.'-locale (C/POSIX/en_*), and any token with
+ * no fractional '.' (integers, pure-exponent like "1e3") — both of which strtod()
+ * reads verbatim regardless of locale. On allocation failure *end_out is set to s so
+ * the caller's `end != p` check fails the parse closed. Mirrors the output-side
+ * json_normalize_decimal(). */
+static double json_strtod(const char *s, size_t len, char **end_out) {
+    const char *dp = localeconv()->decimal_point;
+    if (dp[0] == '.' && dp[1] == '\0') {
+        return strtod(s, end_out);            /* '.'-locale: never needs translation */
+    }
+    const char *dot = (const char *)memchr(s, '.', len);
+    if (!dot) {
+        return strtod(s, end_out);            /* no fractional '.' -> locale-independent */
+    }
+    size_t dplen = strlen(dp);
+    if (dplen == 0) {                         /* pathological locale; nothing sane to do */
+        return strtod(s, end_out);
+    }
+    size_t head = (size_t)(dot - s);          /* bytes before the '.' */
+    size_t tail = len - head - 1;             /* bytes after the '.' */
+    size_t need = head + dplen + tail;        /* '.' (1 byte) -> dp (dplen bytes) */
+    char stackbuf[64];
+    char *tmp = (need < sizeof(stackbuf)) ? stackbuf : (char *)malloc(need + 1);
+    if (!tmp) {
+        *end_out = (char *)s;
+        return 0.0;
+    }
+    memcpy(tmp, s, head);                      /* integer part */
+    memcpy(tmp + head, dp, dplen);             /* locale decimal separator */
+    memcpy(tmp + head + dplen, dot + 1, tail); /* fraction + exponent */
+    tmp[need] = '\0';
+    char *tend;
+    double num = strtod(tmp, &tend);
+    /* A pre-validated number leaves strtod at the buffer end; map that back to s+len.
+     * Anything shorter is a mismatch -> point before p so the caller fails closed. */
+    *end_out = ((size_t)(tend - tmp) == need) ? (char *)s + len : (char *)s;
+    if (tmp != stackbuf) {
+        free(tmp);
+    }
+    return num;
+}
+
 static json_value_t *parse_number(const char **str) {
     const char *p = *str;
-    
+
     /* RFC 8259 number: [ minus ] int [ frac ] [ exp ]
      * int = "0" / ( digit1-9 *DIGIT )
      * Reject hex, leading '+', leading '.', inf, nan */
@@ -670,14 +720,14 @@ static json_value_t *parse_number(const char **str) {
     }
     
     char *end;
-    double num = strtod(*str, &end);
-    
+    double num = json_strtod(*str, (size_t)(p - *str), &end);
+
     if (end != p) {
         return NULL;
     }
-    
+
     *str = end;
-    
+
     return json_number_create(num);
 }
 
@@ -766,15 +816,24 @@ static bool stringify_string(const char *str, char **output, size_t *capacity, s
 }
 
 /* JSON always uses '.' as the decimal separator, but snprintf("%g") emits the
- * program's active LC_NUMERIC separator (e.g. ',' under de_DE), which would be
- * invalid JSON. Normalize it in place (a 1:1 char swap, so length is unchanged)
- * so output is valid regardless of the host locale. Only the %g path can
- * produce a separator; integer/"null"/"-0" output has none. */
+ * program's active LC_NUMERIC separator (e.g. ',' under de_DE, or the multi-byte
+ * '٫' under ar_SA), which would be invalid JSON. Replace the single separator with
+ * '.' so output is valid regardless of the host locale. localeconv()->decimal_point
+ * is a C string that may be multi-byte, so when it is longer than one byte the tail
+ * is shifted up to keep the number contiguous. Only the %g path can produce a
+ * separator; integer/"null"/"-0" output has none. */
 static void json_normalize_decimal(char *s) {
-    char sep = localeconv()->decimal_point[0];
-    if (sep != '\0' && sep != '.') {
-        char *p = strchr(s, sep);
-        if (p) *p = '.';
+    const char *dp = localeconv()->decimal_point;
+    if (dp[0] == '\0' || (dp[0] == '.' && dp[1] == '\0')) {
+        return;                              /* already '.', nothing to normalize */
+    }
+    char *p = strstr(s, dp);
+    if (p) {
+        size_t dplen = strlen(dp);
+        *p = '.';
+        if (dplen > 1) {                     /* collapse the extra separator bytes */
+            memmove(p + 1, p + dplen, strlen(p + dplen) + 1);
+        }
     }
 }
 
