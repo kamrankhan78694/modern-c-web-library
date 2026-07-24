@@ -158,6 +158,10 @@ typedef struct http_parser {
     size_t current_chunk_size;
     size_t current_chunk_received;
     bool keep_alive;
+    bool http_1_1;               /* protocol version is HTTP/1.1 — set once from the
+                                    request line and never mutated by Connection, so
+                                    Host enforcement keys on the version (RFC 7230
+                                    §5.4) rather than on the connection-reuse flag */
     bool seen_host;
     http_status_t error_status;
     const char *error_message;
@@ -1515,9 +1519,11 @@ static int parse_request_line(http_parser_t *parser) {
     }
 
     if (strcmp(version, "HTTP/1.1") == 0) {
-        parser->keep_alive = true;
+        parser->http_1_1 = true;
+        parser->keep_alive = true;       /* HTTP/1.1 default; a Connection header may override */
     } else if (strcmp(version, "HTTP/1.0") == 0) {
-        parser->keep_alive = false;
+        parser->http_1_1 = false;
+        parser->keep_alive = false;      /* HTTP/1.0 default; a Connection header may override */
     } else {
         free(line);
         parser_set_error(parser, HTTP_BAD_REQUEST, "Unsupported HTTP version");
@@ -1887,7 +1893,12 @@ static int parse_headers(http_parser_t *parser) {
 
         if (crlf_index == 0) {
             parser_consume(parser, 2);
-            if (parser->keep_alive && !parser->seen_host) {
+            /* RFC 7230 §5.4: an HTTP/1.1 request MUST include a Host header.
+             * Key this on the protocol VERSION (http_1_1), not keep_alive — the
+             * latter is toggled by the Connection header, which would otherwise
+             * let "HTTP/1.1 + Connection: close" skip the check and force it on
+             * "HTTP/1.0 + Connection: keep-alive". */
+            if (parser->http_1_1 && !parser->seen_host) {
                 parser_set_error(parser, HTTP_BAD_REQUEST, "Missing Host header");
                 return -1;
             }
@@ -2085,6 +2096,7 @@ static void http_parser_reset(http_parser_t *parser, http_request_t *req, bool p
     parser->current_chunk_size = 0;
     parser->current_chunk_received = 0;
     parser->keep_alive = false;
+    parser->http_1_1 = false;
     parser->seen_host = false;
     parser->error_status = 0;
     parser->error_message = NULL;
