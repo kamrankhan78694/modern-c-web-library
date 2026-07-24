@@ -13,6 +13,7 @@
 
 #ifdef WEBLIB_TLS
 #include "der.h"
+#include "pem.h"
 #endif
 
 static int g_failures = 0;
@@ -150,6 +151,84 @@ static void test_der_tag_enforcement(void) {
     check_true("der: der_enter rejects wrong tag",
                der_enter(&r, DER_TAG_SEQUENCE, &child) == -1);
 }
+
+/* PEM decoding: extract the DER payload of a BEGIN/END block. The vector is a
+ * SEQUENCE{INTEGER 5, OCTET STRING "PEM"} = 30 08 02 01 05 04 03 50 45 4d,
+ * Base64 "MAgCAQUEA1BFTQ==" (cross-checked with an independent encoder). */
+static void test_pem_decode(void) {
+    static const char lf_pem[] =
+        "-----BEGIN CERTIFICATE-----\n"
+        "MAgCAQUEA1BFTQ==\n"
+        "-----END CERTIFICATE-----\n";
+    static const char crlf_pem[] =
+        "-----BEGIN CERTIFICATE-----\r\n"
+        "MAgCAQUEA1BFTQ==\r\n"
+        "-----END CERTIFICATE-----\r\n";
+    static const unsigned char expect[] = {
+        0x30, 0x08, 0x02, 0x01, 0x05, 0x04, 0x03, 0x50, 0x45, 0x4d
+    };
+    unsigned char out[64];
+    size_t out_len = 0;
+
+    check_true("pem: decodes a CERTIFICATE block (LF)",
+               pem_decode("CERTIFICATE", lf_pem, strlen(lf_pem), out, sizeof out, &out_len) == 0
+               && out_len == sizeof expect && memcmp(out, expect, sizeof expect) == 0);
+
+    out_len = 0;
+    check_true("pem: decodes a CERTIFICATE block (CRLF)",
+               pem_decode("CERTIFICATE", crlf_pem, strlen(crlf_pem), out, sizeof out, &out_len) == 0
+               && out_len == sizeof expect && memcmp(out, expect, sizeof expect) == 0);
+
+    {   /* Unpadded body (Base64 length is a multiple of 4 with no '='): decoding
+         * must stop at the END marker, not rely on a padding byte. */
+        static const char unpadded[] =
+            "-----BEGIN PRIVATE KEY-----\n"
+            "MAcEBWFiY2Rl\n"
+            "-----END PRIVATE KEY-----\n";
+        static const unsigned char want[] = {
+            0x30, 0x07, 0x04, 0x05, 0x61, 0x62, 0x63, 0x64, 0x65
+        };
+        out_len = 0;
+        check_true("pem: decodes an unpadded PRIVATE KEY block",
+                   pem_decode("PRIVATE KEY", unpadded, strlen(unpadded), out, sizeof out, &out_len) == 0
+                   && out_len == sizeof want && memcmp(out, want, sizeof want) == 0);
+    }
+
+    check_true("pem: mismatched label rejected",
+               pem_decode("PRIVATE KEY", lf_pem, strlen(lf_pem), out, sizeof out, &out_len) == -1);
+
+    {   /* no END marker */
+        static const char s[] = "-----BEGIN CERTIFICATE-----\nMAgCAQUEA1BFTQ==\n";
+        check_true("pem: missing END marker rejected",
+                   pem_decode("CERTIFICATE", s, strlen(s), out, sizeof out, &out_len) == -1);
+    }
+    {   /* no BEGIN marker */
+        static const char s[] = "MAgCAQUEA1BFTQ==\n-----END CERTIFICATE-----\n";
+        check_true("pem: missing BEGIN marker rejected",
+                   pem_decode("CERTIFICATE", s, strlen(s), out, sizeof out, &out_len) == -1);
+    }
+    {   /* empty body between markers */
+        static const char s[] = "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n";
+        check_true("pem: empty body rejected",
+                   pem_decode("CERTIFICATE", s, strlen(s), out, sizeof out, &out_len) == -1);
+    }
+    check_true("pem: garbage input rejected",
+               pem_decode("CERTIFICATE", "not a pem file at all", 21, out, sizeof out, &out_len) == -1);
+
+    check_true("pem: too-small output rejected",
+               pem_decode("CERTIFICATE", lf_pem, strlen(lf_pem), out, 4, &out_len) == -1);
+
+    {   /* label longer than PEM_MAX_LABEL */
+        char big[64];
+        memset(big, 'A', sizeof big);
+        big[50] = '\0';
+        check_true("pem: over-long label rejected",
+                   pem_decode(big, lf_pem, strlen(lf_pem), out, sizeof out, &out_len) == -1);
+    }
+    check_true("pem: NULL arguments rejected",
+               pem_decode(NULL, lf_pem, strlen(lf_pem), out, sizeof out, &out_len) == -1
+               && pem_decode("CERTIFICATE", NULL, 10, out, sizeof out, &out_len) == -1);
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -161,6 +240,7 @@ int main(void) {
     test_der_long_form_length();
     test_der_rejects_malformed();
     test_der_tag_enforcement();
+    test_pem_decode();
 
     if (g_failures == 0) {
         printf("All TLS parse tests passed.\n");
