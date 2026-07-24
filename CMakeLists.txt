@@ -85,6 +85,7 @@ set(WEBLIB_SOURCES_TLS
     src/tls/chacha20.c
     src/tls/poly1305.c
     src/tls/chacha20poly1305.c
+    src/tls/record.c
     src/tls/hkdf.c
     src/tls/key_schedule.c
     src/tls/field25519.c
