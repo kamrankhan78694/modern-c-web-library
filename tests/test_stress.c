@@ -1030,6 +1030,54 @@ void test_stress_transfer_encoding_smuggling(void) {
     PASS();
 }
 
+/* Regression (round-5 review): the request-target must not carry whitespace or
+ * control bytes into req->path. A bare CR/LF/HTAB/CTL survives find_crlf (which
+ * splits only on CR+LF) and the SP-only token split, and is a CRLF-injection /
+ * request-line smuggling / cache-poisoning primitive — it must be 400. */
+void test_stress_request_target_control_bytes(void) {
+    TEST("request-target with control bytes is rejected");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/ab", dummy_handler);
+    http_server_set_router(server, router);
+
+    uint16_t port = 19011;
+    ASSERT(http_server_listen(server, port) == 0);
+    usleep(200000);
+
+    char response[4096];
+
+    /* A clean target still works. */
+    const char *good = "GET /ab HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    ASSERT(_stress_send_request(port, good, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "200 OK") != NULL);
+
+    const char *bad_target[] = {
+        "GET /a\rb HTTP/1.1",       /* bare CR */
+        "GET /a\nb HTTP/1.1",       /* bare LF */
+        "GET /a\tb HTTP/1.1",       /* HTAB */
+        "GET /a\x01""b HTTP/1.1",   /* C0 control */
+        "GET /a\x7f""b HTTP/1.1",   /* DEL */
+        NULL
+    };
+    for (int i = 0; bad_target[i] != NULL; i++) {
+        char req[256];
+        snprintf(req, sizeof(req),
+                 "%s\r\nHost: localhost\r\nConnection: close\r\n\r\n", bad_target[i]);
+        ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
+        ASSERT(strstr(response, "400") != NULL);
+    }
+
+    http_server_stop(server);
+    usleep(100000);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 void test_stress_many_headers(void) {
     TEST("request with many headers (90 headers)");
 
@@ -1537,6 +1585,7 @@ int main(void) {
         test_stress_request_deadline_silent();
         test_stress_listen_failure_cleanup();
         test_stress_transfer_encoding_smuggling();
+        test_stress_request_target_control_bytes();
     }
 
     /* Input Validation Stress Tests */

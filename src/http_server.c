@@ -1476,6 +1476,23 @@ static int parse_request_line(http_parser_t *parser) {
         return -1;
     }
 
+    /* RFC 7230 §3.2/§3.5: the request-target must contain no whitespace or
+     * control characters. find_crlf only splits on CR+LF pairs and the token
+     * split is SP-only, so without this a bare CR/LF/HTAB or other CTL byte
+     * survives verbatim into req->path / query_string — a CRLF-injection /
+     * response-splitting primitive, and a request-line smuggling / cache-key
+     * divergence when an upstream proxy interprets the byte differently. Reject
+     * SP, HTAB, CR, LF, any other C0 control, and DEL with 400. (High bytes
+     * 0x80-0xFF are left for the routing/application layer.) */
+    for (const char *t = target; *t != '\0'; t++) {
+        unsigned char c = (unsigned char)*t;
+        if (c <= 0x20 || c == 0x7f) {
+            free(line);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid request target");
+            return -1;
+        }
+    }
+
     char *query = strchr(target, '?');
     if (query) {
         *query = '\0';
