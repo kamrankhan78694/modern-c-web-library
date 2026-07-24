@@ -17,6 +17,8 @@
 #include "x25519.h"
 #include "sha512.h"
 #include "ed25519.h"
+#include "key_schedule.h"
+#include "crypto/sha256.h"
 #endif
 
 static int g_failures = 0;
@@ -596,6 +598,80 @@ static void test_ed25519(void) {
                    ed25519_verify(got_sig, NULL, 5, pk) == 0);
     }
 }
+
+/* Derive-Secret then compare, failing clearly if the derivation itself returns 0
+ * (rather than comparing an uninitialized buffer). */
+static void check_derive(const char *name, const uint8_t secret[32], const char *label,
+                         const uint8_t transcript_hash[32], uint8_t out[32],
+                         const char *expected_hex) {
+    if (tls13_derive_secret(secret, label, transcript_hash, out) != 1) {
+        printf("FAIL: %s (tls13_derive_secret returned 0)\n", name);
+        g_failures++;
+        return;
+    }
+    check_hex(name, out, 32, expected_hex);
+}
+
+/* RFC 8446 §7.1 key schedule. early_secret and derived are the authoritative
+ * RFC 8448 trace anchors; the rest of the chain is exercised with a fixed ECDHE
+ * (the RFC 7748 §6.1 shared secret) and synthetic transcript hashes (SHA-256 of
+ * marker strings — the key-schedule math is independent of the transcript's
+ * content), all cross-checked against an independent HKDF-SHA256 reference. */
+static void test_key_schedule(void) {
+    uint8_t zero[32] = {0};
+    uint8_t early[32], empty_hash[32], derived[32], ecdhe[32], hs[32];
+    uint8_t th_ch_sh[32], c_hs[32], s_hs[32], derived_hs[32], master[32];
+    uint8_t th_ch_sf[32], s_ap[32];
+    uint8_t key[32], iv[12], fin[32];
+    const char *m_ch_sh = "ClientHello||ServerHello";
+    const char *m_ch_sf = "ClientHello..server Finished";
+
+    /* Early Secret = HKDF-Extract(0, 0). */
+    tls13_extract(zero, 32, zero, 32, early);
+    check_hex("ks early_secret (RFC 8448)", early, 32,
+              "33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a");
+
+    /* derived = Derive-Secret(Early, "derived", ""). */
+    tls13_empty_transcript_hash(empty_hash);
+    check_hex("ks empty transcript hash", empty_hash, 32,
+              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    check_derive("ks derived (RFC 8448)", early, "derived", empty_hash, derived,
+                 "6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba");
+
+    /* Handshake Secret = HKDF-Extract(derived, ECDHE). */
+    from_hex("4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742", ecdhe, 32);
+    tls13_extract(derived, 32, ecdhe, 32, hs);
+    check_hex("ks handshake_secret", hs, 32,
+              "e4e520f8ca639e6562121a8d006bbce3e012f049744806f283e99c54cab713f3");
+
+    /* Handshake traffic secrets over the ClientHello..ServerHello transcript. */
+    sha256((const uint8_t *)m_ch_sh, strlen(m_ch_sh), th_ch_sh);
+    check_derive("ks c_hs_traffic", hs, "c hs traffic", th_ch_sh, c_hs,
+                 "cb24193a3801afad533babae440f2c5ea5d4a0a667c7811d45ec9b89441facaf");
+    check_derive("ks s_hs_traffic", hs, "s hs traffic", th_ch_sh, s_hs,
+                 "6186d5e4a6913a51e3d93c674e957c47ab3a8e06ae6f1568f9a53ab0072430ba");
+
+    /* Master Secret = HKDF-Extract(Derive-Secret(HS, "derived", ""), 0). */
+    check_derive("ks derived_hs", hs, "derived", empty_hash, derived_hs,
+                 "b47c8bd24c77a2a9fbf501b9b592afa8fe7c248b16b6db86f209f47aa2de64d4");
+    tls13_extract(derived_hs, 32, zero, 32, master);
+    check_hex("ks master_secret", master, 32,
+              "34f6eb660fafe5471a480c287f29ec6f688153423a8c35ad4c15e072c576875a");
+
+    /* Application traffic secret over the ClientHello..server Finished transcript. */
+    sha256((const uint8_t *)m_ch_sf, strlen(m_ch_sf), th_ch_sf);
+    check_derive("ks s_ap_traffic", master, "s ap traffic", th_ch_sf, s_ap,
+                 "345773668b61ec576ebf34546f30121824a5c01da76ca6277bbaefd28a3ab9b1");
+
+    /* Traffic key/IV (ChaCha20: 32/12) + Finished key from s_hs_traffic. */
+    check_true("ks traffic_keys ok", tls13_traffic_keys(s_hs, key, 32, iv) == 1);
+    check_hex("ks s_hs write_key", key, 32,
+              "65b1acab64981f4a389f7cbb61960e188cba36c394347b6f2dec27815679627e");
+    check_hex("ks s_hs write_iv", iv, 12, "49a58cdfb9fb269bfc6d10a7");
+    check_true("ks finished_key ok", tls13_finished_key(s_hs, fin) == 1);
+    check_hex("ks s_hs finished_key", fin, 32,
+              "3517ba1c0647b82fe6db82add2ed8314b1ea4acb2c821f1dbcc1ffd557a975f6");
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -611,6 +687,7 @@ int main(void) {
     test_sha512();
     test_x25519();
     test_ed25519();
+    test_key_schedule();
 
     if (g_failures == 0) {
         printf("All TLS crypto KATs passed.\n");
