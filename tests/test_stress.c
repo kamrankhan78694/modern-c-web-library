@@ -1184,10 +1184,15 @@ void test_stress_path_normalization(void) {
                  cases[i].req_path);
         ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
         ASSERT(strstr(response, "200 OK") != NULL);
-        ASSERT(strstr(response, cases[i].canonical) != NULL);  /* echoed canonical path */
+        /* The response body is the echoed req->path; assert it equals the
+         * canonical form exactly (Connection: close, so nothing trails it). */
+        char *body = strstr(response, "\r\n\r\n");
+        ASSERT(body != NULL);
+        ASSERT(strcmp(body + 4, cases[i].canonical) == 0);
     }
 
-    /* Root "/" and its all-slash forms collapse to "/" and hit the root handler. */
+    /* Root "/" and its all-slash forms collapse to "/" and hit the root handler,
+     * and the handler must see exactly "/". */
     const char *roots[] = { "/", "//", "///", NULL };
     for (int i = 0; roots[i] != NULL; i++) {
         char req[256];
@@ -1195,6 +1200,9 @@ void test_stress_path_normalization(void) {
                  "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", roots[i]);
         ASSERT(_stress_send_request(port, req, response, sizeof(response)) == 0);
         ASSERT(strstr(response, "200 OK") != NULL);
+        char *body = strstr(response, "\r\n\r\n");
+        ASSERT(body != NULL);
+        ASSERT(strcmp(body + 4, "/") == 0);
     }
 
     /* Normalization must not over-match: an unregistered path still 404s. */
