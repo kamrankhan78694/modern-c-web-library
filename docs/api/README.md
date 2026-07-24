@@ -290,7 +290,8 @@ apikey_auth_middleware_destroy();
 jwt_auth_config_t config = {
     .secret = "my-secret-key",
     .secret_len = 13,
-    .header_name = NULL  // Defaults to "Authorization"
+    .header_name = NULL,  // Defaults to "Authorization"
+    .require_exp = false  // Set true to reject tokens that carry no "exp" claim
 };
 
 middleware_fn_t mw = jwt_auth_middleware_create(&config);
@@ -298,6 +299,12 @@ router_use_middleware(router, mw);
 // ...
 jwt_auth_middleware_destroy();
 ```
+
+The verifier accepts **only** `alg: "HS256"` (the header's `alg` field is parsed and
+compared exactly — not substring-matched) and validates the time claims when present:
+an expired `exp` or a not-yet-valid `nbf` is rejected. `exp` is OPTIONAL by default
+(RFC 7519); set `require_exp = true` so a token lacking `exp` is refused, preventing a
+leaked exp-less token from replaying indefinitely.
 
 ---
 

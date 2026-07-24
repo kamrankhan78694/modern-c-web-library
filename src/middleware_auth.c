@@ -709,6 +709,88 @@ void apikey_auth_middleware_destroy(void)
 
 static jwt_auth_config_t *g_jwt_auth_config = NULL;
 
+/* Advance *pp past optional whitespace, exactly one ':' name/value separator, and
+ * more optional whitespace — i.e. to the first byte of a JSON member's value.
+ * Requiring precisely one colon keeps this a real structural parse: a member with
+ * no separator ({"alg""HS256"}) or a repeated one ({"alg":::"HS256"}) is malformed
+ * JSON and is rejected rather than leniently accepted. Returns false if the single
+ * required colon is absent. */
+static bool json_skip_to_value(const char **pp) {
+    const char *v = *pp;
+    while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\r') v++;
+    if (*v != ':') {
+        return false;                 /* missing name:value separator */
+    }
+    v++;
+    while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\r') v++;
+    *pp = v;
+    return true;
+}
+
+/* Return true only if the JWT header's "alg" parameter is exactly the string
+ * "HS256". A PARSED check (find the "alg" key, read its quoted value) rather than
+ * a substring match: HMAC-SHA256 is the only algorithm this verifier supports,
+ * and parsing the field — instead of accepting any header that merely contains
+ * the text "HS256" — forecloses alg-confusion should other algorithms ever be
+ * added. Rejects a missing alg, a non-string alg, or any value other than
+ * "HS256". */
+static bool jwt_header_alg_is_hs256(const char *header_json) {
+    const char *p = header_json;
+    const char *key = NULL;
+    while ((p = strstr(p, "\"alg\"")) != NULL) {
+        if (p == header_json || p[-1] == '{' || p[-1] == ',' ||
+            p[-1] == ' ' || p[-1] == '\t' || p[-1] == '\n' || p[-1] == '\r') {
+            key = p;
+            break;
+        }
+        p += 5;
+    }
+    if (!key) {
+        return false;                 /* no alg header -> reject */
+    }
+    const char *v = key + 5;          /* past the "alg" key token */
+    if (!json_skip_to_value(&v)) {
+        return false;                 /* malformed: no name:value separator */
+    }
+    if (*v != '"') {
+        return false;                 /* alg value must be a JSON string */
+    }
+    v++;
+    return strncmp(v, "HS256", 5) == 0 && v[5] == '"';
+}
+
+/* Look up a base-10 integer JSON claim (e.g. `key` == "\"exp\"") in the flat JWT
+ * payload. Matches only a real key — one preceded by '{', ',' or whitespace, not
+ * a substring inside some string value. Returns true and sets *out when found
+ * with a numeric value. */
+static bool jwt_claim_int(const char *payload_json, const char *key, long *out) {
+    size_t keylen = strlen(key);
+    const char *p = payload_json;
+    const char *found = NULL;
+    while ((p = strstr(p, key)) != NULL) {
+        if (p == payload_json || p[-1] == '{' || p[-1] == ',' ||
+            p[-1] == ' ' || p[-1] == '\t' || p[-1] == '\n' || p[-1] == '\r') {
+            found = p;
+            break;
+        }
+        p += keylen;
+    }
+    if (!found) {
+        return false;
+    }
+    const char *v = found + keylen;
+    if (!json_skip_to_value(&v)) {
+        return false;                 /* malformed: no key:value separator */
+    }
+    char *endptr = NULL;
+    long val = strtol(v, &endptr, 10);
+    if (endptr == v) {
+        return false;                 /* non-numeric value */
+    }
+    *out = val;
+    return true;
+}
+
 /**
  * parse_jwt_token - Parse and verify JWT token
  * @token: JWT token string
@@ -721,6 +803,7 @@ static jwt_auth_config_t *g_jwt_auth_config = NULL;
  */
 static bool parse_jwt_token(const char *token,
                            const uint8_t *secret, size_t secret_len,
+                           bool require_exp,
                            char *payload_out, size_t payload_size)
 {
     const char *dot1, *dot2;
@@ -756,8 +839,9 @@ static bool parse_jwt_token(const char *token,
     }
     header_decoded[decoded_len] = '\0';
 
-    /* Verify algorithm is HS256 */
-    if (!strstr((char *)header_decoded, "\"HS256\"")) {
+    /* Verify the algorithm is exactly HS256 (a parsed field check, not a
+     * substring match on the decoded header). */
+    if (!jwt_header_alg_is_hs256((char *)header_decoded)) {
         goto cleanup; /* Only HS256 supported */
     }
 
@@ -798,38 +882,27 @@ static bool parse_jwt_token(const char *token,
         goto cleanup;
     }
 
-    /* Validate expiration claim if present.
-     * Parse properly: find "exp" key as a JSON key (preceded by quote),
-     * not just any occurrence of "exp" in a string value. */
+    /* Validate the time-based claims. exp/nbf are matched as real JSON keys, not
+     * substrings of a string value (jwt_claim_int). */
     {
-        const char *search = (const char *)payload_decoded;
-        const char *exp_str = NULL;
-        while ((search = strstr(search, "\"exp\"")) != NULL) {
-            /* Verify this is a key: check that the character before the opening
-             * quote is either '{', ',' or whitespace (not inside a string value) */
-            if (search == (const char *)payload_decoded || 
-                search[-1] == '{' || search[-1] == ',' || 
-                search[-1] == ' ' || search[-1] == '\t' ||
-                search[-1] == '\n' || search[-1] == '\r') {
-                exp_str = search;
-                break;
-            }
-            search += 5;
+        time_t now = time(NULL);
+        long exp_val = 0, nbf_val = 0;
+        bool have_exp = jwt_claim_int((const char *)payload_decoded, "\"exp\"", &exp_val);
+
+        /* exp: reject an expired token. */
+        if (have_exp && exp_val > 0 && (time_t)exp_val < now) {
+            goto cleanup; /* Token expired */
         }
-        if (exp_str) {
-            /* Skip to the value: past "exp" and any whitespace/colon */
-            exp_str += 5; /* skip "exp"" */
-            while (*exp_str == ' ' || *exp_str == ':' || *exp_str == '\t') {
-                exp_str++;
-            }
-            char *endptr = NULL;
-            long exp_val = strtol(exp_str, &endptr, 10);
-            if (endptr != exp_str && exp_val > 0) {
-                time_t now = time(NULL);
-                if ((time_t)exp_val < now) {
-                    goto cleanup; /* Token expired */
-                }
-            }
+        /* Optionally require exp to be present at all (RFC 7519 leaves it OPTIONAL;
+         * strict callers can opt in so a leaked exp-less token can't replay
+         * forever). */
+        if (require_exp && !have_exp) {
+            goto cleanup; /* exp claim required but absent */
+        }
+        /* nbf: reject a token that is not yet valid. */
+        if (jwt_claim_int((const char *)payload_decoded, "\"nbf\"", &nbf_val) &&
+            nbf_val > 0 && now < (time_t)nbf_val) {
+            goto cleanup; /* Token not yet valid */
         }
     }
 
@@ -888,6 +961,7 @@ static bool jwt_auth_handler(http_request_t *req, http_response_t *res, void *us
     if (!parse_jwt_token(token,
                         (const uint8_t *)config->secret,
                         config->secret_len,
+                        config->require_exp,
                         payload, sizeof(payload))) {
         goto unauthorized;
     }
