@@ -34,38 +34,46 @@
 /* Context-specific constructed tag [n], e.g. [0] EXPLICIT is DER_TAG_CONTEXT(0). */
 #define DER_TAG_CONTEXT(n)    ((uint8_t)(0xA0 | (n)))
 
-/* A read cursor over a DER byte range [pos, end). Treat as opaque. */
+/*
+ * A read cursor over a DER byte range: `pos` is the next unread byte and `len`
+ * is the number of bytes remaining from `pos`. Representing the extent as a
+ * length (rather than an end pointer) keeps every bound a size_t comparison, so
+ * no pointer arithmetic or relational comparison is ever performed on a possibly
+ * NULL/empty buffer. This is an internal struct, exposed only so callers can hold
+ * one by value — do not read or write its fields directly; use the API below.
+ */
 typedef struct {
     const uint8_t *pos;
-    const uint8_t *end;
-} der_reader;
+    size_t len;
+} der_reader_t;
 
-/* Initialize a reader over [data, data+len). Safe with data == NULL when len 0. */
-void der_init(der_reader *r, const uint8_t *data, size_t len);
+/* Initialize a reader over [data, data+len). A NULL `data` is treated as empty
+ * (len forced to 0), so no read ever dereferences or offsets a NULL pointer. */
+void der_init(der_reader_t *r, const uint8_t *data, size_t len);
 
 /* Bytes not yet consumed. */
-size_t der_remaining(const der_reader *r);
+size_t der_remaining(const der_reader_t *r);
 
 /* 1 if the cursor is exactly at the end (no trailing bytes), else 0. */
-int der_at_end(const der_reader *r);
+int der_at_end(const der_reader_t *r);
 
 /*
  * Read one TLV. On success returns 0, writes the identifier octet to *tag, and
  * points [*val, *val + *val_len) at the value; the cursor advances past the
  * value. Returns -1 on any malformation — truncation, indefinite length,
  * non-minimal length, multi-byte tag, or a value that runs past the buffer — and
- * leaves the cursor unspecified (callers must stop reading on error).
+ * leaves the cursor unchanged (callers must stop reading on error).
  */
-int der_read_tlv(der_reader *r, uint8_t *tag, const uint8_t **val, size_t *val_len);
+int der_read_tlv(der_reader_t *r, uint8_t *tag, const uint8_t **val, size_t *val_len);
 
 /* Like der_read_tlv but also requires the tag to equal want_tag. 0 / -1. */
-int der_expect(der_reader *r, uint8_t want_tag, const uint8_t **val, size_t *val_len);
+int der_expect(der_reader_t *r, uint8_t want_tag, const uint8_t **val, size_t *val_len);
 
 /*
  * Read a TLV whose tag equals want_tag (typically a constructed type) and open
  * `child` over its contents so the caller can iterate the members. 0 / -1.
  */
-int der_enter(der_reader *r, uint8_t want_tag, der_reader *child);
+int der_enter(der_reader_t *r, uint8_t want_tag, der_reader_t *child);
 
 #endif /* WEBLIB_TLS */
 #endif /* WEBLIB_TLS_DER_H */

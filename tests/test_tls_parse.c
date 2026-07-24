@@ -35,7 +35,7 @@ static void test_der_valid_sequence(void) {
         0x02, 0x01, 0x05,       /*   INTEGER 5 */
         0x04, 0x01, 0x41        /*   OCTET STRING "A" */
     };
-    der_reader r, seq;
+    der_reader_t r, seq;
     const uint8_t *val;
     size_t vlen;
 
@@ -55,7 +55,7 @@ static void test_der_valid_sequence(void) {
 /* Valid: long-form length (a 200-byte OCTET STRING: 0x04 0x81 0xC8 <200>). */
 static void test_der_long_form_length(void) {
     uint8_t in[3 + 200];
-    der_reader r;
+    der_reader_t r;
     const uint8_t *val;
     size_t vlen;
     int i;
@@ -79,11 +79,17 @@ static void test_der_rejects_malformed(void) {
     uint8_t tag;
     const uint8_t *val;
     size_t vlen;
-    der_reader r;
+    der_reader_t r;
 
     der_init(&r, NULL, 0);
     check_true("der: rejects empty input",
                der_read_tlv(&r, &tag, &val, &vlen) == -1);
+
+    /* A NULL buffer claiming a non-zero length must be handled as empty (no
+     * pointer arithmetic/comparison on NULL), not crash or over-read. */
+    der_init(&r, NULL, 5);
+    check_true("der: NULL buffer with nonzero len treated as empty",
+               der_read_tlv(&r, &tag, &val, &vlen) == -1 && der_remaining(&r) == 0);
 
     {   /* value runs past the buffer: claims length 5, only 2 value bytes */
         static const uint8_t b[] = { 0x04, 0x05, 0x41, 0x42 };
@@ -132,7 +138,7 @@ static void test_der_rejects_malformed(void) {
 /* der_expect / der_enter must enforce the requested tag. */
 static void test_der_tag_enforcement(void) {
     static const uint8_t in[] = { 0x02, 0x01, 0x05 };   /* INTEGER 5 */
-    der_reader r, child;
+    der_reader_t r, child;
     const uint8_t *val;
     size_t vlen;
 
