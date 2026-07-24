@@ -84,9 +84,10 @@ static void _set_cors_headers(http_response_t *res, const char *origin, bool is_
     }
 
     /* Access-Control-Allow-Credentials is only valid alongside a specific
-     * origin; it must never accompany the wildcard '*' (which is why the
-     * wildcard branch above carries no credentials). */
-    if (config->allow_credentials && config->allowed_origins != NULL) {
+     * origin that was actually echoed into Access-Control-Allow-Origin; it must
+     * never accompany the wildcard '*' (which is why the wildcard branch above
+     * carries no credentials) and never be emitted without an ACAO. */
+    if (config->allow_credentials && config->allowed_origins != NULL && origin != NULL) {
         http_response_set_header(res, "Access-Control-Allow-Credentials", "true");
     }
 
