@@ -1559,29 +1559,32 @@ static te_result_t classify_transfer_encoding(const char *value) {
     bool has_unsupported = false;
 
     const char *p = value;
-    while (*p) {
-        /* Skip optional whitespace and empty list elements (the #rule tolerates
-         * stray commas). */
-        while (*p == ' ' || *p == '\t' || *p == ',') {
-            p++;
-        }
-        if (*p == '\0') {
-            break;
-        }
 
-        /* Read the coding name (a token). */
+    /* Skip leading OWS. A leading comma is an empty list element, which we
+     * reject below rather than tolerate (see the separator handling): being
+     * strict about empty elements removes a source of accept/reject divergence
+     * with upstream proxies — itself a smuggling precondition. */
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (*p == '\0') {
+        return TE_MALFORMED;                 /* empty or whitespace-only value */
+    }
+
+    for (;;) {
+        /* A coding name (token) must appear here. An empty element (e.g. from a
+         * leading/doubled/trailing comma) lands on ',' or '\0' and is rejected. */
         const char *name = p;
         while (_is_tchar((unsigned char)*p)) {
             p++;
         }
         size_t name_len = (size_t)(p - name);
         if (name_len == 0) {
-            return TE_MALFORMED; /* a non-token char where a coding name was due */
+            return TE_MALFORMED;
         }
 
-        /* After the name, only OWS, an optional ";"-parameter section, then a
-         * comma (or end) are valid. Anything else (e.g. "chunked gzip" without a
-         * comma, or trailing junk) is malformed. */
+        /* After the name, only OWS then an optional ";"-parameter section may
+         * precede the separator. */
         while (*p == ' ' || *p == '\t') {
             p++;
         }
@@ -1594,9 +1597,6 @@ static te_result_t classify_transfer_encoding(const char *value) {
                 p++;
             }
         }
-        if (*p != '\0' && *p != ',') {
-            return TE_MALFORMED;
-        }
 
         coding_count++;
         if (name_len == 7 && strncasecmp(name, "chunked", 7) == 0) {
@@ -1606,10 +1606,26 @@ static te_result_t classify_transfer_encoding(const char *value) {
             has_unsupported = true;
             last_is_chunked = false;
         }
+
+        if (*p == '\0') {
+            break;                           /* end of the list */
+        }
+        if (*p != ',') {
+            return TE_MALFORMED;             /* junk after a coding (e.g. missing comma) */
+        }
+        p++;                                 /* consume exactly one comma separator */
+        while (*p == ' ' || *p == '\t') {    /* OWS after the comma */
+            p++;
+        }
+        if (*p == '\0') {
+            return TE_MALFORMED;             /* trailing comma -> empty final element */
+        }
+        /* A ',' here would be a doubled comma (empty element); the next
+         * iteration reads name_len == 0 and rejects it. */
     }
 
     if (coding_count == 0) {
-        return TE_MALFORMED;                 /* Transfer-Encoding present but empty */
+        return TE_MALFORMED;                 /* unreachable: guarded above, kept for clarity */
     }
     if (chunked_count > 1) {
         return TE_MALFORMED;                 /* chunked applied more than once */
@@ -1631,7 +1647,12 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     }
 
     size_t name_len = (size_t)(colon - line);
-    while (name_len > 0 && isspace((unsigned char)line[name_len - 1])) {
+    /* Trim only RFC 7230 OWS (SP / HTAB) — NOT isspace(), which would also eat
+     * VT (0x0B) / FF (0x0C). Treating VT/FF as trimmable whitespace let
+     * "Transfer-Encoding: chunked\x0b" reduce to the token "chunked" here while
+     * a compliant proxy keeps the byte and frames the message differently — a
+     * request-smuggling desync. Keep leading and trailing trims symmetric. */
+    while (name_len > 0 && (line[name_len - 1] == ' ' || line[name_len - 1] == '\t')) {
         name_len--;
     }
     if (name_len == 0) {
@@ -1644,7 +1665,7 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
         value_start++;
     }
     const char *value_end = line + len;
-    while (value_end > value_start && isspace((unsigned char)value_end[-1])) {
+    while (value_end > value_start && (value_end[-1] == ' ' || value_end[-1] == '\t')) {
         value_end--;
     }
 
@@ -1663,6 +1684,32 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     name_buf[name_len] = '\0';
     memcpy(value_buf, value_start, value_len);
     value_buf[value_len] = '\0';
+
+    /* RFC 7230 §3.2: the field-name is a token, and the field-value carries no
+     * control bytes. Validate the exact byte ranges (not the C-string length) so
+     * an embedded NUL cannot pass. This is a request-smuggling defense: without
+     * it, "Transfer-Encoding: chunked\0, gzip" is copied verbatim but every later
+     * C-string reader (strcasecmp, classify_transfer_encoding) stops at the NUL
+     * and sees only "chunked" -> the origin frames a chunked body while a proxy
+     * that reads the whole value frames it differently. Reject NUL / C0 controls
+     * (except HTAB) / DEL, and any non-token byte in the name, with 400. */
+    for (size_t i = 0; i < name_len; i++) {
+        if (!_is_tchar((unsigned char)name_buf[i])) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid header name");
+            return -1;
+        }
+    }
+    for (size_t i = 0; i < value_len; i++) {
+        unsigned char c = (unsigned char)value_buf[i];
+        if ((c < 0x20 && c != '\t') || c == 0x7f) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Invalid header value");
+            return -1;
+        }
+    }
 
     bool replace = (strcasecmp(name_buf, "set-cookie") != 0);
     if (header_list_add((http_header_node_t **)&parser->req->headers, name_buf, name_buf, value_buf, replace) < 0) {
