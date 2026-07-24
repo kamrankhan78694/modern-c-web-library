@@ -23,10 +23,11 @@
  * (always >= 1) on success, or -1 on error.
  *
  * Errors (all return -1, fail-closed): a NULL argument or input_len == 0; an
- * invalid alphabet byte; a truncated group (a lone trailing Base64 symbol); an
+ * invalid alphabet byte; a truncated group (a lone trailing Base64 symbol); more
+ * than two '=' padding bytes, or any non-whitespace data after the padding; an
  * output buffer too small; or an input that decodes to zero bytes (all
  * whitespace / padding only). Callers therefore never need to separately check
- * for an empty or truncated result.
+ * for an empty, truncated, or trailing-garbage result.
  */
 int base64_decode(const char *input, size_t input_len,
                   unsigned char *output, size_t output_len);

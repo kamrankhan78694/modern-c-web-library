@@ -212,6 +212,15 @@ static void test_pem_decode(void) {
         check_true("pem: empty body rejected",
                    pem_decode("CERTIFICATE", s, strlen(s), out, sizeof out, &out_len) == -1);
     }
+    {   /* non-whitespace data after the Base64 padding must be rejected, not
+         * silently truncated at the first '=' */
+        static const char s[] =
+            "-----BEGIN CERTIFICATE-----\n"
+            "MAgCAQUEA1BFTQ==GARBAGE\n"
+            "-----END CERTIFICATE-----\n";
+        check_true("pem: trailing data after padding rejected",
+                   pem_decode("CERTIFICATE", s, strlen(s), out, sizeof out, &out_len) == -1);
+    }
     check_true("pem: garbage input rejected",
                pem_decode("CERTIFICATE", "not a pem file at all", 21, out, sizeof out, &out_len) == -1);
 
