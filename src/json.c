@@ -647,9 +647,42 @@ static json_value_t *parse_string(const char **str) {
     return value;
 }
 
+/* strtod() for a pre-validated JSON number token [s, s+len). JSON always uses '.'
+ * as its decimal separator, but strtod() honors LC_NUMERIC: under a locale whose
+ * separator is not '.' (e.g. ',' in de_DE/fr_FR) it stops at the '.', so "3.14"
+ * reads back as 3 and the caller's span check then rejects every non-integer
+ * number. Swap the single '.' to the active locale's separator on a copy so strtod
+ * consumes the whole token, then map the end pointer back into s. This mirrors the
+ * output-side json_normalize_decimal(). The common '.'-locale case (C/POSIX/en_*)
+ * takes a zero-copy fast path identical to a bare strtod(). On allocation failure
+ * *end_out is set to s so the caller's `end != p` check fails the parse. */
+static double json_strtod(const char *s, size_t len, char **end_out) {
+    char sep = localeconv()->decimal_point[0];
+    if (sep == '.' || sep == '\0') {
+        return strtod(s, end_out);
+    }
+    char stackbuf[64];
+    char *tmp = (len < sizeof(stackbuf)) ? stackbuf : (char *)malloc(len + 1);
+    if (!tmp) {
+        *end_out = (char *)s;
+        return 0.0;
+    }
+    memcpy(tmp, s, len);
+    tmp[len] = '\0';
+    char *dot = (char *)memchr(tmp, '.', len);
+    if (dot) *dot = sep;
+    char *tend;
+    double num = strtod(tmp, &tend);
+    *end_out = (char *)s + (tend - tmp);   /* 1:1 copy, so the offset is preserved */
+    if (tmp != stackbuf) {
+        free(tmp);
+    }
+    return num;
+}
+
 static json_value_t *parse_number(const char **str) {
     const char *p = *str;
-    
+
     /* RFC 8259 number: [ minus ] int [ frac ] [ exp ]
      * int = "0" / ( digit1-9 *DIGIT )
      * Reject hex, leading '+', leading '.', inf, nan */
@@ -670,14 +703,14 @@ static json_value_t *parse_number(const char **str) {
     }
     
     char *end;
-    double num = strtod(*str, &end);
-    
+    double num = json_strtod(*str, (size_t)(p - *str), &end);
+
     if (end != p) {
         return NULL;
     }
-    
+
     *str = end;
-    
+
     return json_number_create(num);
 }
 

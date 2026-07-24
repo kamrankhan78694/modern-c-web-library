@@ -333,9 +333,88 @@ void test_json_parse_number(void) {
     ASSERT(val != NULL);
     ASSERT(val->type == JSON_NUMBER);
     ASSERT(val->data.number_val == 42.5);
-    
+
     json_value_free(val);
-    
+
+    PASS();
+}
+
+/* Regression (audit #9): JSON always uses '.' as its decimal separator, but a bare
+ * strtod() honors LC_NUMERIC. Under a comma-decimal locale (e.g. de_DE) strtod("3.14")
+ * stops at the '.', so the parser's span check would reject every non-integer number.
+ * Set such a locale (skipping cleanly if none is installed) and confirm decimals,
+ * negatives, and exponents still parse and re-serialize with a '.'. */
+void test_json_parse_locale_independent(void) {
+    TEST("json_parse/stringify (locale-independent numbers)");
+
+    /* setlocale returns storage a later call may overwrite -> copy it to restore. */
+    const char *cur = setlocale(LC_NUMERIC, NULL);
+    char saved[128];
+    saved[0] = '\0';
+    if (cur) {
+        strncpy(saved, cur, sizeof(saved) - 1);
+        saved[sizeof(saved) - 1] = '\0';
+    }
+
+    static const char *candidates[] = {
+        "de_DE.UTF-8", "fr_FR.UTF-8", "de_DE", "fr_FR", "nl_NL.UTF-8"
+    };
+    bool comma = false;
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        if (setlocale(LC_NUMERIC, candidates[i]) &&
+            localeconv()->decimal_point[0] == ',') {
+            comma = true;
+            break;
+        }
+    }
+
+    if (!comma) {
+        /* No comma-decimal locale installed here; the '.'-locale fast path is
+         * already exercised by every other json test. Skip without failing. */
+        setlocale(LC_NUMERIC, saved[0] ? saved : "C");
+        printf("[SKIP: no comma-decimal locale] ");
+        PASS();
+        return;
+    }
+
+    /* Parse under the comma locale. Compute results first, then restore the locale
+     * BEFORE asserting (ASSERT returns early, which would otherwise leak the test
+     * locale into later tests). */
+    json_value_t *a = json_parse("3.14");
+    json_value_t *b = json_parse("-2.5");
+    json_value_t *c = json_parse("1.5e3");
+    json_value_t *n = json_parse("42");
+    /* A 70-char token (> the 64-byte stack buffer) drives the malloc fallback in
+     * json_strtod so ASan/UBSan cover that branch too. */
+    json_value_t *lng = json_parse(
+        "0.12345678901234567890123456789012345678901234567890123456789012345678");
+    char *out = a ? json_stringify(a) : NULL;
+
+    bool a_ok = (a && a->type == JSON_NUMBER && a->data.number_val == 3.14);
+    bool b_ok = (b && b->type == JSON_NUMBER && b->data.number_val == -2.5);
+    bool c_ok = (c && c->type == JSON_NUMBER && c->data.number_val == 1500.0);
+    bool n_ok = (n && n->type == JSON_NUMBER && n->data.number_val == 42.0);
+    bool lng_ok = (lng && lng->type == JSON_NUMBER &&
+                   lng->data.number_val > 0.123456 && lng->data.number_val < 0.123457);
+    /* Output must carry JSON's '.', never the locale's ','. */
+    bool out_ok = (out && strstr(out, "3.14") != NULL && strstr(out, "3,14") == NULL);
+
+    free(out);
+    json_value_free(a);
+    json_value_free(b);
+    json_value_free(c);
+    json_value_free(n);
+    json_value_free(lng);
+
+    setlocale(LC_NUMERIC, saved[0] ? saved : "C");
+
+    ASSERT(a_ok);
+    ASSERT(b_ok);
+    ASSERT(c_ok);
+    ASSERT(n_ok);
+    ASSERT(lng_ok);
+    ASSERT(out_ok);
+
     PASS();
 }
 
@@ -4746,6 +4825,7 @@ int main(void) {
     test_json_number_precision();
     test_json_parse_string();
     test_json_parse_number();
+    test_json_parse_locale_independent();
     test_json_parse_bool();
     test_json_parse_null();
     test_json_parse_object();
