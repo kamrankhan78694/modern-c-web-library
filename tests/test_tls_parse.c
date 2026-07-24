@@ -18,6 +18,8 @@
 #include "ed25519.h"
 #include "wire.h"
 #include "handshake.h"
+#include "record.h"
+#include "server_handshake.h"
 #endif
 
 static int g_failures = 0;
@@ -666,6 +668,370 @@ static void test_hs_build(void) {
     check_true("hs build: over-long session_id rejected",
                tls_build_server_hello(&w, random, sid, 33, pub) == 0);
 }
+
+/*
+ * Server handshake state machine. The known-answer vectors below (KAT_*) are
+ * produced by an independent Python (`cryptography`) TLS-1.3 client oracle from a
+ * set of fixed inputs — see the commit for scratchpad/server_hs_oracle.py. That
+ * oracle re-derives the whole key schedule (pure-Python HKDF + the RFC labels) and
+ * flight, and separately opens and verifies this C server's actual output. Pinning
+ * its results here means the assertions below are checked against a *different*
+ * implementation, not merely against ourselves.
+ */
+static const uint8_t KAT_CH[144] = {
+    0x01, 0x00, 0x00, 0x8c, 0x03, 0x03, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0x20, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+    0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x00,
+    0x02, 0x13, 0x03, 0x01, 0x00, 0x00, 0x41, 0x00, 0x2b, 0x00, 0x03, 0x02,
+    0x03, 0x04, 0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d, 0x00, 0x0d,
+    0x00, 0x04, 0x00, 0x02, 0x08, 0x07, 0x00, 0x33, 0x00, 0x26, 0x00, 0x24,
+    0x00, 0x1d, 0x00, 0x20, 0x79, 0xa6, 0x31, 0xee, 0xde, 0x1b, 0xf9, 0xc9,
+    0x8f, 0x12, 0x03, 0x2c, 0xde, 0xad, 0xd0, 0xe7, 0xa0, 0x79, 0x39, 0x8f,
+    0xc7, 0x86, 0xb8, 0x8c, 0xc8, 0x46, 0xec, 0x89, 0xaf, 0x85, 0xa5, 0x1a,
+};
+static const uint8_t KAT_CERT[96] = {
+    0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab,
+    0xac, 0xad, 0xae, 0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7,
+    0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0xa0, 0xa1, 0xa2, 0xa3,
+    0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
+    0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb,
+    0xbc, 0xbd, 0xbe, 0xbf, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+    0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf, 0xb0, 0xb1, 0xb2, 0xb3,
+    0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf,
+};
+static const uint8_t KAT_ED_SEED[32] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+    0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+    0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+};
+static const uint8_t KAT_ED_PUB[32] = {
+    0x79, 0xb5, 0x56, 0x2e, 0x8f, 0xe6, 0x54, 0xf9, 0x40, 0x78, 0xb1, 0x12,
+    0xe8, 0xa9, 0x8b, 0xa7, 0x90, 0x1f, 0x85, 0x3a, 0xe6, 0x95, 0xbe, 0xd7,
+    0xe0, 0xe3, 0x91, 0x0b, 0xad, 0x04, 0x96, 0x64,
+};
+static const uint8_t KAT_SERVER_EPH[32] = {
+    0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b,
+    0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
+    0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f,
+};
+static const uint8_t KAT_SERVER_RND[32] = {
+    0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e,
+    0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e,
+    0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e,
+};
+static const uint8_t KAT_SERVER_HS_KEY[32] = {
+    0x41, 0xc1, 0xe2, 0xdb, 0x19, 0x3b, 0xc8, 0x84, 0x1e, 0xb5, 0xc6, 0x4a,
+    0xe3, 0x08, 0x09, 0x30, 0x6e, 0x8a, 0xc8, 0x2e, 0x33, 0xc7, 0xd5, 0xfe,
+    0x64, 0xce, 0x20, 0x6f, 0x2f, 0x32, 0xd6, 0xa4,
+};
+static const uint8_t KAT_SERVER_HS_IV[12] = {
+    0x38, 0x9c, 0xa9, 0x76, 0x72, 0x06, 0x7e, 0x0c, 0x73, 0x31, 0xf0, 0x64,
+};
+static const uint8_t KAT_CLIENT_HS_KEY[32] = {
+    0x5d, 0x09, 0xb3, 0x22, 0x93, 0x47, 0xca, 0x9f, 0x67, 0x0f, 0x6b, 0x98,
+    0x8d, 0x30, 0xdc, 0xa3, 0x4f, 0xc4, 0x45, 0x77, 0x05, 0xf4, 0x5d, 0x30,
+    0xd2, 0xb5, 0x19, 0x39, 0x5f, 0x0b, 0x85, 0xd2,
+};
+static const uint8_t KAT_CLIENT_HS_IV[12] = {
+    0xa3, 0x18, 0xa3, 0xeb, 0x91, 0x9e, 0xb2, 0x74, 0x50, 0x5a, 0x6c, 0x9b,
+};
+static const uint8_t KAT_CLIENT_FINISHED_VD[32] = {
+    0xa3, 0xb6, 0x47, 0x2e, 0xd7, 0x60, 0xfd, 0xb0, 0xc3, 0x55, 0x79, 0xf0,
+    0x8e, 0xdb, 0x75, 0xbc, 0x87, 0x59, 0x9e, 0xa8, 0x51, 0xd1, 0x93, 0x22,
+    0x85, 0xce, 0x6f, 0x29, 0x0d, 0x0b, 0xf7, 0x4f,
+};
+static const uint8_t KAT_SERVER_AP_KEY[32] = {
+    0x36, 0xe0, 0x70, 0xfc, 0x68, 0xdd, 0xab, 0x6d, 0xa2, 0x8f, 0xa6, 0x3b,
+    0xe1, 0xac, 0x73, 0x6b, 0x01, 0x63, 0x57, 0xb7, 0xe2, 0x3c, 0x72, 0x8a,
+    0x0e, 0xdd, 0x46, 0x05, 0xe7, 0xc3, 0xf4, 0x1d,
+};
+static const uint8_t KAT_SERVER_AP_IV[12] = {
+    0x39, 0x6b, 0x0d, 0x59, 0xec, 0xb3, 0x89, 0x34, 0x53, 0x87, 0x4a, 0xa4,
+};
+static const uint8_t KAT_CLIENT_AP_KEY[32] = {
+    0x28, 0xc8, 0x92, 0x97, 0x21, 0xfa, 0x74, 0x2e, 0xc8, 0x0a, 0x78, 0x1b,
+    0xed, 0xa8, 0x12, 0x2d, 0x28, 0xad, 0x03, 0xc3, 0x04, 0xdc, 0x8d, 0x8b,
+    0x07, 0xa6, 0xbe, 0x6a, 0x35, 0x76, 0x8e, 0xa4,
+};
+static const uint8_t KAT_CLIENT_AP_IV[12] = {
+    0xa3, 0xd7, 0xd4, 0x06, 0x4c, 0x40, 0x49, 0xc6, 0xab, 0x8a, 0x76, 0xc5,
+};
+static const uint8_t KAT_FLIGHT_PLAIN[223] = {
+    0x08, 0x00, 0x00, 0x02, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x69, 0x00, 0x00,
+    0x00, 0x65, 0x00, 0x00, 0x60, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6,
+    0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf, 0xb0, 0xb1, 0xb2,
+    0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd, 0xbe,
+    0xbf, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa,
+    0xab, 0xac, 0xad, 0xae, 0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6,
+    0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0xa0, 0xa1, 0xa2,
+    0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae,
+    0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba,
+    0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x44, 0x08,
+    0x07, 0x00, 0x40, 0x77, 0x8d, 0xea, 0x16, 0xcf, 0xc9, 0x85, 0x9d, 0x19,
+    0x57, 0x68, 0x5b, 0xd3, 0x1e, 0x13, 0x57, 0xe3, 0xae, 0x8b, 0xc5, 0xdb,
+    0x43, 0xa6, 0xbd, 0x94, 0xd9, 0x7c, 0x49, 0x75, 0xfe, 0xc1, 0xdb, 0x73,
+    0x0e, 0x2b, 0x2a, 0x9f, 0x57, 0x33, 0x83, 0x3d, 0x85, 0xe6, 0xb9, 0x81,
+    0x0b, 0x2e, 0x4f, 0xa8, 0x2d, 0x95, 0xb7, 0xee, 0x28, 0x28, 0x60, 0xdf,
+    0x11, 0x36, 0x16, 0xdd, 0x24, 0xc9, 0x0b, 0x14, 0x00, 0x00, 0x20, 0x20,
+    0x8c, 0x72, 0xcc, 0xea, 0x25, 0xc2, 0x4c, 0x0a, 0xa9, 0x7f, 0x3d, 0x06,
+    0x7f, 0xa3, 0x7b, 0x29, 0xcf, 0xb4, 0x6f, 0xfb, 0xe4, 0x0e, 0xa3, 0x02,
+    0xc0, 0x68, 0xa1, 0x2d, 0xba, 0xb5, 0xe3,
+};
+
+/* Find the first occurrence of `needle` in `hay` (portable; avoids memmem). */
+static long find_bytes(const uint8_t *hay, size_t hn, const uint8_t *needle, size_t nn) {
+    size_t i;
+    if (nn == 0 || hn < nn) {
+        return -1;
+    }
+    for (i = 0; i + nn <= hn; i++) {
+        if (memcmp(hay + i, needle, nn) == 0) {
+            return (long)i;
+        }
+    }
+    return -1;
+}
+
+/* Seal a client Finished { type(20) || u24 len(32) || verify_data } record with
+ * the given client handshake key/IV at sequence 0 (what a real client sends). */
+static int seal_client_finished(const uint8_t *vd, uint8_t *rec, size_t rec_cap,
+                                size_t *rec_len) {
+    uint8_t msg[4 + 32];
+    msg[0] = TLS_HS_FINISHED;
+    msg[1] = 0x00;
+    msg[2] = 0x00;
+    msg[3] = 0x20;
+    memcpy(msg + 4, vd, 32);
+    return tls_record_seal(KAT_CLIENT_HS_KEY, KAT_CLIENT_HS_IV, 0,
+                           TLS_CONTENT_HANDSHAKE, msg, sizeof msg, 0,
+                           rec, rec_cap, rec_len);
+}
+
+/* Copy KAT_CH, overwrite `repl` at the offset of `pat`, feed it, and require the
+ * handshake to reject it with `expect_alert` and latch FAILED. */
+static void check_ch_reject(const char *label, const tls_server_config_t *cfg,
+                            const uint8_t *pat, size_t patn, size_t rel,
+                            const uint8_t *repl, size_t repln, uint8_t expect_alert) {
+    uint8_t ch[sizeof KAT_CH];
+    uint8_t out[2048];
+    size_t out_len = 0;
+    tls_server_hs_t hs;
+    long off;
+
+    memcpy(ch, KAT_CH, sizeof KAT_CH);
+    off = find_bytes(ch, sizeof ch, pat, patn);
+    if (off < 0 || (size_t)off + rel + repln > sizeof ch) {
+        check_true(label, 0);   /* the anchor pattern must exist */
+        return;
+    }
+    memcpy(ch + off + rel, repl, repln);
+    tls_server_hs_init(&hs);
+    check_true(label,
+               tls_server_hs_read_client_hello(&hs, cfg, ch, sizeof ch,
+                                                out, sizeof out, &out_len) == 0
+               && tls_server_hs_alert(&hs) == expect_alert
+               && tls_server_hs_phase(&hs) == TLS_SERVER_HS_FAILED
+               && out_len == 0);
+}
+
+static void test_server_handshake(void) {
+    tls_server_hs_t hs;
+    tls_server_config_t cfg;
+    uint8_t out[2048];
+    size_t out_len = 0;
+    size_t sh_len, rec_off;
+    uint8_t flight[512];
+    size_t flen = 0;
+    uint8_t ctype = 0;
+    uint8_t rec[128];
+    size_t rec_len = 0;
+    uint8_t sk[32], siv[12], ck[32], civ[12];
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.cert_der = KAT_CERT;
+    cfg.cert_len = sizeof KAT_CERT;
+    cfg.ed25519_seed = KAT_ED_SEED;
+    cfg.ed25519_pub = KAT_ED_PUB;
+    cfg.server_eph_sk = KAT_SERVER_EPH;
+    cfg.server_random = KAT_SERVER_RND;
+
+    /* ===== Part A: a full handshake, checked against the independent oracle ===== */
+    tls_server_hs_init(&hs);
+    check_true("srv hs: initial phase START",
+               tls_server_hs_phase(&hs) == TLS_SERVER_HS_START);
+
+    check_true("srv hs: ClientHello accepted",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH, sizeof KAT_CH,
+                                               out, sizeof out, &out_len) == 1);
+    check_true("srv hs: phase -> WAIT_FINISHED",
+               tls_server_hs_phase(&hs) == TLS_SERVER_HS_WAIT_FINISHED);
+    /* Authentication cannot be skipped: app keys are withheld until the client
+     * Finished has been verified. */
+    check_true("srv hs: app keys withheld before DONE",
+               tls_server_hs_app_keys(&hs, sk, siv, ck, civ) == 0);
+
+    check_true("srv hs: ServerHello record framed (type 22)",
+               out_len > 5 && out[0] == 0x16 && out[1] == 0x03 && out[2] == 0x03);
+    sh_len = ((size_t)out[3] << 8) | out[4];
+    rec_off = 5 + sh_len;
+    check_true("srv hs: protected flight record follows (type 23)",
+               rec_off < out_len && out[rec_off] == 0x17);
+
+    /* Open the flight with the INDEPENDENTLY-derived server handshake key. Success
+     * proves our ECDH + key schedule + record sealing agree with a separate
+     * implementation, and the plaintext must match byte-for-byte. */
+    check_true("srv hs: flight opens under independent key schedule",
+               tls_record_open(KAT_SERVER_HS_KEY, KAT_SERVER_HS_IV, 0,
+                               out + rec_off, out_len - rec_off,
+                               flight, sizeof flight, &flen, &ctype) == 1);
+    check_true("srv hs: flight inner type handshake", ctype == TLS_CONTENT_HANDSHAKE);
+    check_true("srv hs: flight bytes match independent prediction",
+               flen == sizeof KAT_FLIGHT_PLAIN
+               && memcmp(flight, KAT_FLIGHT_PLAIN, flen) == 0);
+
+    /* Complete: the client returns its Finished (sealed with the independent client
+     * handshake key). */
+    check_true("srv hs: (harness) seal client Finished",
+               seal_client_finished(KAT_CLIENT_FINISHED_VD, rec, sizeof rec, &rec_len) == 1);
+    check_true("srv hs: client Finished verified -> handshake complete",
+               tls_server_hs_read_client_finished(&hs, rec, rec_len) == 1);
+    check_true("srv hs: phase -> DONE", tls_server_hs_phase(&hs) == TLS_SERVER_HS_DONE);
+
+    check_true("srv hs: app keys released after DONE",
+               tls_server_hs_app_keys(&hs, sk, siv, ck, civ) == 1);
+    check_true("srv hs: server app key matches oracle", memcmp(sk, KAT_SERVER_AP_KEY, 32) == 0);
+    check_true("srv hs: server app iv matches oracle", memcmp(siv, KAT_SERVER_AP_IV, 12) == 0);
+    check_true("srv hs: client app key matches oracle", memcmp(ck, KAT_CLIENT_AP_KEY, 32) == 0);
+    check_true("srv hs: client app iv matches oracle", memcmp(civ, KAT_CLIENT_AP_IV, 12) == 0);
+
+    /* A second Finished after DONE is a protocol violation: fail-closed. */
+    check_true("srv hs: second Finished after DONE rejected",
+               tls_server_hs_read_client_finished(&hs, rec, rec_len) == 0
+               && tls_server_hs_phase(&hs) == TLS_SERVER_HS_FAILED);
+    check_true("srv hs: app keys withheld once FAILED",
+               tls_server_hs_app_keys(&hs, sk, siv, ck, civ) == 0);
+
+    /* ===== Part B: sequencing / state-machine defences ===== */
+    /* B1: ClientHello replayed after we advanced -> unexpected_message + terminal. */
+    tls_server_hs_init(&hs);
+    tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH, sizeof KAT_CH, out, sizeof out, &out_len);
+    check_true("srv hs: replayed ClientHello rejected",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH, sizeof KAT_CH,
+                                               out, sizeof out, &out_len) == 0
+               && tls_server_hs_alert(&hs) == TLS_ALERT_UNEXPECTED_MESSAGE
+               && tls_server_hs_phase(&hs) == TLS_SERVER_HS_FAILED);
+    check_true("srv hs: FAILED is terminal",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH, sizeof KAT_CH,
+                                               out, sizeof out, &out_len) == 0
+               && tls_server_hs_phase(&hs) == TLS_SERVER_HS_FAILED);
+
+    /* B2: client Finished before any ClientHello -> unexpected_message. */
+    tls_server_hs_init(&hs);
+    seal_client_finished(KAT_CLIENT_FINISHED_VD, rec, sizeof rec, &rec_len);
+    check_true("srv hs: Finished before ClientHello rejected",
+               tls_server_hs_read_client_finished(&hs, rec, rec_len) == 0
+               && tls_server_hs_alert(&hs) == TLS_ALERT_UNEXPECTED_MESSAGE);
+
+    /* B3: truncated ClientHello -> decode_error. */
+    tls_server_hs_init(&hs);
+    check_true("srv hs: truncated ClientHello -> decode_error",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH, 20,
+                                               out, sizeof out, &out_len) == 0
+               && tls_server_hs_alert(&hs) == TLS_ALERT_DECODE_ERROR);
+
+    /* B4: undersized output buffer -> internal_error (fail-closed, not a crash). */
+    tls_server_hs_init(&hs);
+    check_true("srv hs: tiny out buffer -> internal_error",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH, sizeof KAT_CH,
+                                               out, 10, &out_len) == 0
+               && tls_server_hs_alert(&hs) == TLS_ALERT_INTERNAL_ERROR);
+
+    /* B4b: a NULL out_len is a usage error (the caller must always learn the
+     * response length) -> internal_error, never a "successful" unknown-length send. */
+    tls_server_hs_init(&hs);
+    check_true("srv hs: NULL out_len -> internal_error",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH, sizeof KAT_CH,
+                                               out, sizeof out, NULL) == 0
+               && tls_server_hs_alert(&hs) == TLS_ALERT_INTERNAL_ERROR);
+
+    /* ===== Part C: parameter negotiation (correct alerts) ===== */
+    {
+        static const uint8_t p_ver[]  = {0x00,0x2b,0x00,0x03,0x02,0x03,0x04};
+        static const uint8_t r_ver[]  = {0x03,0x03};   /* TLS 1.2, not 1.3 */
+        static const uint8_t p_suite[]= {0x00,0x02,0x13,0x03,0x01,0x00};
+        static const uint8_t r_suite[]= {0x13,0x01};   /* AES-128-GCM, not ChaCha20 */
+        static const uint8_t p_sig[]  = {0x00,0x0d,0x00,0x04,0x00,0x02,0x08,0x07};
+        static const uint8_t r_sig[]  = {0x08,0x08};   /* ed448, not ed25519 */
+        static const uint8_t p_ks[]   = {0x00,0x33,0x00,0x26,0x00,0x24,0x00,0x1d,0x00,0x20};
+        static const uint8_t r_ks[]   = {0x00,0x1e};   /* wrong key_share group -> no X25519 share */
+        check_ch_reject("srv hs: no TLS 1.3 -> protocol_version", &cfg,
+                        p_ver, sizeof p_ver, 5, r_ver, sizeof r_ver,
+                        TLS_ALERT_PROTOCOL_VERSION);
+        check_ch_reject("srv hs: no ChaCha20 suite -> handshake_failure", &cfg,
+                        p_suite, sizeof p_suite, 2, r_suite, sizeof r_suite,
+                        TLS_ALERT_HANDSHAKE_FAILURE);
+        check_ch_reject("srv hs: no ed25519 -> handshake_failure", &cfg,
+                        p_sig, sizeof p_sig, 6, r_sig, sizeof r_sig,
+                        TLS_ALERT_HANDSHAKE_FAILURE);
+        check_ch_reject("srv hs: no X25519 key_share -> handshake_failure", &cfg,
+                        p_ks, sizeof p_ks, 6, r_ks, sizeof r_ks,
+                        TLS_ALERT_HANDSHAKE_FAILURE);
+    }
+
+    /* ===== Part D: cryptographic defences ===== */
+    /* D1: an all-zero (small-order) X25519 share yields an all-zero shared secret,
+     * which RFC 8446 §7.4.2 requires we reject. */
+    {
+        static const uint8_t p_share[] = {0x00,0x1d,0x00,0x20};   /* group + key_exchange len */
+        uint8_t ch[sizeof KAT_CH];
+        long off;
+        memcpy(ch, KAT_CH, sizeof KAT_CH);
+        off = find_bytes(ch, sizeof ch, p_share, sizeof p_share);
+        if (off < 0 || (size_t)off + 4 + 32 > sizeof ch) {
+            /* The anchor must exist. Without this guard, a ClientHello-layout change
+             * would leave the share unmodified and the test would fail with a
+             * misleading alert mismatch instead of a clear "anchor missing". */
+            check_true("srv hs: all-zero ECDH share test anchor located", 0);
+        } else {
+            memset(ch + off + 4, 0x00, 32);   /* all-zero key_exchange */
+            tls_server_hs_init(&hs);
+            check_true("srv hs: all-zero ECDH share -> illegal_parameter",
+                       tls_server_hs_read_client_hello(&hs, &cfg, ch, sizeof ch,
+                                                       out, sizeof out, &out_len) == 0
+                       && tls_server_hs_alert(&hs) == TLS_ALERT_ILLEGAL_PARAMETER);
+        }
+    }
+
+    /* D2: a Finished with the wrong verify_data (but valid AEAD) -> decrypt_error.
+     * This is the key-confirmation check; it must actually compare. */
+    {
+        uint8_t bad[32];
+        memcpy(bad, KAT_CLIENT_FINISHED_VD, 32);
+        bad[0] ^= 0x01;
+        tls_server_hs_init(&hs);
+        tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH, sizeof KAT_CH, out, sizeof out, &out_len);
+        seal_client_finished(bad, rec, sizeof rec, &rec_len);
+        check_true("srv hs: wrong verify_data -> decrypt_error",
+                   tls_server_hs_read_client_finished(&hs, rec, rec_len) == 0
+                   && tls_server_hs_alert(&hs) == TLS_ALERT_DECRYPT_ERROR
+                   && tls_server_hs_phase(&hs) == TLS_SERVER_HS_FAILED);
+    }
+
+    /* D3: a corrupted Finished record (AEAD tag fails) -> bad_record_mac, no
+     * plaintext released. */
+    {
+        tls_server_hs_init(&hs);
+        tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH, sizeof KAT_CH, out, sizeof out, &out_len);
+        seal_client_finished(KAT_CLIENT_FINISHED_VD, rec, sizeof rec, &rec_len);
+        rec[6] ^= 0x80;   /* flip a ciphertext byte (past the 5-byte header) */
+        check_true("srv hs: corrupted Finished record -> bad_record_mac",
+                   tls_server_hs_read_client_finished(&hs, rec, rec_len) == 0
+                   && tls_server_hs_alert(&hs) == TLS_ALERT_BAD_RECORD_MAC);
+    }
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -682,6 +1048,7 @@ int main(void) {
     test_wire();
     test_client_hello();
     test_hs_build();
+    test_server_handshake();
 
     if (g_failures == 0) {
         printf("All TLS parse tests passed.\n");

@@ -1,10 +1,13 @@
 # `src/tls/` — Experimental pure-C TLS 1.3 (EXPERIMENTAL · UNAUDITED)
 
-> **Status: scaffold only.** There is **no** working TLS here yet — no handshake,
-> no record layer, no cryptography. Do **not** rely on this for any security
-> property. This directory is the foundation for an incremental, from-scratch
-> TLS build; every cryptographic primitive will land with a known-answer test
-> against its official RFC vector before anything depends on it.
+> **Status: components built and cross-checked; not yet integrated or audited.**
+> The cryptographic primitives, certificate/key loading, key schedule, record
+> layer, handshake messages, and the **server handshake state machine** now exist,
+> each landed with a known-answer test against an official RFC vector or an
+> independent reference implementation. What does **not** yet exist: the transport
+> integration (`http_server_enable_tls`) and real-client (`curl` / `openssl
+> s_client`) interop — so nothing here terminates a real TLS connection yet. The
+> code is **UNAUDITED**; do **not** rely on it for any security property.
 
 ## Why hand-written TLS
 
@@ -53,9 +56,12 @@ ctest --test-dir build-tls
 - **Phase 1:** primitives from scratch, each with an RFC known-answer test
   (ChaCha20, Poly1305, ChaCha20-Poly1305, HKDF, SHA-384/512, X25519, Ed25519).
 - **Phase 2:** PEM + minimal ASN.1/DER + X.509 loading.
-- **Phase 3:** TLS 1.3 record layer + server handshake state machine + key schedule.
-- **Phase 4:** integration (`http_server_enable_tls`), config, `curl` / `openssl
-  s_client` interop, ClientHello fuzzing, honest security labeling.
+- **Phase 3 (landed):** TLS 1.3 key schedule, record layer, handshake messages
+  (ClientHello parser + server builders + auth crypto), and the server handshake
+  state machine (`server_handshake.c`) — the 1-RTT `TLS_CHACHA20_POLY1305_SHA256`
+  + X25519 + Ed25519 flow, each cross-checked against an independent oracle.
+- **Phase 4 (next):** integration (`http_server_enable_tls`), config, `curl` /
+  `openssl s_client` interop, ClientHello fuzzing, honest security labeling.
 
 Design references in-repo: the "Pure C TLS (not OpenSSL)" ADR in
 [`NEXT_PHASE.md`](../../NEXT_PHASE.md) and the Phase 11 TLS plan in
