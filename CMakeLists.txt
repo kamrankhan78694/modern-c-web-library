@@ -81,6 +81,7 @@ set(WEBLIB_SOURCES_TLS
     src/tls/tls.c
     src/tls/chacha20.c
     src/tls/poly1305.c
+    src/tls/chacha20poly1305.c
 )
 
 if(EMSCRIPTEN)

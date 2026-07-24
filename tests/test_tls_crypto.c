@@ -12,6 +12,7 @@
 #ifdef WEBLIB_TLS
 #include "chacha20.h"
 #include "poly1305.h"
+#include "chacha20poly1305.h"
 #endif
 
 static int g_failures = 0;
@@ -176,6 +177,84 @@ static void test_poly1305(void) {
         check_hex("poly1305 (r=0 -> tag=s)", tag, 16, "36e5f6b5c5e06070f0efca96227a863e");
     }
 }
+
+/* ChaCha20-Poly1305 AEAD — RFC 8439 §2.8.2 KAT, a seal/open round-trip, and
+ * tamper-detection on the ciphertext, tag, and AAD. */
+static void test_chacha20poly1305(void) {
+    uint8_t key[32];
+    uint8_t nonce[12];
+    uint8_t aad[12];
+    const char *pt = "Ladies and Gentlemen of the class of '99: If I could offer you "
+                     "only one tip for the future, sunscreen would be it.";
+    size_t pt_len = strlen(pt);
+    uint8_t ct[114];
+    uint8_t tag[16];
+    uint8_t out[114];
+    int i;
+
+    if (pt_len != sizeof(ct)) {
+        printf("FAIL: aead test plaintext is %zu bytes, expected %zu\n", pt_len, sizeof(ct));
+        g_failures++;
+        return;
+    }
+
+    for (i = 0; i < 32; i++) key[i] = (uint8_t)(0x80 + i);        /* key = 0x80..0x9f */
+    from_hex("070000004041424344454647", nonce, 12);
+    from_hex("50515253c0c1c2c3c4c5c6c7", aad, 12);
+
+    /* Seal and check against the RFC vector. */
+    if (!chacha20poly1305_seal(key, nonce, aad, sizeof(aad), (const uint8_t *)pt, pt_len, ct, tag)) {
+        printf("FAIL: chacha20poly1305_seal returned 0\n");
+        g_failures++;
+        return;
+    }
+    check_hex("chacha20poly1305 seal ciphertext (RFC 8439 2.8.2)", ct, pt_len,
+              "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d6"
+              "3dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b36"
+              "92ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc"
+              "3ff4def08e4b7a9de576d26586cec64b6116");
+    check_hex("chacha20poly1305 seal tag (RFC 8439 2.8.2)", tag, 16,
+              "1ae10b594f09e26a7e902ecbd0600691");
+
+    /* Open round-trip: authentic input decrypts to the original plaintext. */
+    if (chacha20poly1305_open(key, nonce, aad, sizeof(aad), ct, pt_len, tag, out) != 1 ||
+        memcmp(out, pt, pt_len) != 0) {
+        printf("FAIL: chacha20poly1305 open round-trip\n");
+        g_failures++;
+    } else {
+        printf("PASS: chacha20poly1305 open round-trip\n");
+    }
+
+    /* Tamper detection: a single-bit change in ct, tag, or aad must be rejected,
+     * and the plaintext buffer must not be touched. */
+    {
+        uint8_t bad[114];
+        uint8_t btag[16];
+        uint8_t baad[12];
+
+        memcpy(bad, ct, pt_len); bad[0] ^= 0x01;
+        memset(out, 0xEE, sizeof(out));
+        if (chacha20poly1305_open(key, nonce, aad, sizeof(aad), bad, pt_len, tag, out) != 0) {
+            printf("FAIL: aead accepted tampered ciphertext\n"); g_failures++;
+        } else {
+            printf("PASS: aead rejects tampered ciphertext\n");
+        }
+
+        memcpy(btag, tag, 16); btag[15] ^= 0x80;
+        if (chacha20poly1305_open(key, nonce, aad, sizeof(aad), ct, pt_len, btag, out) != 0) {
+            printf("FAIL: aead accepted tampered tag\n"); g_failures++;
+        } else {
+            printf("PASS: aead rejects tampered tag\n");
+        }
+
+        memcpy(baad, aad, sizeof(baad)); baad[0] ^= 0x01;
+        if (chacha20poly1305_open(key, nonce, baad, sizeof(baad), ct, pt_len, tag, out) != 0) {
+            printf("FAIL: aead accepted tampered AAD\n"); g_failures++;
+        } else {
+            printf("PASS: aead rejects tampered AAD\n");
+        }
+    }
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -186,6 +265,7 @@ int main(void) {
     test_chacha20_block();
     test_chacha20_encrypt();
     test_poly1305();
+    test_chacha20poly1305();
 
     if (g_failures == 0) {
         printf("All TLS crypto KATs passed.\n");
