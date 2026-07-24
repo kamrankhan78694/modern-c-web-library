@@ -20,6 +20,8 @@
 #include "sha512.h"
 #include "kamran.k"       /* secure_zero, secure_compare */
 
+#include <string.h>       /* memset (deterministic-failure output only) */
+
 /* ---- curve constants (16x 16-bit little-endian limbs) ------------------ */
 
 static const gf
@@ -283,6 +285,13 @@ void ed25519_sign(uint8_t sig[64], const uint8_t *m, size_t n,
     int64_t x[64];
     int i, j;
 
+    /* A NULL message is only valid with n == 0. Fail deterministically with an
+     * all-zero (unverifiable) signature instead of dereferencing NULL. */
+    if (n > 0 && m == NULL) {
+        memset(sig, 0, 64);
+        return;
+    }
+
     /* d = H(seed): d[0..31] -> clamped secret scalar a; d[32..63] -> prefix. */
     sha512(seed, 32, d);
     d[0]  &= 248;
@@ -339,6 +348,11 @@ int ed25519_verify(const uint8_t sig[64], const uint8_t *m, size_t n,
     uint8_t h[64], rcheck[32];
     sha512_ctx_t ctx;
     gf p[4], q[4];
+
+    /* A NULL message is only valid with n == 0; reject the invalid call. */
+    if (n > 0 && m == NULL) {
+        return 0;
+    }
 
     if (unpackneg(q, pk)) {
         return 0;   /* malformed public key */

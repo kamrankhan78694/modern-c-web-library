@@ -579,6 +579,22 @@ static void test_ed25519(void) {
               "d2ad120d14f47f7afe3110e8c9ba00d79ba40cfcf6b4741c212ecdb387444006");
     check_true("ed25519 verify accepts valid (64-byte message)",
                ed25519_verify(got_sig, msg, 64, pk) == 1);
+
+    /* Robustness: a NULL message with n > 0 is an invalid call and must fail
+     * deterministically (not dereference NULL) — sign zeroes the signature and
+     * verify returns 0 (Copilot review). seed/pk from the 64-byte case above. */
+    {
+        uint8_t bad[64];
+        int k, allzero = 1;
+        memset(bad, 0xEE, sizeof bad);
+        ed25519_sign(bad, NULL, 5, seed, pk);
+        for (k = 0; k < 64; k++) {
+            if (bad[k] != 0) allzero = 0;
+        }
+        check_true("ed25519 sign (NULL msg, n>0) yields zeroed signature", allzero);
+        check_true("ed25519 verify (NULL msg, n>0) rejects",
+                   ed25519_verify(got_sig, NULL, 5, pk) == 0);
+    }
 }
 #endif /* WEBLIB_TLS */
 

@@ -30,17 +30,21 @@
 void ed25519_public_key(uint8_t pk[32], const uint8_t seed[32]);
 
 /*
- * Write a 64-byte detached signature of `m` (length `n`, may be 0 with m NULL)
- * under `seed`. `pk` must equal ed25519_public_key(seed); it is passed in so the
- * caller can cache it rather than re-deriving on every signature.
+ * Write a 64-byte detached signature of `m` (length `n`) under `seed`. `pk` must
+ * be the public key for `seed` — i.e. the value ed25519_public_key() writes for
+ * that seed — passed in so the caller can cache it rather than re-deriving it on
+ * every signature. `m` may be NULL only when `n` is 0; a NULL `m` with `n > 0` is
+ * an invalid call and yields a deterministic all-zero (unverifiable) signature
+ * rather than a crash.
  */
 void ed25519_sign(uint8_t sig[64], const uint8_t *m, size_t n,
                   const uint8_t seed[32], const uint8_t pk[32]);
 
 /*
- * Verify a 64-byte detached signature of `m` (length `n`, may be 0 with m NULL)
- * against public key `pk`. Returns 1 if the signature is valid, 0 otherwise
- * (including a malformed public key).
+ * Verify a 64-byte detached signature of `m` (length `n`) against public key
+ * `pk`. Returns 1 if the signature is valid, 0 otherwise (including a malformed
+ * public key). `m` may be NULL only when `n` is 0; a NULL `m` with `n > 0` is an
+ * invalid call and returns 0.
  */
 int ed25519_verify(const uint8_t sig[64], const uint8_t *m, size_t n,
                    const uint8_t pk[32]);
