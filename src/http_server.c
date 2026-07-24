@@ -1647,16 +1647,18 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     }
 
     size_t name_len = (size_t)(colon - line);
-    /* Trim only RFC 7230 OWS (SP / HTAB) — NOT isspace(), which would also eat
-     * VT (0x0B) / FF (0x0C). Treating VT/FF as trimmable whitespace let
-     * "Transfer-Encoding: chunked\x0b" reduce to the token "chunked" here while
-     * a compliant proxy keeps the byte and frames the message differently — a
-     * request-smuggling desync. Keep leading and trailing trims symmetric. */
-    while (name_len > 0 && (line[name_len - 1] == ' ' || line[name_len - 1] == '\t')) {
-        name_len--;
-    }
     if (name_len == 0) {
         parser_set_error(parser, HTTP_BAD_REQUEST, "Empty header name");
+        return -1;
+    }
+    /* RFC 7230 §3.2.4: no whitespace is allowed between the field-name and the
+     * colon, and a server MUST reject it (400) — do NOT silently trim it. A
+     * lenient origin that strips "Transfer-Encoding : chunked" back to a real TE
+     * header while a strict proxy treats the space-bearing name as not-a-header
+     * is a request-smuggling desync. (Leading whitespace or any other non-token
+     * name byte is caught by the field-name token validation below.) */
+    if (line[name_len - 1] == ' ' || line[name_len - 1] == '\t') {
+        parser_set_error(parser, HTTP_BAD_REQUEST, "Whitespace before header colon");
         return -1;
     }
 
@@ -1664,6 +1666,11 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     while ((size_t)(value_start - line) < len && (*value_start == ' ' || *value_start == '\t')) {
         value_start++;
     }
+    /* Trim trailing value OWS using only SP / HTAB — NOT isspace(), which would
+     * also eat VT (0x0B) / FF (0x0C). Treating VT/FF as trimmable whitespace let
+     * "Transfer-Encoding: chunked\x0b" reduce to the token "chunked" while a
+     * compliant proxy keeps the byte and frames the message differently — a
+     * request-smuggling desync. (Interior control bytes are rejected below.) */
     const char *value_end = line + len;
     while (value_end > value_start && (value_end[-1] == ' ' || value_end[-1] == '\t')) {
         value_end--;
@@ -1720,6 +1727,16 @@ static int parse_header_line(http_parser_t *parser, const char *line, size_t len
     }
 
     if (strcasecmp(name_buf, "content-length") == 0) {
+        /* RFC 7230 §3.3.3: a second Content-Length is a CL.CL smuggling
+         * precondition (a proxy keying off the first value and this origin off
+         * the last disagree on the body boundary). Reject any duplicate outright,
+         * mirroring the duplicate-Transfer-Encoding guard below. */
+        if (parser->seen_content_length) {
+            free(name_buf);
+            free(value_buf);
+            parser_set_error(parser, HTTP_BAD_REQUEST, "Duplicate Content-Length header");
+            return -1;
+        }
         /* RFC 7230 §3.3.3: reject if Transfer-Encoding already seen */
         if (parser->seen_transfer_encoding) {
             free(name_buf);

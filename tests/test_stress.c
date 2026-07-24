@@ -928,6 +928,9 @@ void test_stress_transfer_encoding_smuggling(void) {
         "Transfer-Encoding: chunked\x0b",           /* trailing VT: not OWS, must not be trimmed */
         "Transfer-Encoding: chunked\x0c",           /* trailing FF: control byte in value */
         "Transfer-Encoding: chu\x0bnked",           /* interior control byte */
+        "Transfer-Encoding : chunked",              /* whitespace before colon (RFC 7230 §3.2.4) */
+        "Content-Length : 6",                       /* whitespace before colon (tab variant below) */
+        "Content-Length\t: 6",                      /* tab before colon */
         NULL
     };
     for (int i = 0; bad_400[i] != NULL; i++) {
@@ -991,6 +994,14 @@ void test_stress_transfer_encoding_smuggling(void) {
         ASSERT(r > 0);
         ASSERT(strstr(resp, "400") != NULL);
     }
+
+    /* Duplicate Content-Length (CL.CL smuggling): a second Content-Length must be
+     * rejected (400), not silently last-wins. */
+    const char *dup_cl =
+        "POST /upload HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+        "Content-Length: 6\r\nContent-Length: 5\r\n\r\n";
+    ASSERT(_stress_send_request(port, dup_cl, response, sizeof(response)) == 0);
+    ASSERT(strstr(response, "400") != NULL);
 
     http_server_stop(server);
     usleep(100000);
