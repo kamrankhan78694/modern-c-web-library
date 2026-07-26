@@ -32,6 +32,9 @@ static int send_all_fd(int fd, const uint8_t *buf, size_t len) {
             }
             return -1;
         }
+        if (s == 0) {
+            return -1;   /* a 0-byte send makes no progress: treat as an error, not a spin */
+        }
         off += (size_t)s;
     }
     return 0;
@@ -54,6 +57,7 @@ static int transport_pump(tls_transport_t *t) {
         n = recv(t->fd, raw, sizeof raw, 0);
     } while (n < 0 && errno == EINTR);
     if (n < 0) {
+        tls_khannection_wipe(&t->conn);   /* fail closed: don't leave keys behind */
         return -1;
     }
     if (n == 0) {
@@ -65,10 +69,12 @@ static int transport_pump(tls_transport_t *t) {
                               t->app, sizeof t->app, &app_len);
     if (out_len > 0) {
         if (send_all_fd(t->fd, out, out_len) < 0) {
+            tls_khannection_wipe(&t->conn);
             return -1;
         }
     }
     if (rc == TLS_KHANNECTION_RC_ERROR) {
+        tls_khannection_wipe(&t->conn);   /* idempotent: the engine already wiped */
         return -1;
     }
     t->app_off = 0;
@@ -83,6 +89,15 @@ int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *
     if (t == NULL) {
         return -1;
     }
+#ifdef SO_NOSIGPIPE
+    /* On platforms without MSG_NOSIGNAL (macOS/BSD), a send() to a peer that has
+     * closed would otherwise raise SIGPIPE and kill the process. Suppress it on the
+     * socket itself so the adapter is self-contained (best effort). */
+    {
+        int on = 1;
+        (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
+    }
+#endif
     tls_khannection_init(&t->conn, cfg);
     t->fd = fd;
     t->app_off = 0;
@@ -90,12 +105,16 @@ int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *
     t->eof = 0;
 
     while (tls_khannection_state(&t->conn) == TLS_KHANNECTION_HANDSHAKE) {
-        int r = transport_pump(t);
-        if (r <= 0) {
-            return -1;   /* error, or EOF before the handshake completed */
+        if (transport_pump(t) <= 0) {
+            tls_khannection_wipe(&t->conn);   /* error or EOF mid-handshake: fail closed */
+            return -1;
         }
     }
-    return (tls_khannection_state(&t->conn) == TLS_KHANNECTION_ESTABLISHED) ? 0 : -1;
+    if (tls_khannection_state(&t->conn) != TLS_KHANNECTION_ESTABLISHED) {
+        tls_khannection_wipe(&t->conn);
+        return -1;
+    }
+    return 0;
 }
 
 ssize_t tls_transport_read(tls_transport_t *t, void *buf, size_t len) {
@@ -147,9 +166,11 @@ int tls_transport_write(tls_transport_t *t, const void *buf, size_t len) {
         }
         if (tls_khannection_send(&t->conn, p + off, chunk, out, sizeof out, &out_len)
             != TLS_KHANNECTION_RC_OK) {
+            tls_khannection_wipe(&t->conn);   /* fail closed */
             return -1;
         }
         if (send_all_fd(t->fd, out, out_len) < 0) {
+            tls_khannection_wipe(&t->conn);
             return -1;
         }
         off += chunk;
