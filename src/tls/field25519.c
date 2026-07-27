@@ -69,6 +69,12 @@ void pack25519(uint8_t *o, const gf n) {
         o[2 * i]     = (uint8_t)(t[i] & 0xff);
         o[2 * i + 1] = (uint8_t)(t[i] >> 8);
     }
+    /* `t`/`m` hold the fully-reduced field element being packed — for X25519 that is
+     * the ECDHE shared secret in limb form. Wipe them so the secret does not survive
+     * in this leaf's stack frame after the caller (which wipes its own copy and `o`)
+     * returns. Called ~once per operation, so the cost is negligible. */
+    secure_zero(m, sizeof(m));
+    secure_zero(t, sizeof(t));
 }
 
 void unpack25519(gf o, const uint8_t *n) {
@@ -112,6 +118,13 @@ void mul25519(gf o, const gf a, const gf b) {
     }
     car25519(o);
     car25519(o);
+    /* Every field and curve-point operation bottoms out here, so `t` holds products
+     * of secret operands (the X25519 scalar/coordinate, the Ed25519 nonce). Wipe the
+     * accumulator so no secret-derived limb product survives in this leaf's frame
+     * once the operation returns. The output `o` is the caller's and is wiped by the
+     * caller when it is secret. The extra zeroing is a small fixed cost dwarfed by
+     * the 16x16 multiply this function already performs. */
+    secure_zero(t, sizeof(t));
 }
 
 void sq25519(gf o, const gf a) {
