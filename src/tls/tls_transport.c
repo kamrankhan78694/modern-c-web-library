@@ -181,12 +181,15 @@ ssize_t tls_transport_read(tls_transport_t *t, void *buf, size_t len) {
         if (t->eof || tls_khannection_state(&t->conn) == TLS_KHANNECTION_CLOSED) {
             return 0;
         }
-        /* Aggregate wall-clock guard: a peer that keeps the socket fed but never
-         * completes a record (slow-drip) — or floods sub-limit empty records — could
-         * otherwise spin this pump loop indefinitely, never returning control to the
-         * HTTP layer that enforces the whole-request deadline. Bound each call so
-         * that deadline is always reached. Fail closed (wipe + -1); conn_read maps a
-         * -1 to a clean end-of-stream, so the connection is dropped. */
+        /* Aggregate wall-clock guard, checked between pumps: a peer that keeps the
+         * socket fed but never completes a record (slow-drip) — or floods sub-limit
+         * empty records — would otherwise spin this loop, never returning control to
+         * the HTTP layer that enforces the whole-request deadline. This bounds the
+         * *fed-socket* case. The complementary case — the peer going silent so recv()
+         * blocks inside transport_pump — is bounded by SO_RCVTIMEO, which the server
+         * sets no larger than this budget (http_server caps it at request_timeout),
+         * so recv() returns and this check runs within the budget. Fail closed
+         * (wipe + -1); conn_read maps the -1 to a clean end-of-stream. */
         if (t->read_timeout_seconds > 0 &&
             (long)(tls_monotonic_seconds() - start) >= (long)t->read_timeout_seconds) {
             transport_wipe(t);

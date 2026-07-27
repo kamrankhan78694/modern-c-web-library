@@ -588,8 +588,12 @@ static void test_tls_transport_read_timeout(void) {
     close(cfd);
     pthread_join(tid, NULL);
     check_true("readloris: handshake still completed", res.accept_rc == 0);
+    /* Strictly -1 (deadline/fail-closed), not 0: a 0 would mean a clean EOF, which
+     * here could only come from the client's post-loop close and would NOT prove the
+     * deadline fired. The 1s read budget expires (~1s) well before the client stops
+     * dribbling (~3s), so the read must return -1. */
     check_true("readloris: dribbled post-handshake read aborted by the wall-clock deadline",
-               res.read_rc <= 0);
+               res.read_rc < 0);
     close(sv[0]);
 }
 #endif /* WEBLIB_TLS */
