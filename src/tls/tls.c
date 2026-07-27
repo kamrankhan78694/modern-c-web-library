@@ -15,8 +15,8 @@
 #ifdef WEBLIB_TLS
 
 const char *tls_build_info(void) {
-    return "modern-c-web-library TLS 1.3 (EXPERIMENTAL, UNAUDITED) — scaffold only; "
-           "planned suite TLS_CHACHA20_POLY1305_SHA256, group X25519, sig Ed25519";
+    return "modern-c-web-library TLS 1.3 server (EXPERIMENTAL, UNAUDITED); "
+           "suite TLS_CHACHA20_POLY1305_SHA256, group X25519, sig Ed25519";
 }
 
 #else

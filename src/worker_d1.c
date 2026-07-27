@@ -13,7 +13,7 @@
  *   - run(stmt)        → execute with metadata
  *   - first(stmt)      → return first row
  *   - all(stmt)        → return all rows as JSON
- *   - batch(stmts[])   → atomic batch execution
+ *   - batch(stmts[])   → batch execution (NOT atomic, unlike env.DB.batch())
  *   - exec(sql)        → raw SQL execution
  *
  * Copyright (c) 2024 Modern C Web Library

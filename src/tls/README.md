@@ -122,7 +122,7 @@ cmake --build build-tls
 
 - **Phase 0 (this scaffold):** build option + `-DWEBLIB_TLS` wiring + a linkable
   smoke symbol (`tls_build_info`). Default build proven unchanged.
-- **Phase 0 (next):** shared crypto module — promote the existing static SHA-256 /
+- **Phase 0 (landed):** shared crypto module — promote the existing static SHA-256 /
   HMAC-SHA256 / base64 out of `middleware_auth.c` / `websocket.c`; transport
   choke-point (`conn_read` / `conn_write`) proving no behavior change.
 - **Phase 1:** primitives from scratch, each with an RFC known-answer test

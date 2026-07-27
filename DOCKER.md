@@ -262,7 +262,9 @@ cmake .. && make 2>&1 | grep -i warning
 ```bash
 cd /workspace/build
 valgrind --leak-check=full ./tests/test_weblib
-# Should show "no leaks are possible"
+# Reports definite leaks today: cache_get() returns an owned copy the cache tests
+# never free (see the Valgrind caveat in STRESS_TESTS.md). Compare against a run on
+# main rather than expecting zero.
 ```
 
 ### Step 7: Commit and Push

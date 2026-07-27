@@ -248,8 +248,9 @@ Get the response body.  Writes the body length to `*out_len` when
 void worker_set_fetch_handler(worker_fetch_handler_t handler);
 ```
 
-Register a custom fetch handler.  When set, `worker_handle_fetch()`
-delegates to this handler instead of the library router.
+Register a custom fetch handler.  When set, `worker_handle_fetch()` delegates to it.
+This is the only way to route: a router registered with `worker_set_router()` is never
+dispatched, so branch on `worker_request_get_url(req)` inside your handler.
 
 ### `worker_set_router`
 
@@ -705,7 +706,8 @@ matters.
 
 Models the [Cloudflare Queues](https://developers.cloudflare.com/queues/)
 binding.  Supports both producing and consuming messages with
-acknowledgement.  Messages are stored in memory for local testing.
+acknowledgement.  An in-memory FIFO queue IS the implementation in every build
+(native, test and WASM/Workers); no JS glue to a real Queues binding ships in this repo.
 
 | CF JS API | C API |
 |-----------|-------|

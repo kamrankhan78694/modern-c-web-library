@@ -30,12 +30,12 @@ extern "C" {
 
 /*
  * Return a human-readable banner describing this experimental TLS build and its
- * planned scope. Never returns NULL or an empty string.
+ * scope. Never returns NULL or an empty string.
  *
- * This is intentionally the only symbol the Phase 0 scaffold exports: it lets the
- * build pipeline (option WEBLIB_ENABLE_TLS -> -DWEBLIB_TLS -> compiled native
- * source -> linkable symbol -> smoke test) be verified end to end before any
- * cryptography exists. It performs no cryptographic or network operation.
+ * This symbol exists so the build pipeline (option WEBLIB_ENABLE_TLS -> -DWEBLIB_TLS
+ * -> compiled native source -> linkable symbol -> smoke test) can be verified end to
+ * end independently of the protocol code. It performs no cryptographic or network
+ * operation itself; the TLS implementation lives in the other files in this directory.
  *
  * Naming: the tls_ prefix matches the subsystem-prefixed convention used across
  * the library (http_server_*, websocket_*, ...) and the planned TLS API

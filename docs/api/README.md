@@ -393,7 +393,7 @@ Dispatch a request through the middleware chain and into the matching handler.
 int router_route(router_t *router, http_request_t *req, http_response_t *res);
 // Returns:  0  a route matched and ran, or a middleware stopped the chain
 //           1  no route matched — a 404 "Not Found" body is filled in for you
-//          -1  router, req or res was NULL; nothing was written
+//          -1  router, req, res, or req->path was NULL; nothing was written
 ```
 The HTTP server calls this for you. You need it directly only when you are driving
 the router yourself — in a Cloudflare Worker, or in a test.

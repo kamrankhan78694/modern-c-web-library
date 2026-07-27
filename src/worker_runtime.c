@@ -8,10 +8,11 @@
  * bindings are in-memory simulations in every build, and worker_handle_fetch()
  * does NOT perform route matching -- see its comment below.
  *
- * In a Cloudflare Worker deployment, a thin JS wrapper receives the
- * fetch event and calls into these WASM exports.  The C layer processes
- * the request using the library's router, middleware, and JSON engine
- * and returns a serialised response.
+ * The intended shape is that a thin JS wrapper in the Worker receives the fetch
+ * event and calls into these WASM exports, and the C layer returns a serialised
+ * response.  Note the C layer does NOT dispatch through the router (see above);
+ * a fetch handler registered with worker_set_fetch_handler() must branch on the
+ * URL itself.
  *
  * Copyright (c) 2024 Modern C Web Library
  * Licensed under MIT License

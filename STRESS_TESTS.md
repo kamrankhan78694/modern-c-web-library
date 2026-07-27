@@ -93,8 +93,9 @@ Valgrind Results (CI, Ubuntu/gcc):
 
 The original report quoted exact heap figures (393,359 allocs, all freed; 0 bytes in use at exit).
 Those were measured against the 28-test suite and are no longer accurate for 37 tests, so they have
-been dropped rather than guessed at. What CI actually gates on — and what is stated above — is what
-`valgrind --leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=1` reports.
+been dropped rather than guessed at. What is stated above is what
+`valgrind --leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=1` reports — which
+is not the same as what CI gates on; see the caveat immediately below.
 
 > **Caveat, accurate as of 2.0.0.** Valgrind *runs* over every `tests/test_*` binary, but the CI
 > step wraps it in a shell `for` loop with no `set -e`, so the step's exit status is only that of

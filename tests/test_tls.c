@@ -1,5 +1,5 @@
 /*
- * test_tls.c — smoke test for the experimental TLS scaffold (Phase 0).
+ * test_tls.c — smoke test for the experimental TLS layer's build wiring.
  *
  * Built and run only when configured with -DWEBLIB_ENABLE_TLS=ON. It asserts that
  * the build wiring (option -> -DWEBLIB_TLS -> compiled native source -> linkable
@@ -44,7 +44,7 @@ int main(void) {
     }
 
     if (failures == 0) {
-        printf("PASS: TLS scaffold wiring verified (no crypto implemented yet)\n");
+        printf("PASS: TLS build wiring verified (build-info symbol links and is labelled)\n");
     }
     return failures == 0 ? 0 : 1;
 #endif

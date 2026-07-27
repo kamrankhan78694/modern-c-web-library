@@ -327,7 +327,7 @@ int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware
  * @param res Response object
  * @return 0 if a route matched and ran, or a middleware stopped the chain;
  *         1 if no route matched (a 404 "Not Found" body is filled in for you);
- *        -1 if router, req or res was NULL (nothing was written)
+ *        -1 if router, req or res was NULL, or req->path was NULL (nothing written)
  */
 int router_route(router_t *router, http_request_t *req, http_response_t *res);
 
@@ -2265,7 +2265,8 @@ typedef struct {
     int    cursor;                  /**< Cursor for next page. */
 } worker_r2_list_result_t;
 
-/** Create an R2 bucket handle. */
+/** Create an R2 bucket handle.  In-memory simulation in EVERY build, including
+ *  WASM/Workers — no glue to a real Cloudflare R2 bucket ships here. */
 worker_r2_bucket_t *worker_r2_bucket_create(const char *bucket_name);
 
 /** Destroy an R2 bucket and free all stored objects. */
@@ -2307,7 +2308,9 @@ typedef struct {
     int           meta_changes;   /**< Number of rows affected (INSERT/DELETE). */
 } worker_d1_result_t;
 
-/** Create a D1 database handle. */
+/** Create a D1 database handle.  In-memory simulation in EVERY build, including
+ *  WASM/Workers — no glue to a real Cloudflare D1 database ships here, and
+ *  worker_d1_batch() is NOT atomic the way env.DB.batch() is. */
 worker_d1_t *worker_d1_create(const char *database_name);
 
 /** Destroy a D1 database and free all in-memory tables. */
@@ -2372,7 +2375,8 @@ typedef struct {
     char                    *queue_name;/**< Owned copy of the source queue name. */
 } worker_queue_batch_t;
 
-/** Create a queue handle. */
+/** Create a queue handle.  In-memory FIFO in EVERY build, including WASM/Workers —
+ *  no glue to a real Cloudflare Queues binding ships here. */
 worker_queue_t *worker_queue_create(const char *queue_name);
 
 /** Destroy a queue and free all pending messages. */

@@ -108,7 +108,7 @@ docker image prune          # Remove unused images
 Before submitting a PR:
 - [ ] `./docker-run.sh test` - The 6 default ctest suites pass
 - [ ] `./docker-run.sh dev` then `mkdir -p build && cd build && cmake .. && make 2>&1 | grep -i warning` - No warnings
-- [ ] `valgrind --leak-check=full ./tests/test_weblib` - No memory leaks
+- [ ] `valgrind --leak-check=full ./tests/test_weblib` - no *new* leaks vs `main` (the known `cache_get()` leaks in the cache tests are expected and pre-existing; see STRESS_TESTS.md)
 - [ ] If you touched `src/tls/`: build with TLS on and run all 13 suites (below)
 - [ ] Code follows style guide (see CONTRIBUTING.md)
 
