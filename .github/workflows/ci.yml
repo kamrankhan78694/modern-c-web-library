@@ -42,20 +42,31 @@ jobs:
       - name: Run tests
         run: docker run --rm modern-c-weblib:dev /bin/bash -c "cd build && ctest --output-on-failure --timeout 120"
 
+      # A shell for-loop exits with the status of its LAST iteration, so the
+      # previous version of this step reported Valgrind failures for every
+      # binary but only *gated* on the last one (test_worker, by glob order) —
+      # a definite leak in test_weblib or test_stress was printed and then
+      # discarded, and the job stayed green. `rc` accumulates instead, so every
+      # binary still runs (one failure does not mask the rest) and any failure
+      # fails the step. --errors-for-leak-kinds is stated explicitly rather than
+      # relying on Valgrind's default, so the intent survives a version bump.
       - name: Valgrind memory check
         run: |
           docker run --rm modern-c-weblib:dev /bin/bash -c '
             cd build
+            rc=0
             for test_bin in tests/test_*; do
               if [ -x "$test_bin" ]; then
                 echo "=== Valgrind: $test_bin ==="
                 valgrind \
                   --leak-check=full \
                   --error-exitcode=1 \
+                  --errors-for-leak-kinds=definite,indirect \
                   --show-leak-kinds=definite,indirect \
-                  ./"$test_bin"
+                  ./"$test_bin" || rc=1
               fi
             done
+            exit $rc
           '
 
   # ── Stage 2: Secondary checks (only after Stage 1 passes) ─────────

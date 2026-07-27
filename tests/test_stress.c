@@ -413,6 +413,20 @@ void test_stress_json_repeated_parse_free(void) {
 
 /* ===== Cache Stress Tests ===== */
 
+/*
+ * cache_get() hands back a NEWLY ALLOCATED copy (src/cache.c: `strdup(entry->value)`),
+ * so `ASSERT(cache_get(...) != NULL)` leaks on every hit — the rapid set/get test
+ * below did that 10,000 times in a single run.  This helper frees the copy and
+ * returns only the answer the assertion needs.  The cast is required because the
+ * return type is `const char *`.
+ */
+static int cache_has(cache_t *c, const char *key) {
+    const char *v = cache_get(c, key);
+    if (!v) return 0;
+    free((void *)v);
+    return 1;
+}
+
 void test_stress_cache_fill_eviction(void) {
     TEST("cache fill and eviction");
 
@@ -434,11 +448,8 @@ void test_stress_cache_fill_eviction(void) {
     ASSERT(count <= 100);
 
     /* Old entries should be evicted, recent ones should exist */
-    const char *val = cache_get(cache, "key0");
-    ASSERT(val == NULL);  /* Should be evicted */
-
-    val = cache_get(cache, "key499");
-    ASSERT(val != NULL);  /* Should exist */
+    ASSERT(!cache_has(cache, "key0"));    /* Should be evicted */
+    ASSERT(cache_has(cache, "key499"));   /* Should exist */
 
     cache_destroy(cache);
     PASS();
@@ -460,8 +471,7 @@ void test_stress_cache_rapid_set_get(void) {
         int result = cache_set(cache, key, value, 3600);
         ASSERT(result == 0);
 
-        const char *retrieved = cache_get(cache, key);
-        ASSERT(retrieved != NULL);
+        ASSERT(cache_has(cache, key));
     }
 
     cache_destroy(cache);
@@ -483,15 +493,13 @@ void test_stress_cache_ttl_accuracy(void) {
     }
 
     /* Verify entries exist */
-    const char *val = cache_get(cache, "key0");
-    ASSERT(val != NULL);
+    ASSERT(cache_has(cache, "key0"));
 
     /* Wait 2 seconds */
     sleep(2);
 
     /* Verify entries expired */
-    val = cache_get(cache, "key0");
-    ASSERT(val == NULL);
+    ASSERT(!cache_has(cache, "key0"));
 
     cache_destroy(cache);
     PASS();

@@ -252,7 +252,7 @@ See `examples/tls_server.c`, which reads the two PEM files itself and passes the
 |--------|--------|---------|
 | Compiler Warnings | ✅ **Zero** | Clean build with `-Wall -Wextra -pedantic` |
 | Security Warnings | ✅ **Zero** | All unsafe functions replaced |
-| Memory Errors | 🟡 **Reported zero, not gated** | Valgrind runs on every test binary but the CI step only gates on the last one, and a known `cache_get()` leak in the cache tests sits in the unenforced set; ASan/UBSan genuinely gate the TLS suites |
+| Memory Errors | ✅ **Zero** | Valgrind gates every test binary (the step accumulates each binary's exit status, so a failure anywhere fails the job); ASan/UBSan gate the TLS suites |
 | Static Analysis | ⚠️ **Not run** | Compiler diagnostics only — `-Wall -Wextra -pedantic` on GCC (`primary-checks`) and Clang (`clang-check`). No cppcheck/clang-tidy/CodeQL stage exists |
 
 ### Test Results
@@ -268,10 +268,10 @@ See `examples/tls_server.c`, which reads the two PEM files itself and passes the
 
 | Tool | Status | Result |
 |------|--------|--------|
-| Valgrind | 🟡 Every push, not gating | The Docker job runs each `tests/test_*` binary under `--leak-check=full`, but its shell loop discards every exit status except the last, so results are reported rather than enforced |
+| Valgrind | ✅ Every push, gating | The Docker job runs each `tests/test_*` binary under `--leak-check=full --errors-for-leak-kinds=definite,indirect --error-exitcode=1`; every binary's status is accumulated, so a definite or indirect leak in any of them fails the job |
 | AddressSanitizer + UBSan | ✅ Every push | The `tls-check` job builds with `-fsanitize=address,undefined` and runs the 7 TLS suites; 0 errors |
 | Buffer Overflow | ✅ Protected | All bounds checked |
-| Memory Leaks | 🟡 Reported clean, not gated | Valgrind runs on every binary but the CI step keeps only the last exit status; a known `cache_get()` leak in the cache tests is in the unenforced set |
+| Memory Leaks | ✅ Clean | Valgrind gates every binary; definite and indirect leaks fail the job |
 
 ---
 
@@ -400,7 +400,7 @@ the native path.
 ### Technical Validation ✅
 - Proof of concept complete and working
 - 100% pass rate across all 13 ctest suites; nine of the ten bugs tracked in [BUGS.md](BUGS.md) are closed, with BUG-4 (middleware singleton state) partially fixed
-- Valgrind runs every test binary on every push (though the CI step currently gates only on the last one); AddressSanitizer and UndefinedBehaviorSanitizer gate the TLS suites.
+- Valgrind gates every test binary on every push; AddressSanitizer and UndefinedBehaviorSanitizer gate the TLS suites. All clean.
 - Production-ready code quality for the plain-HTTP core. The TLS layer is explicitly **not** in that bucket: it is experimental, unaudited, and off by default.
 
 ### Market Differentiation ✅
@@ -417,7 +417,7 @@ the native path.
 
 ### Risk Management ✅
 - Security-first design
-- Memory safety checked continuously — Valgrind over every test binary (reported, not yet gated — see the CI table), ASan/UBSan gating the TLS suites (this is C: checked, not guaranteed)
+- Memory safety checked continuously — Valgrind gating every test binary, ASan/UBSan gating the TLS suites (this is C: checked, not guaranteed)
 - No supply chain vulnerabilities
 - Clear licensing (MIT)
 
