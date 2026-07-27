@@ -76,15 +76,13 @@ void tls_server_hs_init(tls_server_hs_t *hs) {
     hs->alert = 0;
 }
 
-/* The single application protocol this server speaks (RFC 7301 ALPN). */
-static const uint8_t ALPN_HTTP11[8] = { 'h', 't', 't', 'p', '/', '1', '.', '1' };
-
 /*
- * ALPN selection (RFC 7301). We offer only HTTP/1.1. Returns 1 with *proto set to
- * the chosen protocol name (or NULL/0 when the client offered no ALPN at all), or 0
- * when the client offered ALPN but nothing we support — the caller must then abort
- * with no_application_protocol rather than silently proceeding with a protocol the
- * peer didn't agree to.
+ * ALPN selection (RFC 7301). We offer only HTTP/1.1 (TLS_ALPN_HTTP11, the same id
+ * the parser matches and the EncryptedExtensions builder echoes). Returns 1 with
+ * *proto set to the chosen protocol name (or NULL/0 when the client offered no ALPN
+ * at all), or 0 when the client offered ALPN but nothing we support — the caller
+ * must then abort with no_application_protocol rather than silently proceeding with
+ * a protocol the peer didn't agree to.
  */
 static int select_alpn(const tls_client_hello_t *ch,
                        const uint8_t **proto, size_t *proto_len) {
@@ -94,8 +92,8 @@ static int select_alpn(const tls_client_hello_t *ch,
         return 1;
     }
     if (ch->alpn_http11) {
-        *proto = ALPN_HTTP11;
-        *proto_len = sizeof ALPN_HTTP11;
+        *proto = (const uint8_t *)TLS_ALPN_HTTP11;
+        *proto_len = TLS_ALPN_HTTP11_LEN;
         return 1;
     }
     return 0;

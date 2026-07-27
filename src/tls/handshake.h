@@ -28,6 +28,12 @@
 #define TLS_HS_CERTIFICATE_VERIFY   15
 #define TLS_HS_FINISHED             20
 
+/* The single ALPN protocol id this server implements (RFC 7301). Defined once so
+ * the parser (which detects it being offered), the EncryptedExtensions builder
+ * (which echoes it) and the handshake's selection logic can never drift apart. */
+#define TLS_ALPN_HTTP11     "http/1.1"
+#define TLS_ALPN_HTTP11_LEN (sizeof(TLS_ALPN_HTTP11) - 1)   /* 8, without the NUL */
+
 /*
  * The parsed subset of a ClientHello. The pointer fields borrow into the caller's
  * message buffer and are valid only as long as it lives; they are NULL / 0 when

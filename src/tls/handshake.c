@@ -28,9 +28,6 @@
 #define EXT_SUPPORTED_VERSIONS  0x002b
 #define EXT_KEY_SHARE           0x0033
 
-/* The one application protocol this server implements (RFC 7301 ALPN). */
-static const uint8_t ALPN_HTTP11[8] = { 'h', 't', 't', 'p', '/', '1', '.', '1' };
-
 /* Return 1 if the u16 list `r` contains `want` (scanning to its end). */
 static int list_u16_contains(tls_reader_t *r, uint16_t want) {
     uint16_t v;
@@ -227,12 +224,12 @@ int tls_parse_client_hello(const uint8_t *msg, size_t msg_len, tls_client_hello_
                 if (tls_reader_remaining(&name) < 1) {
                     return 0;   /* ProtocolName<1..> must be non-empty */
                 }
-                if (tls_reader_remaining(&name) == sizeof ALPN_HTTP11) {
+                if (tls_reader_remaining(&name) == TLS_ALPN_HTTP11_LEN) {
                     const uint8_t *p;
-                    if (!tls_read_bytes(&name, &p, sizeof ALPN_HTTP11)) {
+                    if (!tls_read_bytes(&name, &p, TLS_ALPN_HTTP11_LEN)) {
                         return 0;
                     }
-                    if (memcmp(p, ALPN_HTTP11, sizeof ALPN_HTTP11) == 0) {
+                    if (memcmp(p, TLS_ALPN_HTTP11, TLS_ALPN_HTTP11_LEN) == 0) {
                         out->alpn_http11 = 1;
                     }
                 }
