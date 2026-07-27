@@ -63,6 +63,11 @@ typedef struct {
     size_t  app_off;
     size_t  app_len;
     int     eof;   /* peer closed (close_notify or TCP EOF); reads return 0 */
+    /* Wall-clock budget (seconds, 0 = none) bounding a single tls_transport_read
+     * call, so a slow-drip or empty-record peer cannot pin the pump loop between the
+     * HTTP layer's own request-deadline checks. Set from tls_transport_accept's
+     * timeout. */
+    int     read_timeout_seconds;
 } tls_transport_t;
 
 /*
