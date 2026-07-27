@@ -1,13 +1,16 @@
 # `src/tls/` — Experimental pure-C TLS 1.3 (EXPERIMENTAL · UNAUDITED)
 
-> **Status: components built and cross-checked; not yet integrated or audited.**
-> The cryptographic primitives, certificate/key loading, key schedule, record
-> layer, handshake messages, and the **server handshake state machine** now exist,
-> each landed with a known-answer test against an official RFC vector or an
-> independent reference implementation. What does **not** yet exist: the transport
-> integration (`http_server_enable_tls`) and real-client (`curl` / `openssl
-> s_client`) interop — so nothing here terminates a real TLS connection yet. The
-> code is **UNAUDITED**; do **not** rely on it for any security property.
+> **Status: working end-to-end, but UNAUDITED.** The full stack is built and
+> integrated: primitives, cert/key loading, key schedule, record layer, handshake
+> state machine, the sans-IO connection engine, the socket adapter, and
+> `http_server_enable_tls()`. A real **`openssl s_client` (OpenSSL 3.x) completes a
+> TLS 1.3 handshake and an encrypted HTTP request/response** against the server
+> (`tests/interop_openssl.sh`), so it genuinely interoperates with a mainstream TLS
+> implementation. It has **NOT been security-audited**; do **not** rely on it for
+> any security property in production. Known interop bound: the profile is
+> Ed25519-only, so a client that does not offer `ed25519` in its
+> `signature_algorithms` (e.g. an old LibreSSL) is — correctly — refused with
+> `handshake_failure`.
 
 ## Why hand-written TLS
 
@@ -70,9 +73,13 @@ ctest --test-dir build-tls
   The non-TLS path is byte-identical (the stress suite passes unchanged), and an
   end-to-end test drives a real TLS 1.3 request/response against the live server.
   Threaded mode only; WebSocket-over-TLS and the async path are not yet wired.
-- **Interoperability (separate milestone):** real `curl` / `openssl s_client` /
-  browser interop, negotiation edge cases, ClientHello fuzzing, honest security
-  labeling — tracked as its own milestone (#1), not folded into integration.
+- **Interoperability (milestone #1, in progress):** ✅ `openssl s_client` (OpenSSL
+  3.x) completes a real TLS 1.3 handshake + encrypted HTTP request/response against
+  the server — a genuine third-party client — locked in by `tests/interop_openssl.sh`
+  and demonstrated by `examples/tls_server.c`. Remaining: browser interop; clients
+  that offer only a non-X25519 key_share (needs HelloRetryRequest); optional
+  middlebox-compat ChangeCipherSpec emission and ALPN; ClientHello fuzzing. Known
+  bound: Ed25519-only, so a client not offering `ed25519` is correctly refused.
 
 Design references in-repo: the "Pure C TLS (not OpenSSL)" ADR in
 [`NEXT_PHASE.md`](../../NEXT_PHASE.md) and the Phase 11 TLS plan in
