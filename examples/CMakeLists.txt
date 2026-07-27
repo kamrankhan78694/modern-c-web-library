@@ -21,6 +21,11 @@ if(NOT EMSCRIPTEN)
     add_executable(rest_api_server rest_api_server.c)
     target_link_libraries(rest_api_server weblib ${PLATFORM_LIBS})
 
+    # Throughput/latency benchmark runner (drives src/benchmark.c, which
+    # previously had no caller anywhere in the tree)
+    add_executable(benchmark_server benchmark_server.c)
+    target_link_libraries(benchmark_server weblib ${PLATFORM_LIBS})
+
     # HTTPS example — only when the experimental pure-C TLS layer is enabled
     if(WEBLIB_ENABLE_TLS)
         add_executable(tls_server tls_server.c)
@@ -28,7 +33,7 @@ if(NOT EMSCRIPTEN)
     endif()
 
     # Installation
-    install(TARGETS simple_server async_server websocket_echo_server async_websocket_echo_server rest_api_server DESTINATION bin)
+    install(TARGETS simple_server async_server websocket_echo_server async_websocket_echo_server rest_api_server benchmark_server DESTINATION bin)
 endif()
 
 # Worker example (runs on both native and WASM builds)
