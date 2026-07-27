@@ -24,8 +24,12 @@
 #define EXT_SERVER_NAME         0x0000
 #define EXT_SUPPORTED_GROUPS    0x000a
 #define EXT_SIGNATURE_ALGS      0x000d
+#define EXT_ALPN                0x0010
 #define EXT_SUPPORTED_VERSIONS  0x002b
 #define EXT_KEY_SHARE           0x0033
+
+/* The one application protocol this server implements (RFC 7301 ALPN). */
+static const uint8_t ALPN_HTTP11[8] = { 'h', 't', 't', 'p', '/', '1', '.', '1' };
 
 /* Return 1 if the u16 list `r` contains `want` (scanning to its end). */
 static int list_u16_contains(tls_reader_t *r, uint16_t want) {
@@ -202,6 +206,42 @@ int tls_parse_client_hello(const uint8_t *msg, size_t msg_len, tls_client_hello_
             }
             break;
         }
+        case EXT_ALPN: {
+            /* application_layer_protocol_negotiation (RFC 7301):
+             * ProtocolName protocol_name_list<2..2^16-1>, each opaque<1..2^8-1>.
+             * Read every name in full (a truncated one fails) and note whether the
+             * list includes "http/1.1"; the actual selection is the caller's. */
+            tls_reader_t names;
+            if (!tls_read_vector(&ext_data, 2, &names)) {
+                return 0;
+            }
+            if (tls_reader_remaining(&names) < 1) {
+                return 0;   /* protocol_name_list<2..> must hold at least one name */
+            }
+            out->alpn_present = 1;
+            while (tls_reader_remaining(&names) > 0) {
+                tls_reader_t name;
+                if (!tls_read_vector(&names, 1, &name)) {
+                    return 0;
+                }
+                if (tls_reader_remaining(&name) < 1) {
+                    return 0;   /* ProtocolName<1..> must be non-empty */
+                }
+                if (tls_reader_remaining(&name) == sizeof ALPN_HTTP11) {
+                    const uint8_t *p;
+                    if (!tls_read_bytes(&name, &p, sizeof ALPN_HTTP11)) {
+                        return 0;
+                    }
+                    if (memcmp(p, ALPN_HTTP11, sizeof ALPN_HTTP11) == 0) {
+                        out->alpn_http11 = 1;
+                    }
+                }
+            }
+            if (!tls_reader_eof(&ext_data)) {
+                return 0;
+            }
+            break;
+        }
         case EXT_SERVER_NAME: {
             /* ServerNameList server_name_list<1..2^16-1>. Each entry is
              * { NameType name_type; HostName host_name<1..2^16-1> } (host_name is
@@ -347,14 +387,31 @@ int tls_build_hello_retry_request(tls_writer_t *w,
     return tls_writer_ok(w);
 }
 
-int tls_build_encrypted_extensions(tls_writer_t *w) {
-    size_t hdr, exts;
+int tls_build_encrypted_extensions(tls_writer_t *w, const uint8_t *alpn, size_t alpn_len) {
+    size_t hdr, exts, ext_data, list, name;
     if (w == NULL) {
         return 0;
     }
+    if (alpn == NULL && alpn_len != 0) {
+        return 0;
+    }
+    if (alpn != NULL && (alpn_len < 1 || alpn_len > 255)) {
+        return 0;   /* ProtocolName<1..2^8-1> */
+    }
     tls_write_u8(w, TLS_HS_ENCRYPTED_EXTENSIONS);
     hdr = tls_writer_open_vector(w, 3);
-    exts = tls_writer_open_vector(w, 2);         /* empty extensions block */
+    exts = tls_writer_open_vector(w, 2);
+    if (alpn != NULL) {
+        /* One ALPN extension (RFC 7301) with a single selected ProtocolName. */
+        tls_write_u16(w, EXT_ALPN);
+        ext_data = tls_writer_open_vector(w, 2);
+        list = tls_writer_open_vector(w, 2);     /* ProtocolNameList */
+        name = tls_writer_open_vector(w, 1);     /* ProtocolName<1..255> */
+        tls_write_bytes(w, alpn, alpn_len);
+        tls_writer_close_vector(w, name, 1);
+        tls_writer_close_vector(w, list, 2);
+        tls_writer_close_vector(w, ext_data, 2);
+    }
     tls_writer_close_vector(w, exts, 2);
     tls_writer_close_vector(w, hdr, 3);
     return tls_writer_ok(w);

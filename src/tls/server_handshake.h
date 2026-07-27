@@ -73,6 +73,7 @@
 #define TLS_ALERT_DECRYPT_ERROR      51
 #define TLS_ALERT_PROTOCOL_VERSION   70
 #define TLS_ALERT_INTERNAL_ERROR     80
+#define TLS_ALERT_NO_APPLICATION_PROTOCOL 120   /* RFC 7301: no common ALPN protocol */
 
 /* ---- phases ------------------------------------------------------------ */
 /*
