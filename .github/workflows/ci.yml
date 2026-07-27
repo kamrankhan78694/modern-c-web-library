@@ -92,6 +92,83 @@ jobs:
       - name: Run tests
         run: cd build && ctest --output-on-failure --timeout 120
 
+  # Experimental pure-C TLS 1.3 layer.  TLS is OFF by default, so the jobs
+  # above build and test the library with NONE of src/tls/ compiled — without
+  # this job the ~5,500 lines of hand-written crypto and the handshake state
+  # machine (7 ctest suites, incl. 86 crypto KATs and a real `openssl s_client`
+  # interop round-trip) would never run in CI at all.
+  #
+  # Two configurations, because they catch different failures:
+  #   1. Release-ish build + full suite — correctness and real-client interop.
+  #   2. ASan/UBSan build — memory safety and UB in hand-written crypto, which
+  #      the plain build cannot detect.  This mirrors the sanitizer gate applied
+  #      manually to every TLS change; running it here makes it enforceable.
+  #
+  # WEBLIB_TLS_TEST_HOOKS exposes a deterministic-RNG seam used only by
+  # TlsHttpTests; it is OFF in any production build.
+  tls-check:
+    name: TLS Build & Test (experimental layer)
+    needs: primary-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q cmake clang openssl
+
+      # openssl must be real OpenSSL with a TLS 1.3-capable s_client, otherwise
+      # the interop test self-skips rather than failing.  Log it so a silent
+      # skip is visible in the run rather than looking like a pass.
+      - name: Show openssl version (interop test prerequisite)
+        run: openssl version
+
+      - name: Configure (TLS on)
+        run: |
+          mkdir -p build-tls && cd build-tls
+          cmake .. \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DWEBLIB_ENABLE_TLS=ON \
+            -DWEBLIB_TLS_TEST_HOOKS=ON \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -pedantic"
+
+      - name: Build (TLS on)
+        run: cmake --build build-tls --parallel
+
+      - name: Run full test suite (TLS on)
+        run: cd build-tls && ctest --output-on-failure --timeout 300 --no-tests=error
+
+      - name: Configure (ASan + UBSan)
+        run: |
+          mkdir -p build-tls-san && cd build-tls-san
+          cmake .. \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DWEBLIB_ENABLE_TLS=ON \
+            -DWEBLIB_TLS_TEST_HOOKS=ON \
+            -DCMAKE_C_FLAGS="-Wall -Wextra -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -g"
+
+      - name: Build (ASan + UBSan)
+        run: cmake --build build-tls-san --parallel
+
+      # Only the TLS suites: the sanitizer signal we care about here is in the
+      # crypto/parser/state-machine code.  halt_on_error makes UB fatal instead
+      # of merely logged, so a regression fails the job.  --no-tests=error is
+      # essential with -R: ctest exits 0 when a filter matches nothing, so a
+      # rename or a dropped add_test() would silently stop running the suites
+      # while the job stayed green — the exact failure this whole job removes.
+      - name: Run TLS suites under ASan/UBSan
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: cd build-tls-san && ctest --output-on-failure --timeout 300 --no-tests=error -R '^Tls'
+
   # macOS cross-platform check — runs only on pull requests to avoid
   # burning expensive macOS minutes on every push to main.
   macos-check:
