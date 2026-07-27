@@ -28,6 +28,12 @@
 #define TLS_HS_CERTIFICATE_VERIFY   15
 #define TLS_HS_FINISHED             20
 
+/* The single ALPN protocol id this server implements (RFC 7301). Defined once so
+ * the parser (which detects it being offered), the EncryptedExtensions builder
+ * (which echoes it) and the handshake's selection logic can never drift apart. */
+#define TLS_ALPN_HTTP11     "http/1.1"
+#define TLS_ALPN_HTTP11_LEN (sizeof(TLS_ALPN_HTTP11) - 1)   /* 8, without the NUL */
+
 /*
  * The parsed subset of a ClientHello. The pointer fields borrow into the caller's
  * message buffer and are valid only as long as it lives; they are NULL / 0 when
@@ -44,6 +50,8 @@ typedef struct {
     const uint8_t *x25519_key_share;   /* client's 32-byte X25519 public key, or NULL */
     const uint8_t *server_name;        /* SNI host_name (not NUL-terminated), or NULL */
     size_t server_name_len;
+    int alpn_present;                  /* an ALPN extension (RFC 7301) was offered */
+    int alpn_http11;                   /* the ALPN list includes "http/1.1" */
 } tls_client_hello_t;
 
 /*
@@ -80,8 +88,10 @@ int tls_build_server_hello(tls_writer_t *w, const uint8_t random[32],
 int tls_build_hello_retry_request(tls_writer_t *w,
                                   const uint8_t *session_id, size_t session_id_len);
 
-/* EncryptedExtensions (RFC 8446 §4.3.1): an empty extensions block. */
-int tls_build_encrypted_extensions(tls_writer_t *w);
+/* EncryptedExtensions (RFC 8446 §4.3.1). If `alpn` is non-NULL it carries a single
+ * application_layer_protocol_negotiation (RFC 7301) selecting the `alpn_len`-byte
+ * protocol name (1..255); otherwise the extensions block is empty. */
+int tls_build_encrypted_extensions(tls_writer_t *w, const uint8_t *alpn, size_t alpn_len);
 
 /* Certificate (RFC 8446 §4.4.2): empty certificate_request_context and a single
  * CertificateEntry carrying `cert_der` (with no per-certificate extensions). */

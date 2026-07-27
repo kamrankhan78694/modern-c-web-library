@@ -77,6 +77,29 @@ void tls_server_hs_init(tls_server_hs_t *hs) {
 }
 
 /*
+ * ALPN selection (RFC 7301). We offer only HTTP/1.1 (TLS_ALPN_HTTP11, the same id
+ * the parser matches and the EncryptedExtensions builder echoes). Returns 1 with
+ * *proto set to the chosen protocol name (or NULL/0 when the client offered no ALPN
+ * at all), or 0 when the client offered ALPN but nothing we support — the caller
+ * must then abort with no_application_protocol rather than silently proceeding with
+ * a protocol the peer didn't agree to.
+ */
+static int select_alpn(const tls_client_hello_t *ch,
+                       const uint8_t **proto, size_t *proto_len) {
+    if (!ch->alpn_present) {
+        *proto = NULL;
+        *proto_len = 0;
+        return 1;
+    }
+    if (ch->alpn_http11) {
+        *proto = (const uint8_t *)TLS_ALPN_HTTP11;
+        *proto_len = TLS_ALPN_HTTP11_LEN;
+        return 1;
+    }
+    return 0;
+}
+
+/*
  * Shared tail of both ClientHello paths. On entry `transcript` already contains
  * the ClientHello(s) (a single CH1, or the synthetic message_hash + HRR + CH2). We
  * perform the X25519 agreement with the chosen client share, write the ServerHello
@@ -91,6 +114,7 @@ static int emit_server_flight(tls_server_hs_t *hs, const tls_server_config_t *cf
                               tls_transcript_t *transcript,
                               const uint8_t client_share[32],
                               const uint8_t *session_id, size_t session_id_len,
+                              const uint8_t *alpn, size_t alpn_len,
                               uint8_t *out, size_t out_cap, size_t *out_len,
                               uint8_t *alert) {
     uint8_t ecdhe[32];
@@ -173,7 +197,7 @@ static int emit_server_flight(tls_server_hs_t *hs, const tls_server_config_t *cf
      * with its own writer at a running offset so its exact bytes are known. */
     /* EncryptedExtensions */
     tls_writer_init(&w, flight, sizeof flight);
-    if (!tls_build_encrypted_extensions(&w) || !tls_writer_finish(&w, &mlen)) {
+    if (!tls_build_encrypted_extensions(&w, alpn, alpn_len) || !tls_writer_finish(&w, &mlen)) {
         goto done;
     }
     tls_transcript_update(transcript, flight, mlen);
@@ -340,6 +364,8 @@ static int handle_client_hello_1(tls_server_hs_t *hs, const tls_server_config_t 
                                  uint8_t *out, size_t out_cap, size_t *out_len) {
     tls_client_hello_t ch;
     tls_transcript_t transcript;
+    const uint8_t *alpn = NULL;
+    size_t alpn_len = 0;
     uint8_t alert = TLS_ALERT_INTERNAL_ERROR;
 
     if (!tls_parse_client_hello(ch_msg, ch_len, &ch)) {
@@ -352,12 +378,16 @@ static int handle_client_hello_1(tls_server_hs_t *hs, const tls_server_config_t 
         /* X25519 offered but no share supplied -> HelloRetryRequest. */
         return send_hello_retry_request(hs, &ch, ch_msg, ch_len, out, out_cap, out_len);
     }
+    /* Negotiate ALPN before committing to the flight. */
+    if (!select_alpn(&ch, &alpn, &alpn_len)) {
+        return fail(hs, TLS_ALERT_NO_APPLICATION_PROTOCOL);
+    }
     /* Normal 1-RTT: transcript = {ClientHello}, then the server flight. */
     tls_transcript_init(&transcript);
     tls_transcript_update(&transcript, ch_msg, ch_len);
     if (!emit_server_flight(hs, cfg, &transcript, ch.x25519_key_share,
-                            ch.session_id, ch.session_id_len, out, out_cap, out_len,
-                            &alert)) {
+                            ch.session_id, ch.session_id_len, alpn, alpn_len,
+                            out, out_cap, out_len, &alert)) {
         return fail(hs, alert);
     }
     return 1;
@@ -370,6 +400,8 @@ static int handle_client_hello_2(tls_server_hs_t *hs, const tls_server_config_t 
                                  const uint8_t *ch_msg, size_t ch_len,
                                  uint8_t *out, size_t out_cap, size_t *out_len) {
     tls_client_hello_t ch;
+    const uint8_t *alpn = NULL;
+    size_t alpn_len = 0;
     uint8_t alert = TLS_ALERT_INTERNAL_ERROR;
 
     if (!tls_parse_client_hello(ch_msg, ch_len, &ch)) {
@@ -395,12 +427,15 @@ static int handle_client_hello_2(tls_server_hs_t *hs, const tls_server_config_t 
         return fail(hs, TLS_ALERT_ILLEGAL_PARAMETER);
     }
 
+    if (!select_alpn(&ch, &alpn, &alpn_len)) {
+        return fail(hs, TLS_ALERT_NO_APPLICATION_PROTOCOL);
+    }
     /* Continue the transcript with CH2 (message_hash(CH1) + HRR already absorbed),
      * then complete the flight. */
     tls_transcript_update(&hs->transcript, ch_msg, ch_len);
     if (!emit_server_flight(hs, cfg, &hs->transcript, ch.x25519_key_share,
-                            ch.session_id, ch.session_id_len, out, out_cap, out_len,
-                            &alert)) {
+                            ch.session_id, ch.session_id_len, alpn, alpn_len,
+                            out, out_cap, out_len, &alert)) {
         return fail(hs, alert);
     }
     /* The HRR round-trip scratch is no longer needed. */

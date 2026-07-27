@@ -634,10 +634,33 @@ static void test_hs_build(void) {
                && out_len == sizeof expect_sh && memcmp(buf, expect_sh, out_len) == 0);
 
     tls_writer_init(&w, buf, sizeof buf);
-    check_true("hs build: EncryptedExtensions wire",
-               tls_build_encrypted_extensions(&w) == 1
+    check_true("hs build: EncryptedExtensions wire (empty, no ALPN)",
+               tls_build_encrypted_extensions(&w, NULL, 0) == 1
                && tls_writer_finish(&w, &out_len) == 1
                && out_len == sizeof expect_ee && memcmp(buf, expect_ee, out_len) == 0);
+    /* With ALPN "http/1.1": EE carries one ALPN extension (RFC 7301). Wire, with
+     * every nested length spelled out:
+     *   08            EncryptedExtensions
+     *   00 00 11      body length = 17
+     *   00 0f         extensions vector = 15
+     *   00 10         ext_type = ALPN
+     *   00 0b         extension_data = 11
+     *   00 09         ProtocolNameList = 9
+     *   08            ProtocolName length = 8
+     *   "http/1.1"    the protocol name */
+    {
+        static const uint8_t h11[8] = { 'h','t','t','p','/','1','.','1' };
+        static const uint8_t expect_ee_alpn[] = {
+            0x08, 0x00, 0x00, 0x11, 0x00, 0x0f, 0x00, 0x10, 0x00, 0x0b, 0x00, 0x09,
+            0x08, 0x68, 0x74, 0x74, 0x70, 0x2f, 0x31, 0x2e, 0x31,
+        };
+        tls_writer_init(&w, buf, sizeof buf);
+        check_true("hs build: EncryptedExtensions wire (ALPN http/1.1)",
+                   tls_build_encrypted_extensions(&w, h11, sizeof h11) == 1
+                   && tls_writer_finish(&w, &out_len) == 1
+                   && out_len == sizeof expect_ee_alpn
+                   && memcmp(buf, expect_ee_alpn, out_len) == 0);
+    }
 
     tls_writer_init(&w, buf, sizeof buf);
     check_true("hs build: Certificate wire",
@@ -855,6 +878,68 @@ static const uint8_t KAT_HRR_CLIENT_AP_KEY[32] = {
 };
 static const uint8_t KAT_HRR_CLIENT_AP_IV[12] = {
     0x29, 0x78, 0x47, 0x1c, 0x5e, 0x51, 0x8d, 0x97, 0xde, 0x56, 0x82, 0x66,
+};
+
+/* ===== ALPN flow, from the independent alpn_oracle.py =====
+ * KAT_CH_ALPN is a ClientHello that additionally offers ALPN ["http/1.1"]. The
+ * server must echo it in EncryptedExtensions (KAT_EE_ALPN), which changes the
+ * transcript, so the keys below differ from the no-ALPN base handshake. */
+static const uint8_t KAT_CH_ALPN[159] = {
+    0x01, 0x00, 0x00, 0x9b, 0x03, 0x03, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0x20, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+    0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x00,
+    0x02, 0x13, 0x03, 0x01, 0x00, 0x00, 0x50, 0x00, 0x2b, 0x00, 0x03, 0x02,
+    0x03, 0x04, 0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d, 0x00, 0x0d,
+    0x00, 0x04, 0x00, 0x02, 0x08, 0x07, 0x00, 0x10, 0x00, 0x0b, 0x00, 0x09,
+    0x08, 0x68, 0x74, 0x74, 0x70, 0x2f, 0x31, 0x2e, 0x31, 0x00, 0x33, 0x00,
+    0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20, 0x79, 0xa6, 0x31, 0xee, 0xde,
+    0x1b, 0xf9, 0xc9, 0x8f, 0x12, 0x03, 0x2c, 0xde, 0xad, 0xd0, 0xe7, 0xa0,
+    0x79, 0x39, 0x8f, 0xc7, 0x86, 0xb8, 0x8c, 0xc8, 0x46, 0xec, 0x89, 0xaf,
+    0x85, 0xa5, 0x1a,
+};
+static const uint8_t KAT_EE_ALPN[21] = {
+    0x08, 0x00, 0x00, 0x11, 0x00, 0x0f, 0x00, 0x10, 0x00, 0x0b, 0x00, 0x09,
+    0x08, 0x68, 0x74, 0x74, 0x70, 0x2f, 0x31, 0x2e, 0x31,
+};
+static const uint8_t KAT_ALPN_SERVER_HS_KEY[32] = {
+    0x1b, 0xf4, 0xe2, 0x8d, 0xa9, 0x1b, 0x70, 0xfc, 0xf6, 0xe8, 0x8d, 0xae,
+    0x42, 0x28, 0xd5, 0x9c, 0x45, 0xdd, 0x53, 0xbe, 0x19, 0xa7, 0x99, 0x5a,
+    0x4d, 0xcc, 0x92, 0xd4, 0xc5, 0xa9, 0x2b, 0x1a,
+};
+static const uint8_t KAT_ALPN_SERVER_HS_IV[12] = {
+    0xb4, 0x83, 0x2c, 0x15, 0x83, 0x14, 0x27, 0x4c, 0x46, 0xa8, 0x0b, 0x74,
+};
+static const uint8_t KAT_ALPN_CLIENT_HS_KEY[32] = {
+    0x87, 0x9e, 0x5d, 0x5d, 0x0c, 0x20, 0x03, 0xa2, 0x6b, 0x78, 0xb2, 0x32,
+    0x85, 0xdb, 0x0d, 0xff, 0x7c, 0xb9, 0x03, 0xed, 0x63, 0x01, 0x85, 0x49,
+    0x42, 0x39, 0xec, 0xc4, 0x96, 0x7d, 0x30, 0xc3,
+};
+static const uint8_t KAT_ALPN_CLIENT_HS_IV[12] = {
+    0x8d, 0x58, 0xeb, 0xa8, 0xf9, 0xb5, 0xb6, 0xa3, 0x93, 0x4a, 0x3a, 0xcc,
+};
+static const uint8_t KAT_ALPN_CLIENT_FINISHED_VD[32] = {
+    0x87, 0x30, 0xc4, 0xcb, 0x1b, 0xb3, 0x1a, 0x7e, 0x3c, 0x9f, 0x04, 0x3c,
+    0x81, 0x2e, 0x14, 0xd8, 0x2a, 0x0b, 0x9b, 0x39, 0xd5, 0xb9, 0x2c, 0x7f,
+    0xdb, 0x43, 0x2f, 0x03, 0x84, 0x34, 0xce, 0x39,
+};
+static const uint8_t KAT_ALPN_SERVER_AP_KEY[32] = {
+    0xa5, 0x09, 0x77, 0xde, 0xac, 0xda, 0x87, 0x57, 0x86, 0x48, 0x29, 0x79,
+    0x48, 0xb2, 0x95, 0xe8, 0x0b, 0xe8, 0xec, 0xe7, 0x42, 0xe4, 0xe3, 0xfa,
+    0x7d, 0x3d, 0x97, 0x0e, 0x67, 0x27, 0x24, 0x6d,
+};
+static const uint8_t KAT_ALPN_SERVER_AP_IV[12] = {
+    0x9a, 0x72, 0x0b, 0xbf, 0xd5, 0xe7, 0xab, 0xc9, 0x31, 0xd5, 0xe4, 0x5d,
+};
+static const uint8_t KAT_ALPN_CLIENT_AP_KEY[32] = {
+    0x79, 0xc5, 0x0a, 0x47, 0xdb, 0xab, 0x32, 0xdb, 0x61, 0xa4, 0x4f, 0x4c,
+    0x77, 0xd3, 0x8b, 0xb1, 0xb0, 0x2f, 0x59, 0x66, 0x96, 0x8a, 0x9d, 0xd4,
+    0xfc, 0xe8, 0x29, 0x27, 0xf5, 0xc9, 0x28, 0x37,
+};
+static const uint8_t KAT_ALPN_CLIENT_AP_IV[12] = {
+    0xe1, 0x8f, 0x7d, 0x8c, 0x95, 0x0d, 0x9a, 0xdb, 0x1a, 0xac, 0x59, 0x19,
 };
 
 /* Find the first occurrence of `needle` in `hay` (portable; avoids memmem). */
@@ -1255,6 +1340,81 @@ static void test_tls_hrr(void) {
                && tls_server_hs_alert(&hs) == TLS_ALERT_UNEXPECTED_MESSAGE);
 }
 
+/* ALPN (RFC 7301), checked against alpn_oracle.py. A ClientHello offering
+ * ["http/1.1"] gets it echoed in EncryptedExtensions — which changes the transcript,
+ * so the keys differ from the base handshake and matching them proves the ALPN EE is
+ * bound correctly. A client offering ALPN with no acceptable protocol is aborted
+ * with no_application_protocol. (The no-ALPN case — empty EE — is covered by
+ * test_server_handshake, whose KATs are unchanged by this feature.) */
+static void test_tls_alpn(void) {
+    tls_server_hs_t hs;
+    tls_server_config_t cfg;
+    uint8_t out[2048];
+    size_t out_len = 0, sh_len, rec_off, flen = 0, rec_len = 0;
+    uint8_t flight[512], rec[128];
+    uint8_t ctype = 0;
+    uint8_t sk[32], siv[12], ck[32], civ[12];
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.cert_der = KAT_CERT;
+    cfg.cert_len = sizeof KAT_CERT;
+    cfg.ed25519_seed = KAT_ED_SEED;
+    cfg.ed25519_pub = KAT_ED_PUB;
+    cfg.server_eph_sk = KAT_SERVER_EPH;
+    cfg.server_random = KAT_SERVER_RND;
+
+    /* ===== Part A: ALPN negotiated (http/1.1) ===== */
+    tls_server_hs_init(&hs);
+    check_true("alpn: ClientHello offering http/1.1 accepted",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH_ALPN, sizeof KAT_CH_ALPN,
+                                               out, sizeof out, &out_len) == 1);
+    check_true("alpn: phase -> WAIT_FINISHED",
+               tls_server_hs_phase(&hs) == TLS_SERVER_HS_WAIT_FINISHED);
+    sh_len = ((size_t)out[3] << 8) | out[4];
+    rec_off = 5 + sh_len;
+    check_true("alpn: flight opens under the ALPN-oracle key schedule",
+               out[0] == 0x16 && rec_off < out_len && out[rec_off] == 0x17
+               && tls_record_open(KAT_ALPN_SERVER_HS_KEY, KAT_ALPN_SERVER_HS_IV, 0,
+                                  out + rec_off, out_len - rec_off, flight, sizeof flight,
+                                  &flen, &ctype) == 1
+               && ctype == TLS_CONTENT_HANDSHAKE);
+    check_true("alpn: EncryptedExtensions echoes ALPN http/1.1 (oracle byte match)",
+               flen >= sizeof KAT_EE_ALPN
+               && memcmp(flight, KAT_EE_ALPN, sizeof KAT_EE_ALPN) == 0);
+
+    seal_client_finished_with(KAT_ALPN_CLIENT_FINISHED_VD, KAT_ALPN_CLIENT_HS_KEY,
+                              KAT_ALPN_CLIENT_HS_IV, rec, sizeof rec, &rec_len);
+    check_true("alpn: client Finished verified -> DONE",
+               tls_server_hs_read_client_finished(&hs, rec, rec_len) == 1
+               && tls_server_hs_phase(&hs) == TLS_SERVER_HS_DONE);
+    check_true("alpn: app keys released after DONE",
+               tls_server_hs_app_keys(&hs, sk, siv, ck, civ) == 1);
+    check_true("alpn: server app key matches oracle", memcmp(sk, KAT_ALPN_SERVER_AP_KEY, 32) == 0);
+    check_true("alpn: server app iv matches oracle",  memcmp(siv, KAT_ALPN_SERVER_AP_IV, 12) == 0);
+    check_true("alpn: client app key matches oracle", memcmp(ck, KAT_ALPN_CLIENT_AP_KEY, 32) == 0);
+    check_true("alpn: client app iv matches oracle",  memcmp(civ, KAT_ALPN_CLIENT_AP_IV, 12) == 0);
+
+    /* ===== Part B: ALPN offered but no acceptable protocol -> no_application_protocol ===== */
+    {
+        uint8_t ch[sizeof KAT_CH_ALPN];
+        static const uint8_t h11[8] = { 'h','t','t','p','/','1','.','1' };
+        long off;
+        memcpy(ch, KAT_CH_ALPN, sizeof KAT_CH_ALPN);
+        off = find_bytes(ch, sizeof ch, h11, sizeof h11);
+        if (off < 0) {
+            check_true("alpn: (anchor) http/1.1 located in CH", 0);
+        } else {
+            ch[off] ^= 0x20;   /* 'h' -> 'H': same length, no longer the registered id */
+            tls_server_hs_init(&hs);
+            check_true("alpn: ALPN with no supported protocol -> no_application_protocol",
+                       tls_server_hs_read_client_hello(&hs, &cfg, ch, sizeof ch,
+                                                       out, sizeof out, &out_len) == 0
+                       && tls_server_hs_phase(&hs) == TLS_SERVER_HS_FAILED
+                       && tls_server_hs_alert(&hs) == TLS_ALERT_NO_APPLICATION_PROTOCOL);
+        }
+    }
+}
+
 static void test_tls_khannection(void) {
     static uint8_t out[40000];
     static uint8_t app[40000];
@@ -1559,6 +1719,7 @@ int main(void) {
     test_hs_build();
     test_server_handshake();
     test_tls_hrr();
+    test_tls_alpn();
     test_tls_khannection();
     test_tls_khannection_hrr();
 
