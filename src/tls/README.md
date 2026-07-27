@@ -95,28 +95,42 @@ correct `no_application_protocol` refusal.
 TLS is **off by default** and **native-only**.
 
 ```sh
-cmake -S . -B build-tls -DWEBLIB_ENABLE_TLS=ON
+cmake -S . -B build-tls -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON
 cmake --build build-tls
-ctest --test-dir build-tls
+(cd build-tls && ctest)   # 13 suites, of which 7 are TLS
 ```
+
+> `WEBLIB_TLS_TEST_HOOKS` exposes a deterministic-RNG seam used only by `TlsHttpTests`.
+> It is **TEST-ONLY** — never enable it in a production build. A deterministic RNG
+> removes every security property TLS has.
 
 - `WEBLIB_ENABLE_TLS=OFF` (the default): the build is byte-identical to a build
   with no TLS code — nothing in this directory is compiled.
 - `WEBLIB_ENABLE_TLS=ON` on a native target: defines `WEBLIB_TLS`, compiles
-  `src/tls/*.c`, and builds the guarded `TlsTests` suite.
+  `src/tls/*.c`, and builds six guarded suites — `TlsTests`, `TlsCryptoTests`,
+  `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests` and `TlsInteropOpenssl`.
+  The last is registered only when the `tls_server` example is built and CMake
+  finds `bash`, and even then it **self-skips and reports a pass** without a
+  TLS 1.3-capable `openssl s_client` — so confirm it actually ran.
+- Adding `-DWEBLIB_TLS_TEST_HOOKS=ON` additionally builds `TlsHttpTests`, the only
+  end-to-end `http_server_enable_tls()` test, for **7 TLS suites and 13 in total**.
+  Without that flag you get 6 TLS suites and 12 in total.
 - WASM / Emscripten builds ignore the option entirely (no sockets to wrap; the
   browser / Cloudflare edge terminates TLS).
 
 ## Roadmap (incremental, each step independently verifiable)
 
-- **Phase 0 (this scaffold):** build option + `-DWEBLIB_TLS` wiring + a linkable
+- **Phase 0 (landed):** build option + `-DWEBLIB_TLS` wiring + a linkable
   smoke symbol (`tls_build_info`). Default build proven unchanged.
-- **Phase 0 (next):** shared crypto module — promote the existing static SHA-256 /
+- **Phase 0 (landed):** shared crypto module — promote the existing static SHA-256 /
   HMAC-SHA256 / base64 out of `middleware_auth.c` / `websocket.c`; transport
   choke-point (`conn_read` / `conn_write`) proving no behavior change.
 - **Phase 1:** primitives from scratch, each with an RFC known-answer test
-  (ChaCha20, Poly1305, ChaCha20-Poly1305, HKDF, SHA-384/512, X25519, Ed25519).
-- **Phase 2:** PEM + minimal ASN.1/DER + X.509 loading.
+  (ChaCha20, Poly1305, ChaCha20-Poly1305, HKDF, SHA-512, X25519, Ed25519).
+  *(Landed, except SHA-384, which was never built — SHA-512 shipped instead.)*
+- **Phase 2 (landed, narrowed):** PEM + minimal ASN.1/DER, used to parse the PKCS#8
+  Ed25519 private key. **No X.509 parsing shipped** — the server certificate is
+  base64-decoded from PEM to DER and sent opaquely.
 - **Phase 3 (landed):** TLS 1.3 key schedule, record layer, handshake messages
   (ClientHello parser + server builders + auth crypto), the server handshake
   state machine (`server_handshake.c`), the sans-IO connection engine

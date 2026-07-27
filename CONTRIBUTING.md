@@ -25,7 +25,7 @@ Before contributing, please understand that this project follows a **strict pure
 
 - **No External Dependencies**: This project does not use any third-party libraries or frameworks
 - **C Language Only**: All code must be written in standard ISO C (C99 or newer)
-- **No Foreign Languages**: Python scripts, JavaScript, or any other language integrations are prohibited
+- **No Foreign Languages in the Library**: the C library itself contains no Python or JavaScript components and links no non-C code. Helper scripts for build, packaging, and test harnesses are allowed, but they are never compiled into or shipped with the library (see [Language Requirements](#language-requirements))
 - **Self-Sufficient Implementation**: We implement all functionality from scratch in C
 
 **Dependency Proposals**: Suggestions to add external libraries, frameworks, or non-C code will not be accepted. This is a fundamental design principle, not a limitation to be worked around. If you believe a dependency is necessary, first consider:
@@ -96,6 +96,40 @@ make
 make test
 ```
 
+That default configure leaves the TLS layer **off**, and runs 6 test suites: `WebLibTests`,
+`KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`.
+
+#### Building the experimental TLS 1.3 layer
+
+The hand-written pure-C TLS 1.3 server under `src/tls/` is native-only and **OFF by default** —
+with `WEBLIB_ENABLE_TLS` off, none of `src/tls/` is compiled. Turn it on if you are changing
+anything under `src/tls/`, `examples/tls_server.c`, or the `http_server_enable_tls()` path:
+
+```bash
+cmake -S . -B build-tls -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON
+cmake --build build-tls --parallel
+cd build-tls && ctest --output-on-failure
+```
+
+Use a separate build directory so your default (TLS-off) `build/` stays intact — you will want
+both. (`-S`/`-B` and `--parallel` need CMake 3.13+; on an older CMake use the equivalent
+`mkdir build-tls && cd build-tls && cmake .. <options>` form.)
+
+This turns the 6 default suites into 13 by adding `TlsTests`, `TlsCryptoTests`, `TlsParseTests`,
+`TlsTransportTests`, `TlsFuzzTests`, `TlsHttpTests`, and `TlsInteropOpenssl`. Both options are
+required for all 13: `TlsHttpTests` is built only when `WEBLIB_TLS_TEST_HOOKS` is on. Count the
+suites rather than trusting a green run — two of them can go missing quietly. `TlsInteropOpenssl`
+is registered only if CMake finds a `bash` on `PATH`, and even when registered it self-skips
+(reporting a pass) if there is no TLS 1.3-capable `openssl s_client`, so confirm it actually ran.
+
+`WEBLIB_TLS_TEST_HOOKS` exposes a deterministic-RNG seam used only by `TlsHttpTests`. **Never
+enable it in a production build** — a deterministic RNG removes all TLS security.
+
+Read [`src/tls/README.md`](src/tls/README.md) before touching this code. The layer is
+**EXPERIMENTAL and UNAUDITED** and is not for production use without an external cryptographic
+audit. Reports against it are explicitly in scope — see [SECURITY.md](SECURITY.md).
+
 ### Running Examples
 
 ```bash
@@ -104,6 +138,10 @@ make test
 
 # Or the async server
 ./examples/async_server
+
+# HTTPS example — built only when configured with -DWEBLIB_ENABLE_TLS=ON
+# Arguments: <cert.pem> <key.pem> <port>  (defaults: cert.pem key.pem 8443)
+./examples/tls_server cert.pem key.pem 8443
 ```
 
 ### Using Docker for Development (Optional)
@@ -138,7 +176,7 @@ make
 make test
 ```
 
-Docker automatically mounts your source code, so you can edit files locally and rebuild inside the container. See the [Docker Development Environment](#docker-development-environment) section in README.md for more details.
+Docker automatically mounts your source code, so you can edit files locally and rebuild inside the container. See the [Docker Development Environment](README.md#docker-development-environment) section in README.md for more details.
 
 ## Coding Standards
 
@@ -147,7 +185,7 @@ Docker automatically mounts your source code, so you can edit files locally and 
 This project is committed to being a **pure C implementation** with zero external dependencies:
 
 - **Pure ISO C**: Use only C99 or newer standard C features
-- **No External Libraries**: Do not suggest or use third-party libraries (e.g., no OpenSSL, no libcurl, no external JSON libraries)
+- **No External Libraries**: Do not suggest or use third-party libraries (e.g., no OpenSSL, no libcurl, no external JSON libraries). This is about what the library *links*: the `TlsInteropOpenssl` test drives the `openssl` command-line tool as an independent interop oracle, but nothing in the build links against OpenSSL and the test skips when it is absent
 - **Platform APIs Only**: System calls and platform-specific APIs (POSIX, Windows API) are acceptable where necessary for functionality
 - **Self-Contained**: Implement all features within the project using C
 - **Educational Code**: Write clear, understandable C that serves as a learning resource
@@ -167,7 +205,7 @@ This project is committed to being a **pure C implementation** with zero externa
 ### Language Requirements
 
 - **C Only**: All source files must be `.c` and `.h` files written in C
-- **No Scripts**: Do not add Python, shell, JavaScript, or any other language scripts
+- **No Scripts in the Library**: `src/`, `include/`, and `examples/` are pure C. The one exception is `examples/worker.js`, the Cloudflare Worker glue that loads the WASM build. Helper scripts (shell or Python) are permitted **outside** the library for build, packaging, and test-harness plumbing only — for example `tests/interop_openssl.sh`, which drives a real `openssl s_client` handshake against the pure-C TLS server and is registered as the `TlsInteropOpenssl` ctest suite. Such a script must never become a runtime or link-time dependency of the library, and must skip cleanly when the external tool it needs is unavailable
 - **No Wrappers**: Do not create language bindings or wrappers for other languages
 - **No Code Generators**: Do not use tools that generate C code from other languages
 - **Build System**: CMake is acceptable as a build system (not considered a dependency)
@@ -204,7 +242,7 @@ int HTTPServerCreate(uint16_t Port){
 
 ### Code Quality
 
-- **No warnings**: Code must compile without warnings
+- **No warnings**: the build adds `-Wall -Wextra -pedantic` on GCC/Clang (`CMakeLists.txt`), and CI compiles with those flags under both GCC and Clang. A clean build means zero warnings, not "no errors" — warnings introduced by a PR are treated as review blockers
 - **Memory safety**: All allocated memory must be freed
 - **Error handling**: Check return values and handle errors properly
 - **Thread safety**: Document thread-safety guarantees
@@ -330,6 +368,44 @@ When your PR touches middleware configs or security-sensitive code, verify:
 - [ ] Sensitive data is wiped with `secure_zero()`, not `memset()`
 - [ ] No dangling pointers to caller-owned or stack-allocated strings
 
+#### 6. Additional Requirements for `src/tls/` Changes
+
+`src/tls/` is a hand-written, **experimental and unaudited** TLS 1.3 server (see
+[`src/tls/README.md`](src/tls/README.md)). It is gated behind `WEBLIB_ENABLE_TLS`, which defaults
+to **OFF** — a plain `cmake ..` compiles none of it, so the default build and test run described
+above will not exercise a single line you changed. The extra flags below are not optional polish:
+without them you have not tested your patch.
+
+- [ ] Built and tested with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` and all 13 ctest
+      suites pass. Both flags are needed: `WEBLIB_ENABLE_TLS` alone omits `TlsHttpTests`.
+- [ ] Confirmed `TlsInteropOpenssl` actually ran. It self-skips without a TLS 1.3-capable
+      `openssl s_client`, and a skip reads as a pass.
+- [ ] Ran the 7 TLS suites under ASan + UBSan and they are green (see the command below). This
+      is a CI gate (`tls-check` in `.github/workflows/ci.yml`), not a suggestion.
+- [ ] Any new or changed cryptographic primitive has a known-answer test against the RFC vectors
+      in `tests/test_tls_crypto.c` — not just a round-trip test.
+- [ ] Comparisons of secrets, MACs, or verify_data are constant-time (`secure_compare()`); no
+      secret-dependent branching, indexing, or early return.
+- [ ] Every new error path in the handshake fails closed: latch a terminal state, wipe secrets,
+      and never continue into a state that assumes authentication succeeded.
+- [ ] Secrets and key material are wiped with `secure_zero()` on every exit path, including
+      error paths.
+
+The sanitizer run CI performs, reproduced locally:
+
+```bash
+cmake -S . -B build-tls-san -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Debug \
+      -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON \
+      -DCMAKE_C_FLAGS="-Wall -Wextra -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -g"
+cmake --build build-tls-san --parallel
+cd build-tls-san && ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+  ctest --output-on-failure --timeout 300 --no-tests=error -R '^Tls'
+```
+
+Note `ASAN_OPTIONS=detect_leaks=0`: a green run shows memory safety and absence of undefined
+behavior, **not** absence of leaks — check allocation ownership by hand. `--no-tests=error`
+matters with `-R`, because plain `ctest -R` exits 0 when the filter matches nothing.
+
 ## Versioning Policy
 
 This project follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
@@ -345,19 +421,21 @@ Given a version number **MAJOR.MINOR.PATCH**:
 
 ### Where Version Is Defined
 
-The version is declared in **two places** that must stay in sync:
+The version is declared in **three places** that must stay in sync (plus `publish-package.sh`, whose CLI default should be bumped alongside them):
 
 | Location | What to update |
 |----------|---------------|
 | `CMakeLists.txt` | `project(ModernCWebLibrary VERSION X.Y.Z ...)` |
 | `include/kamran.k` | `WEBLIB_VERSION_MAJOR`, `WEBLIB_VERSION_MINOR`, `WEBLIB_VERSION_PATCH`, and `WEBLIB_VERSION` |
+| `Dockerfile.release` | the two `LABEL org.opencontainers.image.version="X.Y.Z"` lines |
 
-A compile-time static assertion in `src/http_server.c` will **fail the build** if the two
-sources disagree, so a mismatch is caught immediately.
+A compile-time static assertion in `src/http_server.c` will **fail the build** if the first two
+sources disagree, so that mismatch is caught immediately. The `Dockerfile.release` labels are
+**not** covered by that assertion — update them by hand.
 
 ### When Bumping the Version
 
-1. Update both `CMakeLists.txt` and `include/kamran.k` in the same commit
+1. Update `CMakeLists.txt`, `include/kamran.k`, and `Dockerfile.release` in the same commit
 2. Add a new section to `CHANGELOG.md` following Keep a Changelog format
 3. Tag the release commit with `vMAJOR.MINOR.PATCH` (e.g., `v1.1.0`)
 
@@ -369,7 +447,9 @@ not used but are reserved for future use.
 
 ## Branching Strategy
 
-- **main**: Stable production-ready code
+- **main**: Stable, released code. The one carve-out is the experimental TLS layer in `src/tls/`,
+  which lives on `main` but is off by default and unaudited — being merged here does not make it
+  production-ready (see [SECURITY.md](SECURITY.md))
 - **develop**: Integration branch for features (if used)
 - **feature/**: Feature branches (e.g., `feature/websocket-support`)
 - **bugfix/**: Bug fix branches (e.g., `bugfix/memory-leak-fix`)
@@ -414,6 +494,9 @@ docs/update-api-documentation
    cd build
    make test
    ```
+   If your change touches `src/tls/` or `http_server_enable_tls()`, that run proves nothing —
+   see [Testing the experimental TLS layer](#testing-the-experimental-tls-layer) for the
+   configuration you also have to run.
 
 7. **Push to your fork**:
    ```bash
@@ -430,8 +513,8 @@ docs/update-api-documentation
 ### Pull Request Checklist
 
 - [ ] Code follows project style guidelines
-- [ ] Code compiles without warnings
-- [ ] Tests pass locally
+- [ ] Code compiles without warnings (`-Wall -Wextra -pedantic`)
+- [ ] Tests pass locally — and if the change touches `src/tls/`, in the TLS-on configuration too
 - [ ] New tests added for new features
 - [ ] Documentation updated
 - [ ] Commit messages are clear and descriptive
@@ -499,6 +582,44 @@ make test
 ctest --verbose
 ```
 
+In a default configure this is 6 suites, and it compiles **none** of `src/tls/`.
+
+### Testing the experimental TLS layer
+
+If you change anything under `src/tls/`, `examples/tls_server.c`, or the
+`http_server_enable_tls()` path, you must also run the TLS-on configuration — otherwise a green
+local run has tested nothing you wrote:
+
+```bash
+cmake -S . -B build-tls -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON
+cmake --build build-tls --parallel
+cd build-tls && ctest --output-on-failure          # 13 suites: the 6 above + 7 TLS suites
+
+# Just the TLS suites. Use --no-tests=error (CTest 3.20+): with -R alone,
+# ctest exits 0 if the filter matches nothing.
+ctest --output-on-failure --no-tests=error -R '^Tls'
+```
+
+`WEBLIB_TLS_TEST_HOOKS` is **test-only** — it exposes a deterministic-RNG seam that `TlsHttpTests`
+needs. Never enable it in a production or library build. The TLS layer itself is **experimental
+and unaudited**; see [`src/tls/README.md`](src/tls/README.md).
+
+### The two-configuration CI gate
+
+CI (`.github/workflows/ci.yml`) runs both configurations, and a PR has to be green in both:
+
+| Job | What it runs |
+|-----|--------------|
+| `primary-checks` | GCC build in Docker, the full default (TLS-off) suite, plus a Valgrind memory check |
+| `clang-check` | Same default configuration built with Clang |
+| `tls-check` | A `RelWithDebInfo` TLS build running all 13 suites, then a Clang ASan/UBSan build running the 7 TLS suites |
+| `macos-check` | macOS compatibility build and tests (pull requests only) |
+| `docker-image-check` | Builds and verifies the production Docker image |
+
+The practical consequence: TLS-off and TLS-on are two different compilations of this repository,
+and a change can break one while leaving the other green. Build both locally before you push.
+
 ## Documentation
 
 ### Code Documentation
@@ -535,7 +656,7 @@ When adding new features, update:
 
 - **Questions**: Open a GitHub issue with the `question` label
 - **Discussions**: Use GitHub Discussions for general topics
-- **Security Issues**: Contact the maintainer directly via GitHub ([@kamrankhan78694](https://github.com/kamrankhan78694))
+- **Security Issues**: Do not open a public issue. Report privately via a [GitHub security advisory](https://github.com/kamrankhan78694/modern-c-web-library/security/advisories/new), or the "Report a vulnerability" button in the repository Security tab. See [SECURITY.md](SECURITY.md) for scope, timelines, and safe harbor
 
 ## Why Pure C?
 

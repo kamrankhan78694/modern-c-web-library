@@ -59,8 +59,15 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-[kamrankhan78694@users.noreply.github.com].
+reported to the community leaders responsible for enforcement by opening a
+private report through the repository's Security tab:
+https://github.com/kamrankhan78694/modern-c-web-library/security/advisories/new
+
+That form is normally used for security vulnerabilities; until a dedicated
+conduct mailbox is published, it is also the private channel for Code of Conduct
+reports, because it is the only inbound channel on this repository that is
+genuinely private. Please do not open a public issue for a conduct report.
+
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the

@@ -2,9 +2,10 @@
  * worker_kv.c - Cloudflare Workers KV Namespace Bindings
  *
  * Provides a pure-C abstraction over Cloudflare Workers KV storage.
- * In a WASM/Worker deployment, the JS glue layer bridges these calls
- * to the actual KV namespace binding (env.MY_KV).  For native/test
- * builds an in-memory hash map simulates the KV store.
+ * NOTE: an in-memory hash map IS the implementation, in every build --
+ * native, test and WASM/Workers alike.  Reaching a real env.MY_KV binding
+ * would require a JS glue layer, and none ships in this repo, so the fixed
+ * capacity below is a real limit everywhere, not a local-testing artefact.
  *
  * KV API surface (mirrors Cloudflare KV Workers binding):
  *   - get(key)              → value (string)

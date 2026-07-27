@@ -58,6 +58,7 @@ dkms.conf
 build/
 build-asan/
 build-tls/
+build-tls-san/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
@@ -90,3 +91,9 @@ _codeql_detected_source_root
 *.wast
 *.wat
 build-wasm/
+
+# Internal working audits.  These hold verbatim vulnerability write-ups for issues
+# that may not be fixed yet, so publishing them would disclose live weaknesses
+# before a fix exists.  Keep them local; land the *fixes* and the CHANGELOG entry
+# in the repo instead.
+docs/audit/

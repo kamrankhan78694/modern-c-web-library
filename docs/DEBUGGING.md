@@ -5,7 +5,7 @@ This guide explains how to debug the Modern C Web Library using VS Code, command
 ## Prerequisites
 
 ### macOS/Linux
-- **CMake** (3.10+): `brew install cmake` (macOS) or `apt-get install cmake` (Linux)
+- **CMake**: `brew install cmake` (macOS) or `apt-get install cmake` (Linux). The project itself builds with CMake 3.10+, but the `cmake -S . -B <dir>` form used throughout this guide needs 3.13+, and `ctest --no-tests=error` (in the TLS section) needs 3.20+. On an older CMake, use `mkdir build && cd build && cmake ..` instead, and drop `--no-tests=error`.
 - **LLDB** (included with Xcode on macOS) or **GDB** on Linux
 - **VS Code** with recommended extensions:
   - C/C++ (`ms-vscode.cpptools`)
@@ -30,6 +30,9 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug -j
 ```
 
+This is a default build, which does **not** compile `src/tls/`. If you need to step
+through the TLS layer, see [Debugging the experimental TLS layer](#debugging-the-experimental-tls-layer).
+
 ### 2. Debug Tests
 1. Open the **Run and Debug** panel (Cmd+Shift+D / Ctrl+Shift+D)
 2. Select **"Debug Tests (LLDB)"** from the dropdown
@@ -39,7 +42,7 @@ cmake --build build --config Debug -j
 The debugger will:
 - Build the tests automatically (via `preLaunchTask`)
 - Run `./build/tests/test_weblib` under LLDB
-- Enable AddressSanitizer leak detection (`ASAN_OPTIONS=detect_leaks=1`)
+- Set `ASAN_OPTIONS=detect_leaks=1`, which takes effect **only if** you configured the build with `-DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer"` (see [AddressSanitizer](#addresssanitizer-all-platforms) below). The default `cmake-build-debug` task does not enable ASan, so on its own this variable does nothing.
 
 ### 3. Debug the Server
 1. Select **"Debug Simple Server (LLDB)"** from the Run and Debug dropdown
@@ -60,26 +63,56 @@ The debugger will:
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 
-# Debug tests
+# Debug tests -- break on a test case, or on the code under test
 lldb ./build/tests/test_weblib
-(lldb) breakpoint set --name test_router_params_single
+(lldb) breakpoint set --name test_router_add_route   # the test case
+(lldb) breakpoint set --name router_route            # the function it exercises
 (lldb) run
 
 # Debug server
 lldb ./build/examples/simple_server
-(lldb) breakpoint set --file router.c --line 120
+(lldb) breakpoint set --name router_route
 (lldb) run 8080
 ```
 
 ### Using GDB (Linux)
 ```bash
 gdb ./build/tests/test_weblib
-(gdb) break test_router_params_single
+(gdb) break test_router_add_route
 (gdb) run
 
 # Or attach to running server
 gdb -p $(pgrep simple_server)
 ```
+
+## Running the Test Suite
+
+`./build/tests/test_weblib` is one suite out of several, not "the tests". Running only
+that binary silently skips the header-alias, async-WebSocket, stress/timeout, worker
+and WASM suites. Use `ctest`, which is what CI does:
+
+```bash
+# Run every registered suite
+cd build && ctest --output-on-failure --timeout 120
+
+# Run one suite by name
+ctest -R WebLibTests --output-on-failure
+
+# The individual binaries live in build/tests/ and can still be run
+# directly or under a debugger (see above)
+```
+
+A default build registers **6 suites**: `WebLibTests` (which by itself runs 166 unit
+tests), `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests` and
+`WasmTests`.
+
+Configuring with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` adds 7 more —
+`TlsTests`, `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`,
+`TlsHttpTests` and `TlsInteropOpenssl` — for **13 total**. (`TlsHttpTests` needs the
+test hooks; `TlsInteropOpenssl` is registered only when `bash` and the `tls_server`
+target are both available, and self-skips if `openssl` is missing or too old to speak
+TLS 1.3.) The TLS layer is EXPERIMENTAL and UNAUDITED and is off by default — see
+[`../src/tls/README.md`](../src/tls/README.md).
 
 ## Memory Debugging
 
@@ -96,15 +129,73 @@ valgrind --leak-check=full ./build/examples/simple_server 8080
 ```
 
 ### AddressSanitizer (All Platforms)
+
+ASan has to be configured into the build — a plain `-DCMAKE_BUILD_TYPE=Debug` build links
+no sanitizer. Use a separate build directory so you keep an uninstrumented `build/` around:
+
 ```bash
 # Configure with ASan
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
-cmake --build build -j
+cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g"
+cmake --build build-asan -j
 
-# Run tests (ASan will report leaks/overflows automatically)
-./build/tests/test_weblib
+# Run every suite under ASan (overflows and use-after-free are reported automatically)
+cd build-asan && ctest --output-on-failure --timeout 120
 ```
+
+## Debugging the experimental TLS layer
+
+`src/tls/` is **not compiled by default**. `WEBLIB_ENABLE_TLS` defaults to `OFF`
+(`CMakeLists.txt`), so in a default build none of the TLS sources exist and no
+breakpoint in them will ever bind — LLDB will just report a pending breakpoint with no
+locations. TLS is native-only; Emscripten/WASM builds ignore the option. The layer is
+EXPERIMENTAL and UNAUDITED — see [`../src/tls/README.md`](../src/tls/README.md).
+
+```bash
+# Debug build with TLS on
+cmake -S . -B build-tls -DCMAKE_BUILD_TYPE=Debug \
+  -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON
+cmake --build build-tls -j
+cd build-tls && ctest --output-on-failure --timeout 300
+
+# Breakpoints now bind in the TLS sources
+lldb ./tests/test_tls_transport
+(lldb) breakpoint set --name tls_server_hs_read_client_hello
+(lldb) breakpoint set --name tls_server_hs_read_client_finished
+(lldb) run
+```
+
+Useful entry points when you are chasing a handshake failure: `tls_server_hs_init`,
+`tls_server_hs_read_client_hello` and `tls_server_hs_read_client_finished`
+(`src/tls/server_handshake.c`). Every handshake error latches a terminal state and wipes
+secrets, so break *before* the failing step — by the time the error surfaces the state is
+already gone.
+
+`WEBLIB_TLS_TEST_HOOKS` (default `OFF`) compiles a deterministic-RNG seam that replaces
+the system CSPRNG, so that `TlsHttpTests` can reproduce a handshake byte for byte. That
+is exactly as dangerous as it sounds — **never enable it in a production build.**
+
+### TLS under sanitizers (matching CI)
+
+CI's `tls-check` job (`.github/workflows/ci.yml`) is the only place TLS code is compiled,
+and it builds a second, sanitized configuration. Reproduce it locally:
+
+```bash
+cmake -S . -B build-tls-san -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Debug \
+  -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON \
+  -DCMAKE_C_FLAGS="-Wall -Wextra -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -g"
+cmake --build build-tls-san -j
+
+# Only the TLS suites: the signal worth chasing here is in the crypto,
+# parser and state-machine code. halt_on_error makes UB fatal rather than logged.
+cd build-tls-san && \
+  ASAN_OPTIONS=detect_leaks=0 \
+  UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+  ctest --output-on-failure --timeout 300 --no-tests=error -R '^Tls'
+```
+
+`--no-tests=error` matters with `-R`: without it `ctest` exits 0 when the filter matches
+nothing, so a renamed or dropped suite would look like a pass.
 
 ## Docker Debugging
 
@@ -133,9 +224,11 @@ gdb ./tests/test_weblib
 
 ### Debugging Route Parameter Extraction
 ```bash
-# Set breakpoints in router.c
+# Break on the extraction itself. Prefer symbol names over line numbers --
+# `extract_params` is static, but LLDB resolves it in a Debug build and the
+# breakpoint survives edits to router.c.
 lldb ./build/tests/test_weblib
-(lldb) breakpoint set --file router.c --line 213  # extract_params
+(lldb) breakpoint set --name extract_params
 (lldb) run
 ```
 
@@ -151,14 +244,21 @@ curl -X POST http://localhost:8080/api/data -d '{"key":"value"}'
 
 ### Debugging Memory Leaks
 ```bash
-# Build with debug symbols
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build -j
+# Leak/overflow detection needs an instrumented build -- a plain
+# -DCMAKE_BUILD_TYPE=Debug build links no sanitizer, so ASAN_OPTIONS is ignored.
+cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g"
+cmake --build build-asan -j
 
-# Run with leak detection
-ASAN_OPTIONS=detect_leaks=1 ./build/tests/test_weblib
+# Overflows and use-after-free are reported on all platforms:
+./build-asan/tests/test_weblib
 
-# Or use Valgrind on Linux
+# LeakSanitizer is Linux-only. On macOS `detect_leaks=1` aborts with
+# "detect_leaks is not supported on this platform" -- run leak checks on Linux,
+# or in the Docker dev container (./docker-run.sh dev):
+ASAN_OPTIONS=detect_leaks=1 ./build-asan/tests/test_weblib
+
+# Valgrind is also Linux-only (no support for modern/arm64 macOS):
 valgrind --leak-check=full ./build/tests/test_weblib
 ```
 

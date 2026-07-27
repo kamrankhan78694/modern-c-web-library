@@ -47,7 +47,7 @@ void handle_info(http_request_t *req, http_response_t *res) {
     
     json_value_t *json = json_object_create();
     json_object_set(json, "server", json_string_create("Modern C Web Library"));
-    json_object_set(json, "version", json_string_create("1.0.0"));
+    json_object_set(json, "version", json_string_create(WEBLIB_VERSION));
     json_object_set(json, "io_mode", json_string_create("async"));
     json_object_set(json, "event_loop", json_string_create("enabled"));
     

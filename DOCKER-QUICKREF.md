@@ -24,19 +24,23 @@ chmod +x docker-run.sh docker-verify.sh
 # Start development container (opens shell)
 ./docker-run.sh dev
 
-# Inside container:
-cd build
+# Inside container (your checkout is mounted at /workspace, which hides the
+# build/ directory baked into the image — so create it yourself):
+mkdir -p build && cd build
+cmake ..
 make                    # Build
-make test              # Run tests
+make test               # Run tests (6 ctest suites)
 ./examples/async_server # Run server
 valgrind --leak-check=full ./tests/test_weblib  # Check memory
 ```
+
+If you have already built on your **host**, the mounted `build/` holds a host CMake cache that is invalid inside the container and `cmake ..` aborts with a `CMakeCache.txt` directory-mismatch error — run `rm -rf build` on the host first.
 
 ### Quick Commands
 
 | Command | Purpose |
 |---------|---------|
-| `./docker-run.sh test` | Run all tests |
+| `./docker-run.sh test` | Run the default test suite (6 ctest suites; no TLS) |
 | `./docker-run.sh dev` | Start dev shell |
 | `./docker-run.sh async` | Run async server |
 | `./docker-run.sh threaded 3000` | Run threaded server on port 3000 |
@@ -73,7 +77,8 @@ docker run -it -v $(pwd):/workspace -p 8080:8080 modern-c-weblib:dev
 # Run production server
 docker run -p 8080:8080 modern-c-weblib:latest
 
-# Run tests only
+# Run tests only (no mount, so `cd build` is the image's own build directory —
+# rebuild the image to pick up local edits)
 docker run --rm modern-c-weblib:dev /bin/bash -c "cd build && make test"
 ```
 
@@ -101,10 +106,23 @@ docker image prune          # Remove unused images
 ### Testing Checklist
 
 Before submitting a PR:
-- [ ] `./docker-run.sh test` - All tests pass
-- [ ] `./docker-run.sh dev` then `cd build && make 2>&1 | grep -i warning` - No warnings
-- [ ] `valgrind --leak-check=full ./tests/test_weblib` - No memory leaks
+- [ ] `./docker-run.sh test` - The 6 default ctest suites pass
+- [ ] `./docker-run.sh dev` then `mkdir -p build && cd build && cmake .. && make 2>&1 | grep -i warning` - No warnings
+- [ ] `valgrind --leak-check=full ./tests/test_weblib` - no *new* leaks vs `main` (the known `cache_get()` leaks in the cache tests are expected and pre-existing; see STRESS_TESTS.md)
+- [ ] If you touched `src/tls/`: build with TLS on and run all 13 suites (below)
 - [ ] Code follows style guide (see CONTRIBUTING.md)
+
+`./docker-run.sh test` configures with a bare `cmake ..`, so `WEBLIB_ENABLE_TLS` stays OFF and none of `src/tls/` is compiled or tested. To cover it, inside `./docker-run.sh dev`:
+
+```bash
+mkdir -p build-tls && cd build-tls
+cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON
+make -j"$(nproc)"
+ctest -N                            # must list 13 tests, not 6
+ctest --output-on-failure --no-tests=error
+```
+
+The TLS layer is **EXPERIMENTAL and UNAUDITED** — see `src/tls/README.md`. `WEBLIB_TLS_TEST_HOOKS` exposes a deterministic-RNG seam for `TlsHttpTests` and must never be on in a production build.
 
 ### Development Tips
 
@@ -116,27 +134,30 @@ Before submitting a PR:
 2. **Debugging**
    ```bash
    ./docker-run.sh dev
-   cd build
+   mkdir -p build && cd build && cmake .. && make
    gdb ./examples/async_server
    ```
 
 3. **Memory Leak Detection**
    ```bash
    ./docker-run.sh dev
-   cd build
+   mkdir -p build && cd build && cmake .. && make
    valgrind --leak-check=full --show-leak-kinds=all ./tests/test_weblib
    ```
 
 4. **Check Build Warnings**
    ```bash
-   docker run modern-c-weblib:dev /bin/bash -c "cd build && cmake .. && make 2>&1 | grep -i warning"
+   docker run --rm -v "$(pwd):/workspace" modern-c-weblib:dev /bin/bash -c \
+     'mkdir -p /workspace/build && cd /workspace/build && cmake .. && make 2>&1 | grep -i warning'
    ```
+   The mount is what makes this see your edits; without it you would be rebuilding the source snapshot baked into the image.
 
 ### File Structure
 
 ```
 modern-c-web-library/
 ├── Dockerfile              # Production image (multi-stage)
+├── Dockerfile.release      # Published ghcr.io image (non-root, healthcheck)
 ├── Dockerfile.dev          # Development image (full toolchain)
 ├── docker-compose.yml      # Service orchestration
 ├── docker-run.sh           # Helper script
@@ -144,6 +165,8 @@ modern-c-web-library/
 ├── .dockerignore          # Files to exclude from build
 └── DOCKER.md              # Complete Docker guide
 ```
+
+`Dockerfile` is what `docker-compose.yml` and `docker-run.sh` build. `Dockerfile.release` is what CI publishes to `ghcr.io` (`.github/workflows/docker-publish.yml`); unlike `Dockerfile` it also ships `websocket_echo_server`, runs as a non-root `weblib` user, and defines a `HEALTHCHECK`.
 
 ### Environment Details
 

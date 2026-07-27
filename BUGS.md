@@ -2,8 +2,20 @@
 
 **Modern C Web Library — Production Stress Test Findings**
 
-*Last Updated: 2026-03-03*
+*Last Updated: 2026-07-27*
 *Discovered during Phase 10 production-level stress testing and Phase 10.1 security code review*
+
+**Scope:** this file tracks the ten issues found by the Phase 10 stress-testing and security-review
+pass. Nine are fully resolved; BUG-4 (middleware singleton state) is only partially
+fixed — see the summary table below. Two things it deliberately does *not* cover:
+
+- **Later security-review findings.** The post-v1.0.0 audit stream (roughly PRs #74–#95 — request
+  smuggling, path aliasing, Host-header bypass, session use-after-free, the async idle reaper, and
+  others) is fixed in code and recorded in the commit history and PR discussions, not re-litigated
+  here. Read this file as a closed historical record, not as the complete list of everything ever
+  found.
+- **The experimental TLS layer** (`src/tls/`, off by default). Its known gaps live in
+  [`src/tls/README.md`](src/tls/README.md) — that code has not had an external audit.
 
 ---
 
@@ -14,7 +26,7 @@
 | 1 | **Critical** | HTTP Server | **Fixed** | No SIGPIPE handling — server process can crash on client disconnect |
 | 2 | **High** | Session Store | **Fixed** | Session store is not thread-safe — data races in multi-threaded mode |
 | 3 | **Medium** | Session / CSRF | **Fixed** | `rand()` fallback is not thread-safe and cryptographically weak |
-| 4 | **Low** | Middleware | **Fixed** | All middleware types use global singletons — only one instance per type |
+| 4 | **Low** | Middleware | **Partially fixed** | Global singletons — one instance per type. `user_data` plumbing landed; 4 of 9 modules read it (only 3 usable per-instance), 5 still ignore it |
 | 5 | **Low** | Event Loop | **Fixed** | Timer limit of 64 is hard-coded with no runtime feedback beyond -1 return |
 | 6 | **Info** | HTTP Server | **Fixed** | No HTTP keep-alive connection limit — could exhaust file descriptors |
 | 7 | **Medium** | env_config / security_utils | **Fixed** | Duplicate `_secure_wipe()` — private copy of public `secure_zero()` |
@@ -36,7 +48,7 @@
 **Description:**
 The HTTP server calls `send()` with flags=0 on all socket writes. On POSIX systems, writing to a socket whose peer has disconnected generates a `SIGPIPE` signal. The default action for `SIGPIPE` is to terminate the process. This means a single misbehaving client disconnecting at the wrong time can crash the entire server.
 
-**Affected Lines:**
+**Affected Lines (as of the original report — all three now pass `SEND_FLAGS`):**
 - `src/http_server.c:895` — `send(fd, buf + sent_total, len - sent_total, 0)`
 - `src/http_server.c:2017` — async mode header send
 - `src/http_server.c:2045` — async mode body send
@@ -90,7 +102,7 @@ Add a `pthread_mutex_t` to `session_store_t` and lock/unlock around all session 
 **Component:** `src/session.c`, `src/middleware_csrf.c`
 **Severity:** Medium — affects security in edge cases
 **Discovered:** Code analysis during stress testing
-**Fixed:** Replaced `srand()`/`rand()` with `rand_r()` using static per-function seed state for thread safety in both `generate_session_id()` and `_fill_random()` fallback paths.
+**Fixed:** Initially addressed in commit `9a89c30` by swapping `srand()`/`rand()` for `rand_r()` with per-function seed state. That intermediate fix has since been superseded by PR #76 (`6895aab`, "Harden CSPRNG and remove predictable-entropy fallbacks"): the predictable-PRNG fallback was removed outright. `generate_session_id()` (`src/session.c`) and the CSRF token generator `_generate_token()` (`src/middleware_csrf.c`) now call the public `secure_random_bytes()` and **fail closed** — `session_create()` refuses to issue a session and `_generate_token()` returns `NULL` if the OS CSPRNG is unavailable. No `rand()`/`rand_r()` path remains anywhere in `src/`.
 
 **Description:**
 Both session ID generation and CSRF token generation use `/dev/urandom` as the primary randomness source, which is correct. However, the fallback path uses `srand()` and `rand()`, which:
@@ -99,24 +111,24 @@ Both session ID generation and CSRF token generation use `/dev/urandom` as the p
 2. Are seeded with predictable values (`time(NULL) ^ clock()`) making tokens guessable
 3. Could lead to session ID collisions in multi-threaded operation
 
-**Affected Files:**
-- `src/session.c:66-75` — `generate_session_id()` fallback
-- `src/middleware_csrf.c:66-82` — `_csrf_random_bytes()` fallback
+**Affected Files (as of the original report, pre-`6895aab`):**
+- `src/session.c` — `generate_session_id()` fallback
+- `src/middleware_csrf.c` — `_csrf_random_bytes()` fallback (function no longer exists)
 
-**Mitigation:**
-On Linux, `/dev/urandom` is always available, so this fallback rarely triggers. The risk is primarily on embedded or unusual systems without `/dev/urandom`.
+**Mitigation (historical):**
+On Linux, `/dev/urandom` is always available, so this fallback rarely triggered. The risk was primarily on embedded or unusual systems without `/dev/urandom`. It no longer applies: there is no fallback path to reach.
 
-**Recommended Fix:**
-Use `rand_r()` (thread-safe) or per-thread seed storage instead of global `rand()`.
+**Recommended Fix (superseded):**
+The original recommendation was `rand_r()` or per-thread seed storage. The fix actually adopted was stronger — remove the weak fallback entirely and fail closed on CSPRNG failure, so a host without usable entropy gets no token rather than a guessable one.
 
 ---
 
-### BUG-4: Middleware Singleton Pattern Limitation (Low) — ✅ FIXED
+### BUG-4: Middleware Singleton Pattern Limitation (Low) — ⚠️ PARTIALLY FIXED
 
 **Component:** All middleware implementations
 **Severity:** Low — design limitation, not a crash bug
 **Discovered:** Architecture analysis during stress testing
-**Fixed:** Added `void *user_data` parameter to `middleware_fn_t` signature and router infrastructure. All middleware handlers now accept per-instance context via user_data, while maintaining backward compatibility through global fallback when user_data is NULL. Added `router_use_middleware_with_data()` API for registering middleware with per-instance state.
+**Partially fixed:** Added `void *user_data` parameter to `middleware_fn_t` signature and router infrastructure, plus a `router_use_middleware_with_data()` API for registering middleware with per-instance state. Four modules read it — CORS (`src/middleware_cors.c`), rate-limit (`src/middleware_ratelimit.c`), auth (`src/middleware_auth.c`) and logging (`src/middleware_log.c`) — using the `user_data ? user_data : g_global` pattern, so they keep backward compatibility when `user_data` is NULL. **Only three of those are usable per-instance**, however: CORS, auth and logging take a pointer to their own *public* config struct (`cors_options_t *`, `basic_auth_config_t *` / `apikey_auth_config_t *` / `jwt_auth_config_t *`, `log_config_t *`), which a caller can allocate. Rate limiting casts `user_data` to `ratelimiter_t *` — an internal *state* struct (mutex + hash table) defined only in `src/middleware_ratelimit.c` and absent from `include/kamran.k` — while its only public constructor `ratelimit_middleware_create()` returns a `middleware_fn_t` and keeps the limiter in the file-static `g_ratelimiter`. No public API yields a second one, so rate limiting is one instance per type in practice, and passing a `ratelimit_config_t *` there is type confusion that will corrupt memory, not configuration. **Five modules still discard it** (each begins `(void)user_data;` and reads only its module global): static files (`src/middleware_static.c`), CSRF (`src/middleware_csrf.c`), error handler (`src/middleware_error.c`), metrics (`src/middleware_metrics.c`) and security headers (`src/middleware_security_headers.c`). Those five remain strictly one instance per type — registering two silently gives both the last-configured global. See [docs/TECHNICAL_DEBT.md](docs/TECHNICAL_DEBT.md) §3 for the per-route workaround.
 
 **Description:**
 All middleware types (CORS, rate limiting, static files, auth, logging, error handler, CSRF, metrics) use global static variables to store their configuration. This means only one instance of each middleware type can exist at a time. Calling `*_middleware_create()` a second time overwrites the first configuration.
@@ -210,7 +222,7 @@ The secure value API was developed before or alongside `secure_zero()`, and the 
 **Fixed:** Removed all private reimplementations and replaced with calls to the public APIs: `_fill_random()` → `secure_random_bytes()`, `generate_session_id()` → `secure_random_bytes()`, `_ct_strcmp()` → `secure_compare()`, `_auth_secure_compare()` → `secure_compare()`.
 
 **Description:**
-Three security-critical operations have public APIs in `security_utils.c`, but multiple modules reimplement them privately:
+Three security-critical operations have public APIs in `security_utils.c`, but multiple modules reimplemented them privately. The file:line references below are as of the original report; none of these private functions exists in `src/` today.
 
 **1. Random byte generation (`secure_random_bytes` duplicated):**
 - `src/middleware_csrf.c:53-84` — `_fill_random()` reimplements `/dev/urandom` reading + fallback
@@ -244,7 +256,7 @@ Refactor all private implementations to call the public API:
 **Description:**
 Several locations use `memset(ptr, 0, len)` to wipe sensitive data before freeing. The C standard permits compilers to optimize away `memset()` calls on memory that is not subsequently read ("dead store elimination"). The public `secure_zero()` function exists specifically to prevent this optimization using `volatile` pointers.
 
-**Affected Locations:**
+**Affected Locations (as of the original report — all three now call `secure_zero()`):**
 - `src/middleware_auth.c:527` — `memset(decoded, 0, sizeof(decoded))` — wipes Base64-decoded credentials
 - `src/middleware_auth.c:935` — `memset((void *)g_jwt_auth_config->secret, 0, ...)` — wipes JWT secret before free
 - `src/middleware_csrf.c:221` — `memset(&g_csrf_state, 0, sizeof(g_csrf_state))` — wipes CSRF state
@@ -263,15 +275,23 @@ secure_zero(decoded, sizeof(decoded));
 
 ## Stress Test Results Summary
 
-All 28 stress tests pass with zero failures and zero memory leaks (verified under Valgrind):
+All 37 stress tests pass with zero failures. Valgrind runs on every push in the
+`Build, Test & Memcheck (Docker)` CI job, which executes the suite under Valgrind on Ubuntu — but
+see the caveat below the block: its result is **reported, not enforced**.
 
 ```
-Tests run: 28
-Tests passed: 28
+Tests run: 37
+Tests passed: 37
 Tests failed: 0
 
-Valgrind: 0 errors, 0 leaks (393,359 allocs, 393,359 frees)
+Valgrind: 0 errors, 0 leaks   (observed for test_stress; see caveat)
 ```
+
+> **Caveat.** The CI step wraps Valgrind in a shell `for` loop with no `set -e`, so the step's exit
+> status is only that of the **last** test binary — a failure in any earlier one is printed and
+> discarded. These figures are therefore observed rather than gated, and at least one definite leak
+> currently sits in the discarded set (`cache_get()` returns an owned copy the cache tests never
+> free). Fixing the gate and those leaks is tracked separately.
 
 ### What Passed Cleanly
 
@@ -300,6 +320,15 @@ Valgrind: 0 errors, 0 leaks (393,359 allocs, 393,359 frees)
 | HTTP | >1MB body rejection | ✓ Rejected with 413/400 |
 | HTTP | 90 headers | ✓ All accepted |
 | HTTP | Slow client (1s delay) | ✓ Completed within timeout |
+| HTTP | Slow-loris drip that never completes a request | ✓ Cut off by the total request deadline, not just the per-`recv()` timeout |
+| HTTP | Partial request then silence, per-`recv()` timeout disabled | ✓ Still bounded — the effective read timeout is capped at the deadline |
+| HTTP | `listen()` failing after startup | ✓ Server state reset; `destroy()` stays safe (test skips if the failure can't be forced) |
+| HTTP | Transfer-Encoding smuggling matrix | ✓ Token-parsed per RFC 7230 §3.3.1: body de-chunked, smuggling vectors → 400, unsupported coding → 501 |
+| HTTP | Control bytes in the request-target (CR, LF, HTAB, C0, DEL) | ✓ Rejected with 400 — no CRLF injection into `req->path` |
+| HTTP | Host header enforcement | ✓ Keyed on the HTTP version, not the `Connection` header |
+| HTTP | Path canonicalization before routing | ✓ `//` collapsed, trailing `/` stripped; literal and `:param` routes agree |
+| HTTP (async) | Idle / slow-loris connection on the event loop | ✓ Reaped once the request deadline passes; shutdown latency stays bounded |
+| HTTP (async) | Re-listen after stop | ✓ Event loop torn down cleanly; the second `listen()` succeeds |
 | Validation | 100KB string validation | ✓ Correct results |
 | Validation | 1000 script tag sanitization | ✓ All escaped |
 | Compression | 1MB CRC32 | ✓ No issues |

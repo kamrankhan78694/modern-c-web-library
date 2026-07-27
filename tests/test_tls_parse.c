@@ -1,6 +1,6 @@
 /*
  * test_tls_parse.c — tests for the experimental TLS parsing layer (DER/ASN.1;
- * PEM and X.509 will join here). Built only with -DWEBLIB_ENABLE_TLS=ON.
+ * PEM joins here too; there is no X.509 parser). Built only with -DWEBLIB_ENABLE_TLS=ON.
  *
  * The DER reader parses untrusted input, so malformed-input rejection is
  * weighted as heavily as correct decoding: truncation, indefinite and

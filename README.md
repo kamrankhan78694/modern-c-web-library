@@ -6,7 +6,10 @@
 [![Release](https://img.shields.io/github/v/release/kamrankhan78694/modern-c-web-library)](https://github.com/kamrankhan78694/modern-c-web-library/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **Version 1.0.0** — Production-ready pure C web framework with zero external dependencies
+> **Version 2.0.0** — pure C web framework with zero external dependencies. The HTTP,
+> WebSocket, and middleware stack is stable; the new pure-C TLS 1.3
+> server that ships in 2.0.0 is **experimental and unaudited** — see
+> [TLS 1.3 / HTTPS](#experimental-tls-13--https-off-by-default).
 
 A modern AI-assisted C library for building efficient, scalable, and feature-rich web backends with support for routing, async I/O, middleware, and JSON handling.
 
@@ -36,10 +39,10 @@ if(system.working) {
 
 ## Design Philosophy
 
-This project is a **pure ISO C implementation** (C99 or later) designed to demonstrate that modern web functionality can be achieved entirely in standard C, without relying on external dependencies or third-party libraries.
+This project is a **pure ISO C implementation** (C11 or later) designed to demonstrate that modern web functionality can be achieved entirely in standard C, without relying on external dependencies or third-party libraries.
 
 **Core Principles:**
-- **Pure ISO C**: All code is written in standard C (C99 or newer) for maximum portability
+- **Pure ISO C**: All code is written in standard C (C11 or newer) for maximum portability
 - **Zero External Dependencies**: No third-party libraries or frameworks are permitted
 - **Self-Sufficient**: The library implements all required functionality from the ground up
 - **Educational Foundation**: Serves as a reference implementation of modern C design patterns
@@ -57,11 +60,11 @@ Contributors should align with this philosophy. To maintain project integrity, s
 
 ## Language Policy
 
-The entire project is written in **standard ISO C** (C99 or newer). This is a strict policy to maintain the integrity of the project as a pure C foundation.
+The entire project is written in **standard ISO C** (C11 or newer). This is a strict policy to maintain the integrity of the project as a pure C foundation. C11 is the floor, not a ceiling — C17 and C23 toolchains build fine. The floor is C11 because the library uses `<stdatomic.h>` (connection-pool refcounting in `src/db_pool.c`) and `_Static_assert` (the header/CMake version consistency check).
 
 **Language Requirements:**
-- **C Only**: All source code, utilities, and tests must be written in C
-- **No Foreign Languages**: Python scripts, JavaScript wrappers, or any other language integrations are prohibited
+- **C Only**: The library (`src/`, `include/`) and every test program (`tests/`) is written in C
+- **No Foreign Languages in the shipped library**: every compiled source file under `src/`, `include/`, and `tests/` is C — the library and its test binaries contain no other language. Host-environment scaffolding sits outside this rule and is never linked into or required by the library: the Cloudflare Workers JS glue (`examples/worker.js`), the real-client interop harness (`tests/interop_openssl.sh`, registered as the `TlsInteropOpenssl` ctest suite), the Docker/publish helpers (`docker-run.sh`, `docker-verify.sh`, `publish-package.sh`), and three legacy ad-hoc WebSocket probes at the repo root (`test_basic_ws.py`, `test_handshake.py`, `test_ping.py`) that no build or CI step invokes
 - **Standard C APIs**: Only standard C library functions and platform-specific system calls are permitted
 - **No Code Generation**: All code must be written in C, not generated from other languages
 
@@ -105,7 +108,11 @@ This policy emphasizes **C craftsmanship** over convenience through other ecosys
 - **Response Compression**: Pure C gzip (RFC 1952) with Accept-Encoding negotiation
 - **Async WebSocket**: Event loop integration with non-blocking I/O and write queue
 - **Benchmarking Suite**: Throughput/latency measurement with percentile statistics
-- **Cross-Platform**: Works on Linux, macOS, and Windows
+- **Security Headers**: HSTS, CSP, X-Frame-Options and friends as a middleware
+- **Environment Config**: Configuration from environment variables with typed accessors (string, int, bool, port) and defaults
+- **WASM & Cloudflare Workers**: Emscripten build target plus a Workers runtime with KV, R2, D1, and Queues binding APIs — the bindings are **in-memory simulations in every build (native, test, and WASM)**, not the real Cloudflare services. No JS glue ships that would reach the real bindings: `examples/worker.js` never passes `env` into WASM, and no `wrangler.toml` ships
+- **TLS 1.3 (experimental)**: Hand-written, zero-dependency pure-C TLS 1.3 server termination via `http_server_enable_tls()` — `TLS_CHACHA20_POLY1305_SHA256` + X25519 + Ed25519 only, server-side, threaded mode only. Off by default — build with `-DWEBLIB_ENABLE_TLS=ON`. Native-only (not WASM/Workers). Interoperates with `openssl s_client`; browsers are **not** supported (Ed25519-only certificates). **UNAUDITED — not for production use without an external cryptographic audit.** See [`src/tls/README.md`](src/tls/README.md) and [`examples/tls_server.c`](examples/tls_server.c).
+- **Cross-Platform**: Linux and macOS, both built and tested in CI on every push. **Windows is not supported** — the networking core (`src/http_server.c`, `src/websocket.c`) includes POSIX socket headers unconditionally and closes sockets with `close()` rather than `closesocket()`. An MSVC build and a Windows CI job are planned as Phase 17
 - **Modern C Patterns**: Clean, modular API design with zero external dependencies
 
 ## Architecture
@@ -222,8 +229,8 @@ For contributors who want a consistent, reproducible environment without install
 # Build the Docker image
 docker build -t modern-c-web-library .
 
-# Run the container (executes build, tests, and verification)
-docker run --rm modern-c-web-library
+# Run the container (starts the async HTTP server on port 8080)
+docker run --rm -p 8080:8080 modern-c-web-library
 ```
 
 ### Development with Docker Compose
@@ -256,10 +263,10 @@ The `docker-compose.yml` configuration mounts your source code, so you can edit 
 
 ### What's Included in the Docker Environment
 
-- **Ubuntu 22.04** base image
+- **Debian-based images**: `gcc:11` builder, with a `debian:bullseye-slim` runtime stage for the production image
 - **Build tools**: gcc, g++, make, cmake, git
-- **Pre-built library**: The image builds and tests the library during image creation
-- **Verification script**: Automatically runs to validate the build
+- **Pre-built library**: The image compiles the library, examples, and test binaries during image creation — the tests are *not* executed at build time
+- **Verification script**: `./docker-verify.sh` is run manually from the host. It builds the dev and production images and runs the `test_weblib` binary (the `WebLibTests` suite) inside the container — not the full ctest run
 
 ### Docker Commands Reference
 
@@ -267,14 +274,14 @@ The `docker-compose.yml` configuration mounts your source code, so you can edit 
 # Build the image
 docker build -t modern-c-web-library .
 
-# Run tests in container
-docker run --rm modern-c-web-library
+# Run the test suite (builds and runs Dockerfile.dev)
+./docker-run.sh test
 
 # Start interactive shell
 docker run --rm -it modern-c-web-library /bin/bash
 
 # Run example server (requires port mapping)
-docker run --rm -p 8080:8080 modern-c-web-library ./build/examples/simple_server
+docker run --rm -p 8080:8080 modern-c-web-library /app/simple_server 8080
 
 # Use docker-compose for development
 docker-compose run --rm weblib-dev /bin/bash
@@ -347,7 +354,9 @@ void handle_api(http_request_t *req, http_response_t *res) {
 ### Middleware
 
 ```c
-bool logging_middleware(http_request_t *req, http_response_t *res) {
+bool logging_middleware(http_request_t *req, http_response_t *res, void *user_data) {
+    (void)res;
+    (void)user_data;
     printf("Request: %s\n", req->path);
     return true; // Continue to next middleware/handler
 }
@@ -475,13 +484,15 @@ router_add_route(router, HTTP_GET, "/ws", handle_websocket);
 - **Control Frames**: Ping, pong, and close frames with automatic pong responses
 - **Security**: Proper masking/unmasking of frames
 - **Connection Management**: Open, close, and error callbacks
-- **Frame Processing**: Complete implementation in threaded mode (✅ Production Ready)
+- **Frame Processing**: Complete implementation in threaded mode
   - Persistent connections after HTTP upgrade
-  - Automatic ping/pong handling (<0.001s latency)
+  - Automatic ping/pong handling
   - Multiple concurrent WebSocket connections
-  - All protocol tests passing (4/4 test cases)
+  - Covered by the `AsyncWebSocketTests` suite and the WebSocket cases in `WebLibTests`
 
-**Status:** Both threaded mode and async mode (event loop integration) are production-ready.
+**Status:** Both threaded mode and async mode (event loop integration) are complete and covered
+by the test suite. WebSocket over TLS (`wss://`) is **not** supported — a WebSocket upgrade on a
+TLS-terminated connection is refused with 503.
 
 See `examples/websocket_echo_server.c` for a complete WebSocket server implementation with a browser-based test client.
 
@@ -495,6 +506,7 @@ See `examples/websocket_echo_server.c` for a complete WebSocket server implement
 - `void http_server_destroy(http_server_t *server)` - Destroy server and free resources
 - `int http_server_set_async(http_server_t *server, bool enable)` - Enable/disable async I/O mode
 - `event_loop_t *http_server_get_event_loop(http_server_t *server)` - Get server's event loop
+- `int http_server_enable_tls(http_server_t *server, const char *cert_pem, size_t cert_len, const char *key_pem, size_t key_len)` - Terminate TLS 1.3 on this server. Takes PEM **buffers with lengths**, not file paths. Call before `http_server_listen()`; returns `-1` in async mode. Requires `-DWEBLIB_ENABLE_TLS=ON`. **Experimental and unaudited** — see [Experimental TLS 1.3 / HTTPS](#experimental-tls-13--https-off-by-default)
 
 ### Router
 
@@ -573,15 +585,36 @@ modern-c-web-library/
 │   ├── middleware_log.c    # Logging middleware
 │   ├── middleware_metrics.c# Metrics middleware
 │   ├── middleware_ratelimit.c # Rate limiting
-│   └── middleware_static.c # Static file serving
+│   ├── middleware_static.c # Static file serving
+│   ├── middleware_security_headers.c # Security response headers
+│   ├── env_config.c       # Environment/config loading
+│   ├── security_utils.c   # Constant-time compare, secure zeroing
+│   ├── wasm_runtime.c     # WASM runtime bindings
+│   ├── worker_runtime.c   # Cloudflare Workers fetch-event bridge
+│   ├── worker_kv.c        # Workers KV binding emulation
+│   ├── worker_r2.c        # Workers R2 binding emulation
+│   ├── worker_d1.c        # Workers D1 binding emulation
+│   ├── worker_queues.c    # Workers Queues binding emulation
+│   ├── crypto/            # SHA-256, Base64
+│   └── tls/               # Experimental pure-C TLS 1.3 server (native-only,
+│                          #   UNAUDITED, OFF by default: -DWEBLIB_ENABLE_TLS=ON)
 ├── examples/
 │   ├── simple_server.c    # Basic HTTP server (threaded)
 │   ├── async_server.c     # Async HTTP server (event loop)
 │   ├── rest_api_server.c  # Full CRUD REST API example
 │   ├── websocket_echo_server.c        # WebSocket echo server
-│   └── async_websocket_echo_server.c  # Async WebSocket server
+│   ├── async_websocket_echo_server.c  # Async WebSocket server
+│   ├── tls_server.c       # HTTPS example (experimental TLS; -DWEBLIB_ENABLE_TLS=ON)
+│   ├── worker_example.c   # Cloudflare Workers example (native-testable)
+│   ├── worker.js          # Cloudflare Workers JavaScript glue
+│   └── wasm_example.c     # WebAssembly demo
 ├── tests/
-│   └── test_weblib.c      # Unit tests (129 tests)
+│   ├── test_weblib.c      # Core unit tests (166 tests)
+│   ├── test_kamran_header.c, test_async_websocket.c, test_stress.c
+│   ├── test_worker.c, test_wasm.c
+│   ├── test_tls*.c        # 6 TLS suites (need -DWEBLIB_ENABLE_TLS=ON;
+│   │                      #   test_tls_http.c also needs -DWEBLIB_TLS_TEST_HOOKS=ON)
+│   └── interop_openssl.sh # Real `openssl s_client` interop test
 ├── docs/
 │   ├── api/README.md      # Complete API reference
 │   ├── tutorials/         # Step-by-step tutorials
@@ -641,6 +674,63 @@ mkdir build && cd build
 cmake .. -G "MinGW Makefiles"
 mingw32-make
 ```
+
+#### Experimental TLS 1.3 / HTTPS (off by default)
+
+`WEBLIB_ENABLE_TLS` is **OFF** by default. With it off, none of `src/tls/` is compiled and the
+build is byte-identical to a build from before TLS existed. TLS is **native-only** — it is not
+available in WASM or Cloudflare Workers builds.
+
+```bash
+cmake -S . -B build-tls -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWEBLIB_ENABLE_TLS=ON
+cmake --build build-tls --parallel
+cd build-tls && ctest --output-on-failure   # 12 suites, incl. 6 TLS suites
+```
+
+To also run the end-to-end HTTPS test, add the test-only RNG hook:
+
+```bash
+cmake -S . -B build-tls -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON
+cmake --build build-tls --parallel
+cd build-tls && ctest --output-on-failure   # 13 suites, incl. 7 TLS suites
+```
+
+> `WEBLIB_TLS_TEST_HOOKS` exposes a deterministic RNG so handshakes are reproducible in tests.
+> It is **TEST-ONLY** — never enable it in a production or distributed build.
+
+Running the HTTPS example needs a self-signed Ed25519 certificate. From the repo root:
+
+```bash
+openssl genpkey -algorithm ed25519 -out key.pem
+openssl req -x509 -new -key key.pem -out cert.pem -days 365 -subj "/CN=localhost"
+./build-tls/examples/tls_server cert.pem key.pem 8443
+
+# In another shell — the same client `tests/interop_openssl.sh` drives in CI.
+# Pipe the request in, otherwise s_client just sits at an interactive prompt:
+printf 'GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' \
+    | openssl s_client -quiet -connect 127.0.0.1:8443 -tls1_3
+```
+
+To enable TLS on your own server, read the PEM files yourself and hand the library the
+buffers — `http_server_enable_tls()` takes PEM **contents plus lengths**, not file paths:
+
+```c
+/* Must be called before http_server_listen(). Returns -1 if the build has no TLS,
+ * if the PEM is unusable, or if async mode is enabled on this server. */
+if (http_server_enable_tls(server, cert_pem, cert_len, key_pem, key_len) != 0) {
+    fprintf(stderr, "TLS could not be enabled\n");
+    return 1;
+}
+```
+
+> **EXPERIMENTAL / UNAUDITED.** One profile only: `TLS_CHACHA20_POLY1305_SHA256` + X25519 +
+> Ed25519 — no AES-GCM, no RSA/ECDSA, no TLS 1.2. Server-side only, threaded mode only
+> (`http_server_enable_tls()` returns `-1` if async mode is enabled), and WebSocket upgrades
+> over a TLS connection are refused with 503. It interoperates with `openssl s_client`;
+> browser page-load is **not** supported, because Ed25519-only certificates have limited and
+> inconsistent browser support. Do not use it in production without an external cryptographic
+> audit. Full details: [`src/tls/README.md`](src/tls/README.md).
 
 ### WebAssembly (Emscripten)
 
@@ -715,8 +805,11 @@ See `examples/wasm_example.c` for a complete demonstration.
 The library provides first-class support for running inside
 [Cloudflare Workers](https://developers.cloudflare.com/workers/) via WASM.
 The Worker runtime layer (`worker_*` API) bridges the Workers fetch-event
-model to the library's router and response helpers, and provides in-memory
-emulations of Cloudflare's infrastructure bindings (KV, R2, D1, Queues).
+model to the library's request/response helpers, and provides in-memory
+simulations of Cloudflare's infrastructure bindings (KV, R2, D1, Queues) —
+in **every** build, native and WASM alike, not just locally. Note that
+`worker_set_router()` is accepted but **not used for dispatch**; see the
+note under Quick Start.
 
 #### Worker API Overview
 
@@ -724,7 +817,7 @@ emulations of Cloudflare's infrastructure bindings (KV, R2, D1, Queues).
 |----------|---------|
 | `worker_request_create(method, url)` | Create a request from fetch event data |
 | `worker_request_set_header/body()` | Populate request headers and body |
-| `worker_handle_fetch(req, env)` | Route request through configured handler/router |
+| `worker_handle_fetch(req, env)` | Dispatch to the handler registered with `worker_set_fetch_handler()`. **Routers are not dispatched**: with only `worker_set_router()` set it returns a 200 placeholder without matching any route; with neither, 503 |
 | `worker_response_get_status/body/header()` | Read response fields |
 | `worker_response_set_body_text/set_json()` | Convenience response builders |
 | `worker_env_create/add_binding()` | Environment with named service bindings |
@@ -740,6 +833,14 @@ emulations of Cloudflare's infrastructure bindings (KV, R2, D1, Queues).
 | **env** | `worker_env_t` | `fetch(request, env, ctx)` | `worker_env_create/add_binding/get_binding/destroy` |
 
 #### Quick Start
+
+> **Note:** `worker_set_router()` is accepted but **not used for dispatch**. The
+> native and WASM builds share one `worker_handle_fetch()` implementation that does
+> not inspect the URL path, so a router-only Worker answers *every* request —
+> including `/api/hello` below — with a 200 placeholder. To route, register a
+> handler with `worker_set_fetch_handler()` and branch on
+> `worker_request_get_url(req)` inside it. The router call below is shown because
+> it is the current API shape, not because it dispatches.
 
 **1. Write your Worker in C:**
 
@@ -997,11 +1098,18 @@ Run the test suite:
 
 ```bash
 cd build
-make test
+make test          # or: ctest --output-on-failure
 
-# Or run tests directly
+# Or run one binary directly
 ./tests/test_weblib
 ```
+
+A default build registers **6 ctest suites**: `WebLibTests`, `KamranHeaderTests`,
+`AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`. Building with
+`-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` adds 7 more —
+`TlsTests`, `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`,
+`TlsHttpTests`, and `TlsInteropOpenssl` (a real `openssl s_client` handshake, skipped
+gracefully when a suitable `openssl` is not installed) — for 13 in total.
 
 ### Memory Leak Testing with Valgrind (Docker)
 
@@ -1023,7 +1131,9 @@ valgrind --leak-check=full ./tests/test_weblib
 
 ### For Native Builds
 - C11 compatible compiler (GCC, Clang, MSVC)
-- CMake 3.10 or higher
+- CMake 3.10 or higher. The out-of-source form used in the TLS section
+  (`cmake -S . -B <dir> && cmake --build <dir> --parallel`) needs CMake 3.13 or newer;
+  on older CMake use the `mkdir build && cd build && cmake .. && make` form instead
 - POSIX threads (Linux/macOS) or Windows threads
 
 **No External Dependencies**: This library uses only standard C library functions and platform-specific system libraries and APIs (such as POSIX threads, Windows API for sockets and threading, etc.). No third-party libraries are required or used.
@@ -1033,7 +1143,7 @@ valgrind --leak-check=full ./tests/test_weblib
 The project includes full Docker support for development and deployment:
 
 - **Development Environment**: Full toolchain with GCC, CMake, GDB, Valgrind
-- **Production Image**: Minimal runtime image (~150MB)
+- **Production Image**: Minimal `debian:bullseye-slim` runtime stage carrying only the built server binaries
 - **Easy Testing**: Run tests with a single command
 - **Consistent Builds**: Same environment for all contributors
 
@@ -1075,13 +1185,21 @@ For a list of planned features and enhancements, check out [TODO.md](TODO.md).
 
 ## Project Status
 
-**Current Status**: ✅ Production-ready v1.0.0 with 100% test pass rate
+**Current Status**: v2.0.0 — the HTTP/WebSocket/middleware core is stable and every test suite
+passes; the TLS 1.3 layer added in 2.0.0 is experimental and unaudited.
 
-- **Tests**: 129/129 passing
-- **Code Quality**: Zero compiler warnings
+- **Tests**: 100% pass rate — 6/6 ctest suites in the default build, 13/13 with
+  `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON`. `WebLibTests` alone reports 166 unit tests.
+- **Code Quality**: Zero compiler warnings under `-Wall -Wextra -pedantic`
 - **Security**: All buffer operations bounds-checked, HMAC-SHA256 with constant-time comparison
 - **Debugging**: Full IDE integration with LLDB/GDB
 - **WebSocket**: RFC 6455 compliant implementation (threaded + async modes)
+- **TLS 1.3**: Experimental, unaudited, off by default. Server-side, threaded-mode, native-only,
+  single ChaCha20-Poly1305 + X25519 + Ed25519 profile. Verified against `openssl s_client`;
+  no browser support. Not for production without an external cryptographic audit.
+- **CI**: `.github/workflows/ci.yml` runs a gcc Docker build (full ctest run, then every test
+  binary again under Valgrind), a clang build, a RelWithDebInfo TLS build across all 13 suites
+  plus an ASan/UBSan build of the 7 TLS suites, a macOS job on PRs, and a Docker image check
 
 For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMENTS.md**](ACHIEVEMENTS.md).
 
@@ -1116,8 +1234,14 @@ For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMEN
 - [x] Benchmarking suite
 - [x] REST API example
 - [x] Tutorial documentation
-- [x] SSL/TLS support (pure-C TLS 1.3 server — **experimental / unaudited**; single
-  ChaCha20-Poly1305 + X25519 + Ed25519 profile, see [`src/tls/README.md`](src/tls/README.md))
+- [x] SSL/TLS support (pure-C TLS 1.3 server — **experimental / unaudited**; server-side,
+  threaded-mode and native-only, off by default; single ChaCha20-Poly1305 + X25519 + Ed25519
+  profile; verified against `openssl s_client`, no browser support — see
+  [`src/tls/README.md`](src/tls/README.md))
+- [ ] External cryptographic audit of the TLS layer
+- [ ] Browser-compatible TLS (a second certificate/signature profile beyond Ed25519)
+- [ ] WebSocket over TLS (`wss://`) — currently refused with 503
+- [ ] TLS in async mode (today `http_server_enable_tls()` requires threaded mode)
 - [ ] HTTP/2 support
 
 ## Community & Support
@@ -1139,10 +1263,10 @@ If you use this library in your research or project, please cite it:
 ```bibtex
 @software{khan2026modern,
   author       = {Kamran Khan},
-  title        = {Modern C Web Library: Production-Ready Pure C Web Framework},
+  title        = {Modern C Web Library: A Pure C Web Framework},
   year         = {2026},
   publisher    = {Zenodo},
-  version      = {1.0.0},
+  version      = {2.0.0},
   doi          = {10.5281/zenodo.18793559},
   url          = {https://doi.org/10.5281/zenodo.18793559}
 }
@@ -1150,10 +1274,14 @@ If you use this library in your research or project, please cite it:
 
 **APA:**
 ```
-Khan, K. (2026). Modern C Web Library: Production-Ready Pure C Web Framework (Version 1.0.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.18793559
+Khan, K. (2026). Modern C Web Library: A Pure C Web Framework (Version 2.0.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.18793559
 ```
 
 **DOI:** https://doi.org/10.5281/zenodo.18793559
+
+> The DOI above was minted for the v1.0.0 Zenodo deposit. Once v2.0.0 is deposited, Zenodo
+> issues a new version DOI — update the `doi`/`url` fields here to that DOI (or to the
+> concept DOI, which always resolves to the latest version).
 
 ## Acknowledgments
 

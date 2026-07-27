@@ -32,12 +32,12 @@ extern "C" {
  *
  * Update these macros (and CMakeLists.txt project VERSION) when releasing.
  */
-#define WEBLIB_VERSION_MAJOR 1
+#define WEBLIB_VERSION_MAJOR 2
 #define WEBLIB_VERSION_MINOR 0
 #define WEBLIB_VERSION_PATCH 0
 
 /** Full version string in "MAJOR.MINOR.PATCH" form. */
-#define WEBLIB_VERSION "1.0.0"
+#define WEBLIB_VERSION "2.0.0"
 
 /** Server identity string embedded in HTTP Server header. */
 #define WEBLIB_VERSION_STRING "weblib/" WEBLIB_VERSION " (author:" WEBLIB_AUTHOR_KAMRAN ")"
@@ -60,7 +60,7 @@ extern "C" {
 const char *weblib_kamran_signature(void);
 
 /**
- * Return the library version string (e.g. "1.0.0").
+ * Return the library version string (e.g. "2.0.0").
  */
 const char *weblib_version(void);
 
@@ -191,7 +191,9 @@ typedef struct static_file_config {
     const char *root_dir;       /* Root directory for static files */
     const char *index_file;     /* Default index file (default: "index.html") */
     int cache_max_age;          /* Cache-Control max-age in seconds (default: 3600) */
-    bool enable_etag;           /* Enable ETag support (default: true) */
+    bool enable_etag;           /* Enable ETag support.  NOTE: copied verbatim -- unlike
+                                   index_file and cache_max_age, no default is applied,
+                                   so a zero-initialised struct disables ETags. */
 } static_file_config_t;
 
 /* HTTP Request structure */
@@ -323,7 +325,9 @@ int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware
  * @param router Router instance
  * @param req Request object
  * @param res Response object
- * @return 0 if route found and handled, -1 if not found
+ * @return 0 if a route matched and ran, or a middleware stopped the chain;
+ *         1 if no route matched (a 404 "Not Found" body is filled in for you);
+ *        -1 if router, req or res was NULL, or req->path was NULL (nothing written)
  */
 int router_route(router_t *router, http_request_t *req, http_response_t *res);
 
@@ -613,8 +617,10 @@ int http_server_set_async(http_server_t *server, bool enable);
  * @param cert_len   Length of cert_pem
  * @param key_pem    PEM "PRIVATE KEY" block (PKCS#8 Ed25519 private key)
  * @param key_len    Length of key_pem
- * @return 0 on success, -1 on failure: NULL/empty arguments, malformed certificate
- *         PEM or private key, async mode enabled, TLS already enabled, or the server
+ * @return 0 on success, -1 on failure.  In a build WITHOUT -DWEBLIB_ENABLE_TLS=ON
+ *         (the default) this is a stub that ALWAYS returns -1.  In a TLS build the
+ *         failure causes are: NULL/empty arguments, malformed certificate PEM or
+ *         private key, async mode enabled, TLS already enabled, or the server
  *         already listening.
  */
 int http_server_enable_tls(http_server_t *server,
@@ -1082,8 +1088,12 @@ void http_response_delete_cookie(http_response_t *res, const char *name);
 
 /**
  * Create a CORS middleware function with the given configuration
- * @param options CORS configuration (NULL for default permissive CORS)
- * @return Middleware function for use with router_use_middleware()
+ * @param options CORS configuration.  Must be non-NULL: passing NULL returns NULL
+ *                rather than building a default config.  Leaving allowed_origins
+ *                NULL *inside* the struct is what selects the wildcard "*" origin.
+ * @return Middleware function for use with router_use_middleware(), or NULL if
+ *         options is NULL, or if allow_credentials is set with a wildcard origin
+ *         (refused outright — CWE-942)
  */
 middleware_fn_t cors_middleware_create(const cors_options_t *options);
 
@@ -1095,9 +1105,18 @@ void cors_middleware_destroy(void);
 /* ===== Rate Limiting Middleware API ===== */
 
 /**
- * Create a rate limiting middleware with the given configuration
- * @param config Rate limit configuration
- * @return Middleware function for use with router_use_middleware()
+ * Create a rate limiting middleware with the given configuration.
+ * @param config Rate limit configuration.  Must be non-NULL, and
+ *               requests_per_window, window_seconds and burst_size must each be > 0,
+ *               so a zero-initialised struct is rejected.
+ * @return Middleware function for use with router_use_middleware(), or NULL if
+ *         config is NULL or any of those three fields is <= 0.
+ *
+ * NOTE: the limiter state lives in a file-static, and ratelimiter_t is not part of
+ * this header, so there is no way for a caller to obtain a second instance.  Unlike
+ * CORS/auth/logging, this middleware cannot be given per-instance state via
+ * router_use_middleware_with_data(): passing a ratelimit_config_t* there would be
+ * type-confused with the internal ratelimiter_t and corrupt memory.
  */
 middleware_fn_t ratelimit_middleware_create(const ratelimit_config_t *config);
 
@@ -1620,10 +1639,11 @@ int cache_set(cache_t *cache, const char *key, const char *value, int ttl_second
 /**
  * Get value by key
  * Returns NULL if not found or expired. Expired entries are automatically removed.
- * The returned pointer is internal; caller should copy if needed beyond immediate use.
+ * The returned string is a NEWLY ALLOCATED copy: the CALLER OWNS it and must
+ * free() it.  It stays valid after the entry is evicted or the cache is cleared.
  * @param cache Cache instance
  * @param key Entry key
- * @return Entry value or NULL
+ * @return Heap-allocated copy of the entry value (caller frees), or NULL
  */
 const char *cache_get(cache_t *cache, const char *key);
 
@@ -1906,18 +1926,18 @@ void env_secure_value_free(env_secure_value_t *sv);
 
 /**
  * Return a heap-allocated redacted version of a value, safe for logging.
- * Short values (≤4 chars) become "***"; longer values show the first and
+ * Short values (≤4 chars) become "****"; longer values show the first and
  * last character with asterisks in between (e.g. "s**********z").
  * Caller must free() the returned string.
- * @param value Raw secret string (NULL → returns NULL)
+ * @param value Raw secret string (NULL or empty → returns NULL)
  * @return Redacted string, or NULL on error
  */
 char *env_config_redact(const char *value);
 
 /**
  * Convenience: apply standard WEBLIB_* environment variables to a server.
- * Reads WEBLIB_READ_TIMEOUT, WEBLIB_WRITE_TIMEOUT, WEBLIB_THREAD_COUNT,
- * WEBLIB_MAX_CONNECTIONS, and WEBLIB_ASYNC_MODE.  Unset variables are
+ * Reads WEBLIB_READ_TIMEOUT, WEBLIB_WRITE_TIMEOUT, WEBLIB_REQUEST_TIMEOUT,
+ * WEBLIB_THREAD_COUNT, WEBLIB_MAX_CONNECTIONS, and WEBLIB_ASYNC_MODE.  Unset variables are
  * silently skipped, so existing programmatic configuration is preserved.
  * @param server Server instance
  * @return 0 on success, -1 if server is NULL
@@ -1953,7 +1973,9 @@ bool secure_compare(const void *a, const void *b, size_t len);
 
 /**
  * Fill a buffer with cryptographically secure random bytes.
- * Uses /dev/urandom on POSIX or BCryptGenRandom on Windows.
+ * Uses the best available system CSPRNG: arc4random_buf() on Apple/BSD,
+ * getrandom(2) on Linux, BCryptGenRandom on Windows, with /dev/urandom only as a
+ * fallback when getrandom is unavailable at runtime.  Fails closed.
  * Suitable for generating session IDs, CSRF tokens, nonces, etc.
  * @param buf  Destination buffer (must not be NULL)
  * @param len  Number of random bytes to generate (must be > 0)
@@ -2130,13 +2152,20 @@ int worker_env_binding_count(const worker_env_t *env);
 /** Register a custom fetch handler for the Worker. */
 void worker_set_fetch_handler(worker_fetch_handler_t handler);
 
-/** Set the library router for automatic route matching in Workers. */
+/**
+ * Record a router on the Worker runtime.  NOT used for dispatch:
+ * worker_handle_fetch() consults it only to choose between a 200 placeholder
+ * and a 503, and never matches a route.  See worker_handle_fetch below.
+ */
 void worker_set_router(router_t *router);
 
 /**
  * Handle an incoming Worker fetch event.  WASM-exported entry point.
- * If a custom handler is set, delegates to it; otherwise uses the
- * library router for route matching.
+ * If a custom handler is set, delegates to it.  Otherwise, if a router is set,
+ * returns a 200 placeholder ("X-Worker-Routed: configured") WITHOUT matching any
+ * route — the simulation (which is what every build uses, WASM included) does not
+ * inspect the URL path or consult the router's route table.  With neither handler
+ * nor router set, returns 503.
  */
 WASM_EXPORT
 worker_response_t *worker_handle_fetch(worker_request_t *req,
@@ -2166,7 +2195,8 @@ typedef struct {
     int    cursor;        /**< Cursor for next page (0 if complete). */
 } worker_kv_list_result_t;
 
-/** Create a KV namespace handle (simulated in native builds). */
+/** Create a KV namespace handle.  In-memory simulation in EVERY build,
+ *  including WASM/Workers — no glue to the real Cloudflare KV ships here. */
 worker_kv_t *worker_kv_create(const char *namespace_name);
 
 /** Destroy a KV namespace and free all stored entries. */
@@ -2235,7 +2265,8 @@ typedef struct {
     int    cursor;                  /**< Cursor for next page. */
 } worker_r2_list_result_t;
 
-/** Create an R2 bucket handle. */
+/** Create an R2 bucket handle.  In-memory simulation in EVERY build, including
+ *  WASM/Workers — no glue to a real Cloudflare R2 bucket ships here. */
 worker_r2_bucket_t *worker_r2_bucket_create(const char *bucket_name);
 
 /** Destroy an R2 bucket and free all stored objects. */
@@ -2277,7 +2308,9 @@ typedef struct {
     int           meta_changes;   /**< Number of rows affected (INSERT/DELETE). */
 } worker_d1_result_t;
 
-/** Create a D1 database handle. */
+/** Create a D1 database handle.  In-memory simulation in EVERY build, including
+ *  WASM/Workers — no glue to a real Cloudflare D1 database ships here, and
+ *  worker_d1_batch() is NOT atomic the way env.DB.batch() is. */
 worker_d1_t *worker_d1_create(const char *database_name);
 
 /** Destroy a D1 database and free all in-memory tables. */
@@ -2342,7 +2375,8 @@ typedef struct {
     char                    *queue_name;/**< Owned copy of the source queue name. */
 } worker_queue_batch_t;
 
-/** Create a queue handle. */
+/** Create a queue handle.  In-memory FIFO in EVERY build, including WASM/Workers —
+ *  no glue to a real Cloudflare Queues binding ships here. */
 worker_queue_t *worker_queue_create(const char *queue_name);
 
 /** Destroy a queue and free all pending messages. */
