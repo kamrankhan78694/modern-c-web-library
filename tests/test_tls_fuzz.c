@@ -109,9 +109,11 @@ static void fuzz_buffer(const tls_server_config_t *cfg, const uint8_t *buf, size
     (void)tls_parse_client_hello(buf, n, &ch);
 
     /* Feed the connection engine, sometimes split across two recvs to exercise the
-     * record-reassembly path across calls. */
+     * record-reassembly path across calls. The split decision draws from the PRNG
+     * (not the input) so every mode — including the record-framed one, whose inputs
+     * always begin 0x16 — takes the split path on roughly half its iterations. */
     tls_khannection_init(&c, cfg);
-    if (n >= 2 && (buf[0] & 1)) {
+    if (n >= 2 && (rng32() & 1)) {
         size_t half = n / 2;
         if (tls_khannection_recv(&c, buf, half, out, out_cap, &ol, app, app_cap, &al)
                 == TLS_KHANNECTION_RC_OK) {
