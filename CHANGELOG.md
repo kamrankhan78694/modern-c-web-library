@@ -98,9 +98,14 @@ name, the session data API, and template auto-escaping. Each is described under
   types, `worker_set_fetch_handler()`, `worker_set_router()`, and
   `worker_handle_fetch()`, which is exported for a JavaScript host to drive.
   `examples/worker_example.c` exercises the layer natively.
-  `examples/worker.js` sketches the JS side but is a **template, not a working
-  deployment** — it calls `worker_init()` / `worker_fetch()` glue you write
-  yourself, and no `wrangler.toml` ships alongside it.
+  `examples/worker.js` sketches the JS side but is a **stale template, not a
+  working deployment**: of the six C exports it names, three do not exist
+  anywhere in this repo — `_worker_init`, `_worker_fetch` and `_worker_cleanup`.
+  (The other three, `_worker_response_get_status` / `_get_body` / `_destroy`, do
+  exist.) The shipped entry point is `worker_handle_fetch()`, which the file
+  never calls, so its `-sEXPORTED_FUNCTIONS` line cannot link as written. No
+  `wrangler.toml` ships alongside it either. Reconciling that file with the real
+  API is tracked as follow-up work.
 - **Cloudflare infrastructure bindings: KV, R2, D1, and Queues** (#71) — pure-C
   APIs shaped like the corresponding Workers bindings
   (`worker_kv_get/put/delete/list`, `worker_r2_get/head/put/delete/list`,
@@ -109,7 +114,8 @@ name, the session data API, and template auto-escaping. Each is described under
   `worker_queue_message_ack`). **In every build — native, test, and WASM — these
   are backed by in-memory simulations**, not by Cloudflare's services: reaching
   the real bindings needs a JS glue layer, and none ships in this repo
-  (`examples/worker.js` bridges the fetch handler only). The simulations have
+  (`examples/worker.js` names no binding export at all, and its fetch-side
+  exports do not exist — see above). The simulations have
   fixed capacities (1024 KV entries, 1024 R2 objects, 1024 D1 rows, 4096 queued
   messages) — see `docs/WORKER_API.md`. `worker_d1_batch()` is **not** atomic,
   unlike Cloudflare's `env.DB.batch()`.
