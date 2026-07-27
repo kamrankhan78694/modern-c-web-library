@@ -568,7 +568,7 @@ void worker_r2_list_result_destroy(worker_r2_list_result_t *result);
 | Max objects per bucket | 1024 (in-memory impl) | no documented object-count limit |
 
 The in-memory R2 simulation does not validate key length: keys longer than
-Cloudflare's 1024-byte limit are accepted locally but would be rejected by real
+Cloudflare's 1024-byte limit are accepted by this in-memory implementation (in every build) but would be rejected by real
 R2.  Keep your own keys within 1024 bytes.
 
 ---

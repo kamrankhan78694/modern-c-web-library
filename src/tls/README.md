@@ -120,7 +120,7 @@ cmake --build build-tls
 
 ## Roadmap (incremental, each step independently verifiable)
 
-- **Phase 0 (this scaffold):** build option + `-DWEBLIB_TLS` wiring + a linkable
+- **Phase 0 (landed):** build option + `-DWEBLIB_TLS` wiring + a linkable
   smoke symbol (`tls_build_info`). Default build proven unchanged.
 - **Phase 0 (landed):** shared crypto module — promote the existing static SHA-256 /
   HMAC-SHA256 / base64 out of `middleware_auth.c` / `websocket.c`; transport

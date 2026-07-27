@@ -31,7 +31,7 @@ void handle_json(http_request_t *req, http_response_t *res) {
     /* Create JSON response */
     json_value_t *json = json_object_create();
     json_object_set(json, "message", json_string_create("Hello from JSON API"));
-    json_object_set(json, "version", json_string_create("1.0.0"));
+    json_object_set(json, "version", json_string_create(WEBLIB_VERSION));
     json_object_set(json, "status", json_string_create("success"));
     
     http_response_send_json(res, HTTP_OK, json);

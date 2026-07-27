@@ -421,7 +421,7 @@ Given a version number **MAJOR.MINOR.PATCH**:
 
 ### Where Version Is Defined
 
-The version is declared in **three places** that must stay in sync:
+The version is declared in **three places** that must stay in sync (plus `publish-package.sh`, whose CLI default should be bumped alongside them):
 
 | Location | What to update |
 |----------|---------------|

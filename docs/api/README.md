@@ -1532,7 +1532,7 @@ worker_response_t *worker_handle_fetch(worker_request_t *req, worker_env_t *env)
 ```
 
 Set a custom fetch handler and it is called for every request. `worker_set_router()`
-is accepted but **not yet used for dispatch**: with only a router set,
+is accepted but **not used for dispatch**: with only a router set,
 `worker_handle_fetch()` returns a 200 placeholder (`X-Worker-Routed: configured`,
 body `Router configured; native worker simulation does not perform route matching`)
 without matching any route; with neither handler nor router it returns 503.

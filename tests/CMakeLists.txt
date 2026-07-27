@@ -55,7 +55,7 @@ if(NOT EMSCRIPTEN)
         target_link_libraries(test_tls_crypto weblib ${PLATFORM_LIBS})
         add_test(NAME TlsCryptoTests COMMAND test_tls_crypto)
 
-        # TLS parsing tests (DER/ASN.1, later PEM/X.509) — malformed-input hardened
+        # TLS parsing tests (DER/ASN.1 + PEM; no X.509 parser exists) — malformed-input hardened
         add_executable(test_tls_parse test_tls_parse.c)
         target_include_directories(test_tls_parse PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/tls

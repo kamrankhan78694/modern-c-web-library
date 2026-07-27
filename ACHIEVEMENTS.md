@@ -106,7 +106,7 @@ Failures: 0    Success rate: 100%
 **Security Tooling**:
 - AddressSanitizer integration for runtime memory error detection
 - Valgrind support for comprehensive memory analysis
-- Zero security warnings from static analysis
+- Zero warnings from `-Wall -Wextra -pedantic` on GCC and Clang; no dedicated static analyser (cppcheck/clang-tidy/CodeQL) is run
 
 ### 4. High-Performance Async I/O ✅
 
@@ -253,7 +253,7 @@ See `examples/tls_server.c`, which reads the two PEM files itself and passes the
 | Compiler Warnings | ✅ **Zero** | Clean build with `-Wall -Wextra -pedantic` |
 | Security Warnings | ✅ **Zero** | All unsafe functions replaced |
 | Memory Errors | 🟡 **Reported zero, not gated** | Valgrind runs on every test binary but the CI step only gates on the last one, and a known `cache_get()` leak in the cache tests sits in the unenforced set; ASan/UBSan genuinely gate the TLS suites |
-| Static Analysis | ✅ **Pass** | No defects detected |
+| Static Analysis | ⚠️ **Not run** | Compiler diagnostics only — `-Wall -Wextra -pedantic` on GCC (`primary-checks`) and Clang (`clang-check`). No cppcheck/clang-tidy/CodeQL stage exists |
 
 ### Test Results
 

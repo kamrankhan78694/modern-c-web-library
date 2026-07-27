@@ -38,7 +38,7 @@ extern "C" {
  * operation itself; the TLS implementation lives in the other files in this directory.
  *
  * Naming: the tls_ prefix matches the subsystem-prefixed convention used across
- * the library (http_server_*, websocket_*, ...) and the planned TLS API
+ * the library (http_server_*, websocket_*, ...) and the TLS API
  * (tls_accept/tls_read/tls_write/tls_shutdown).
  */
 const char *tls_build_info(void);

@@ -3,9 +3,13 @@
  *
  * Part of the experimental pure-C TLS layer; compiled only under
  * -DWEBLIB_ENABLE_TLS=ON. Just enough of ITU-T X.690 DER to walk the structures
- * TLS needs — X.509 certificates and PKCS#8 private keys — with a hard security
- * requirement: it parses attacker-controlled input, so every read is bounds- and
+ * TLS needs — PKCS#8 private keys and SubjectPublicKeyInfo public keys — with a
+ * hard security requirement: it parses attacker-controlled input, so every read is bounds- and
  * well-formedness-checked and never reads outside the caller's buffer.
+ *
+ * The server certificate is NOT parsed here: its PEM body is base64-decoded to DER
+ * and sent opaquely, so there is no X.509 certificate-field parsing and no chain
+ * validation anywhere in this layer.
  *
  * This is a *reader* (decode only), not an encoder. It enforces DER's canonical
  * rules that matter for safety and identity: definite, minimal-length encoding

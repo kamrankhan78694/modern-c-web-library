@@ -3,8 +3,10 @@
  *
  * Built and run only when configured with -DWEBLIB_ENABLE_TLS=ON. It asserts that
  * the build wiring (option -> -DWEBLIB_TLS -> compiled native source -> linkable
- * symbol) works and that the layer honestly labels itself as experimental. There
- * is no cryptography to test yet.
+ * symbol) works and that the layer honestly labels itself as experimental.
+ * The cryptography and protocol code are covered by the sibling TLS suites
+ * (TlsCryptoTests, TlsParseTests, TlsTransportTests, TlsFuzzTests, TlsHttpTests,
+ * TlsInteropOpenssl), not here.
  */
 #include "tls.h"
 #include <stdio.h>
