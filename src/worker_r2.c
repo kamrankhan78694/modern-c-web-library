@@ -3,7 +3,8 @@
  *
  * Provides a pure-C abstraction over Cloudflare R2 object storage.
  * Mirrors the R2 Workers API: get, put, delete, list, head.
- * For native/test builds an in-memory store simulates the bucket.
+ * An in-memory store IS the implementation in every build (native, test and
+ * WASM/Workers); no JS glue to a real R2 bucket ships in this repo.
  *
  * R2 API surface (mirrors Cloudflare R2 Workers binding):
  *   - get(key)     → R2 object with body

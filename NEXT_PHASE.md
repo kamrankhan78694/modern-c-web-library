@@ -65,7 +65,7 @@ Zero compiler warnings under `-Wall -Wextra -pedantic`.
 |-----------|--------|
 | **Target users** | C developers building production HTTP/HTTPS backends, microservices, and real-time systems who require zero external dependencies and full source-level control |
 | **Desired outcomes** | A library that encrypts traffic (TLS 1.3 — a first, experimental server-side cut shipped in v2.0.0), speaks HTTP/2 and HTTP/3, persists data without external databases, scales across CPU cores via multi-process architecture, runs identically on Linux/macOS/Windows/BSD, and provides developer tooling for rapid iteration |
-| **Shipped non-native targets** | A WASM-safe source subset builds under Emscripten via `emcmake` — see the `EMSCRIPTEN` branch and `WEBLIB_SOURCES_WASM_SAFE` in `CMakeLists.txt`. It covers the router, JSON, template engine, body parser, cookies, sessions, input validation, cache, compression and the middleware set; WebSocket, async WebSocket, the benchmark harness and the whole TLS layer are excluded. `src/http_server.c` and `src/event_loop.c` are in the list too, but under Emscripten they compile down to stubs — there are no sockets on that target, so you drive the WASM build through the `wasm_*` API instead. A Cloudflare Workers layer (`src/worker_runtime.c`, `worker_kv/r2/d1/queues.c`) bridges the fetch-event model to the router with in-memory emulations of the KV/R2/D1/Queues bindings |
+| **Shipped non-native targets** | A WASM-safe source subset builds under Emscripten via `emcmake` — see the `EMSCRIPTEN` branch and `WEBLIB_SOURCES_WASM_SAFE` in `CMakeLists.txt`. It covers the router, JSON, template engine, body parser, cookies, sessions, input validation, cache, compression and the middleware set; WebSocket, async WebSocket, the benchmark harness and the whole TLS layer are excluded. `src/http_server.c` and `src/event_loop.c` are in the list too, but under Emscripten they compile down to stubs — there are no sockets on that target, so you drive the WASM build through the `wasm_*` API instead. A Cloudflare Workers layer (`src/worker_runtime.c`, `worker_kv/r2/d1/queues.c`) bridges the fetch-event model to the library's request/response types — `worker_set_router()` is accepted but never dispatched — with in-memory simulations of the KV/R2/D1/Queues bindings that are the implementation in every build, Workers included |
 | **Non-goals** | Full ORM abstraction; language bindings (Python/Go/Rust wrappers); GUI tools; package manager integration (apt/brew/vcpkg); a full server/socket stack under WebAssembly (the WASM-safe pure-logic subset already ships — porting the event loop and sockets to WASM is out of scope) |
 
 ---
@@ -175,7 +175,7 @@ Phase 12 — DELIVERED in v2.0.0 (planned as v1.2.0): TLS 1.3 Handshake & HTTPS
    │       — src/tls/der.c, pem.c, ed25519_key.c
    ├── [ ] Certificate *chain validation* (RSA/ECDSA signature verification) — NOT built, Phase 21
    ├── [x] ALPN negotiation of http/1.1  (h2 depends on Phase 13, not yet built)
-   ├── [x] `http_server_enable_tls()` API — include/kamran.k:620; takes PEM buffers + lengths,
+   ├── [x] `http_server_enable_tls()` API — include/kamran.k; takes PEM buffers + lengths,
    │       NOT file paths; returns -1 in async mode
    ├── [x] HTTPS example server with a self-signed certificate — examples/tls_server.c
    ├── [x] Real `openssl s_client` TLS 1.3 interop, incl. a >16 KiB fragmented response and two
@@ -305,7 +305,7 @@ Phase 21 (unscheduled): Security Residuals & TLS Hardening
 | **W8** | TLS Handshake Part 1 | ClientHello parsing; ServerHello; supported_versions; key_share (X25519) | ✅ `src/tls/handshake.c`, `wire.c`, `server_handshake.c` — plus HelloRetryRequest with the RFC 8446 §4.4.1 synthetic `message_hash` transcript rewrite, which the plan did not anticipate |
 | **W9** | TLS Handshake Part 2 | EncryptedExtensions; Certificate; CertificateVerify; Finished; transcript hash | ✅ `src/tls/server_handshake.c`, `handshake_auth.c` |
 | **W10** | Certificate Handling | `src/tls/x509.c` — X.509 DER/PEM parser; chain building; RSA/ECDSA verification | 🟡 Partial: `src/tls/der.c`, `pem.c`, `ed25519_key.c` *parse* the PKCS#8 Ed25519 private key, malformed-input hardened; the certificate is only PEM-decoded to DER and sent opaquely. ❌ No X.509 structure parsing, no chain building, no RSA/ECDSA verification — Phase 21 |
-| **W11** | HTTPS Server Integration | `http_server_enable_tls()`; ALPN; HTTPS example; SNI callback | ✅ `http_server_enable_tls()` (`include/kamran.k:620`) taking **PEM buffers plus explicit lengths**, not file paths; ALPN negotiating `http/1.1`; `examples/tls_server.c` (which reads the files itself). ❌ No SNI callback — Phase 21 |
+| **W11** | HTTPS Server Integration | `http_server_enable_tls()`; ALPN; HTTPS example; SNI callback | ✅ `http_server_enable_tls()` (`include/kamran.k`) taking **PEM buffers plus explicit lengths**, not file paths; ALPN negotiating `http/1.1`; `examples/tls_server.c` (which reads the files itself). ❌ No SNI callback — Phase 21 |
 | **W12** | TLS Testing & Security Audit | curl/browser validation; session resumption; TLS unit tests; timing analysis | 🟡 Partial: 7 ctest suites (`TlsTests`, `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`, `TlsHttpTests`, `TlsInteropOpenssl`), a deterministic fuzzer, and a real `openssl s_client` TLS 1.3 handshake + HTTPS round-trip in CI. ❌ No session resumption / 0-RTT. ❌ No browser page-load (Ed25519-only certs). ❌ **No external audit** |
 
 **Still open from Phase 12** → carried into Phase 21: RSA/ECDSA certificates and chain validation (and
@@ -480,7 +480,7 @@ external audit.
 | 12.3.4 | X.509 chain building + RSA/ECDSA verification | — | ❌ Not built. The server presents one self-supplied certificate; it does not validate chains. Phase 21 |
 
 #### 12.4 HTTPS Integration — DELIVERED
-Shipped as `http_server_enable_tls()` — declared at `include/kamran.k:620`:
+Shipped as `http_server_enable_tls()` — declared at `include/kamran.k`:
 
 ```c
 int http_server_enable_tls(http_server_t *server,

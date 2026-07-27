@@ -1537,9 +1537,13 @@ is accepted but **not yet used for dispatch**: with only a router set,
 body `Router configured; native worker simulation does not perform route matching`)
 without matching any route; with neither handler nor router it returns 503.
 
-In native builds the KV, R2, D1, and Queue handles are backed by in-memory
-implementations, which is what makes it possible to test Worker code with the ordinary
-native test suite before deploying it.
+The KV, R2, D1, and Queue handles are backed by in-memory implementations in **every**
+build — native, test, and WASM/Workers alike — not by Cloudflare's services. Reaching
+the real bindings would need a JS glue layer, and none ships here: `examples/worker.js`
+accepts `env` but never passes it into WASM, and no `wrangler.toml` ships. That is what
+lets you exercise Worker code from the ordinary native test suite — but it is not a
+local-only convenience: a deployed Worker gets the same in-memory arrays, so their fixed
+capacities are real limits. See [Cloudflare Workers API](../WORKER_API.md).
 
 ### WebAssembly runtime
 ```c

@@ -52,7 +52,7 @@ This document explicitly records architectural decisions, trade-offs, and known 
 
 1. **Integration test coverage** — Phase 7.5 added basic networking tests (GET, POST, 404, malformed, sequential connections).  Missing: keep-alive request *pipelining* (multiple requests written before the first response is read).  Chunked transfer encoding over real sockets is now covered by `test_stress_transfer_encoding_smuggling` (`tests/test_stress.c`), and timeout / slow-loris behaviour by `test_stress_async_idle_reaper`, `test_stress_slow_client`, `test_stress_slowloris_deadline` and `test_stress_request_deadline_silent`.  Concurrent parallel connections stress test was added in Phase 10.
 
-2. **Memory leak on error paths** — Some HTTP parsing error paths may leak partial header allocations.  Valgrind CI gate catches definite/indirect leaks, but conditional leaks under extreme error conditions need additional audit.
+2. **Memory leak on error paths** — Some HTTP parsing error paths may leak partial header allocations.  Valgrind runs in CI over every test binary, but its shell loop discards all exit statuses except the last, so it currently reports rather than gates; conditional leaks under extreme error conditions need additional audit either way.
 
 ### Medium Priority
 

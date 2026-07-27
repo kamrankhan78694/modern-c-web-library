@@ -95,17 +95,26 @@ correct `no_application_protocol` refusal.
 TLS is **off by default** and **native-only**.
 
 ```sh
-cmake -S . -B build-tls -DWEBLIB_ENABLE_TLS=ON
+cmake -S . -B build-tls -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON
 cmake --build build-tls
-ctest --test-dir build-tls
+(cd build-tls && ctest)   # 13 suites, of which 7 are TLS
 ```
+
+> `WEBLIB_TLS_TEST_HOOKS` exposes a deterministic-RNG seam used only by `TlsHttpTests`.
+> It is **TEST-ONLY** — never enable it in a production build. A deterministic RNG
+> removes every security property TLS has.
 
 - `WEBLIB_ENABLE_TLS=OFF` (the default): the build is byte-identical to a build
   with no TLS code — nothing in this directory is compiled.
 - `WEBLIB_ENABLE_TLS=ON` on a native target: defines `WEBLIB_TLS`, compiles
-  `src/tls/*.c`, and builds the seven guarded suites (`TlsTests`, `TlsCryptoTests`,
-  `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`, `TlsHttpTests`,
-  `TlsInteropOpenssl`; the last needs `-DWEBLIB_TLS_TEST_HOOKS=ON` for `TlsHttpTests`).
+  `src/tls/*.c`, and builds six guarded suites — `TlsTests`, `TlsCryptoTests`,
+  `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests` and `TlsInteropOpenssl`.
+  The last is registered only when the `tls_server` example is built and CMake
+  finds `bash`, and even then it **self-skips and reports a pass** without a
+  TLS 1.3-capable `openssl s_client` — so confirm it actually ran.
+- Adding `-DWEBLIB_TLS_TEST_HOOKS=ON` additionally builds `TlsHttpTests`, the only
+  end-to-end `http_server_enable_tls()` test, for **7 TLS suites and 13 in total**.
+  Without that flag you get 6 TLS suites and 12 in total.
 - WASM / Emscripten builds ignore the option entirely (no sockets to wrap; the
   browser / Cloudflare edge terminates TLS).
 

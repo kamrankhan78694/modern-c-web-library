@@ -3,7 +3,8 @@
  *
  * Provides a pure-C abstraction over Cloudflare Queues.
  * Mirrors the Queues Workers API: send, sendBatch, consume.
- * For native/test builds an in-memory FIFO queue is used.
+ * An in-memory FIFO queue IS the implementation in every build (native, test
+ * and WASM/Workers); no JS glue to a real Queues binding ships in this repo.
  *
  * Queues API surface (mirrors Cloudflare Queues Workers binding):
  *   - send(body)         → enqueue single message

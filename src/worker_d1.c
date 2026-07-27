@@ -3,8 +3,9 @@
  *
  * Provides a pure-C abstraction over Cloudflare D1 (SQLite-based)
  * database.  Mirrors the D1 Workers API: prepare, bind, run, first,
- * all, batch.  For native/test builds an in-memory table simulator
- * is used.
+ * all, batch.  An in-memory table simulator IS the implementation in every
+ * build (native, test and WASM/Workers); no JS glue to a real D1 binding ships
+ * in this repo, and worker_d1_batch() is not atomic the way env.DB.batch() is.
  *
  * D1 API surface (mirrors Cloudflare D1 Workers binding):
  *   - prepare(sql)     → prepared statement

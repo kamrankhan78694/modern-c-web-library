@@ -41,7 +41,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - DER/ASN.1 and PEM *parsing* for the PKCS#8 Ed25519 private key (`src/tls/der.c`, `pem.c`, `ed25519_key.c`); the server certificate is base64-decoded from PEM to DER and sent opaquely — it is never parsed as X.509
   - ALPN negotiating `http/1.1` (RFC 7301)
   - Sans-IO connection engine + blocking-socket adapter (`src/tls/tls_khannection.c`, `tls_transport.c`)
-  - `http_server_enable_tls(server, cert_pem, cert_len, key_pem, key_len)` — PEM **buffers with lengths**, not file paths (`include/kamran.k:622`); example in `examples/tls_server.c`
+  - `http_server_enable_tls(server, cert_pem, cert_len, key_pem, key_len)` — PEM **buffers with lengths**, not file paths (`include/kamran.k`); example in `examples/tls_server.c`
   - Deterministic fuzzer over the untrusted-input path plus a real `openssl s_client` TLS 1.3 interop test (`TlsFuzzTests`, `TlsInteropOpenssl`)
   - **Not delivered** — tracked as Phase 21 in [NEXT_PHASE.md](NEXT_PHASE.md):
     - [ ] External cryptographic audit
@@ -363,7 +363,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - [x] ✅ **Continuous Integration** - Automated testing
   - GitHub Actions CI: `primary-checks` (Docker GCC build + full ctest + Valgrind), `clang-check`, `macos-check` (pull requests only), `docker-image-check`
   - `tls-check` — a RelWithDebInfo build with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` running all 13 suites, plus an ASan/UBSan build running the 7 TLS suites
-  - Valgrind memory check gate (in `primary-checks`)
+  - Valgrind memory check in `primary-checks` (runs on every binary; note it currently reports rather than gates — its shell loop keeps only the last exit status)
   - Platform coverage today is Linux (GCC + Clang) and macOS (Clang, pull requests only); Windows and BSD runners are still open *(Phase 17, v2.5.0)*
 
 - [x] ✅ **Benchmarking Suite** - Performance benchmarks
@@ -469,7 +469,7 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 - **Phase 9 (v0.9.0)**: ✅ Performance & Observability — caching layer ✅, metrics middleware ✅, response compression ✅, async WebSocket ✅, benchmarking suite ✅
 - **Phase 10 (v1.0.0)**: ✅ Release Readiness — REST API example ✅, tutorials ✅, documentation ✅, CHANGELOG ✅, semantic versioning ✅
 - **Phase 11 (v2.0.0)**: ✅ TLS Foundation — SHA-256, SHA-512, HMAC, HKDF, ChaCha20, Poly1305, ChaCha20-Poly1305 AEAD, X25519, Ed25519, all with RFC known-answer tests (`TlsCryptoTests`). **EXPERIMENTAL and UNAUDITED**, off by default (`-DWEBLIB_ENABLE_TLS=ON` to build it), native-only. Planned as v1.1.0; landed in v2.0.0 alongside Phase 12. **SHA-384 and AES-256-GCM were deliberately dropped** — see [`src/tls/README.md`](src/tls/README.md)
-- **Phase 12 (v2.0.0)**: ✅ TLS 1.3 Handshake & HTTPS — record layer with the 2^14 plaintext limit and fragmentation (`src/tls/record.c`), server handshake state machine incl. HelloRetryRequest (RFC 8446 §4.1.4) with the §4.4.1 synthetic `message_hash` transcript rewrite (`src/tls/server_handshake.c`), DER/PEM certificate + PKCS#8 Ed25519 key parsing (`src/tls/der.c`, `pem.c`, `ed25519_key.c`), ALPN `http/1.1`, and `http_server_enable_tls()` (`include/kamran.k:620`). **EXPERIMENTAL and UNAUDITED**, server-side only, threaded mode only, native-only, one profile (`TLS_CHACHA20_POLY1305_SHA256` / X25519 / Ed25519). Real `openssl s_client` TLS 1.3 interop verified (`TlsInteropOpenssl`); browser page-load **not** achieved. Planned as v1.2.0; landed in v2.0.0
+- **Phase 12 (v2.0.0)**: ✅ TLS 1.3 Handshake & HTTPS — record layer with the 2^14 plaintext limit and fragmentation (`src/tls/record.c`), server handshake state machine incl. HelloRetryRequest (RFC 8446 §4.1.4) with the §4.4.1 synthetic `message_hash` transcript rewrite (`src/tls/server_handshake.c`), DER/PEM certificate + PKCS#8 Ed25519 key parsing (`src/tls/der.c`, `pem.c`, `ed25519_key.c`), ALPN `http/1.1`, and `http_server_enable_tls()` (`include/kamran.k`). **EXPERIMENTAL and UNAUDITED**, server-side only, threaded mode only, native-only, one profile (`TLS_CHACHA20_POLY1305_SHA256` / X25519 / Ed25519). Real `openssl s_client` TLS 1.3 interop verified (`TlsInteropOpenssl`); browser page-load **not** achieved. Planned as v1.2.0; landed in v2.0.0
 
 ### Planned Phases
 

@@ -271,7 +271,7 @@ See `examples/tls_server.c`, which reads the two PEM files itself and passes the
 | Valgrind | 🟡 Every push, not gating | The Docker job runs each `tests/test_*` binary under `--leak-check=full`, but its shell loop discards every exit status except the last, so results are reported rather than enforced |
 | AddressSanitizer + UBSan | ✅ Every push | The `tls-check` job builds with `-fsanitize=address,undefined` and runs the 7 TLS suites; 0 errors |
 | Buffer Overflow | ✅ Protected | All bounds checked |
-| Memory Leaks | ✅ Clean | Proper cleanup verified |
+| Memory Leaks | 🟡 Reported clean, not gated | Valgrind runs on every binary but the CI step keeps only the last exit status; a known `cache_get()` leak in the cache tests is in the unenforced set |
 
 ---
 

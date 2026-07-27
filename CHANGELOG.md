@@ -94,9 +94,12 @@ name, the session data API, and template auto-escaping. Each is described under
   suite that runs on both native and WASM builds.
 - **Cloudflare Workers runtime** (#70) — a fetch-event compatibility layer
   (`src/worker_runtime.c`) that bridges a Worker's request/response model to the
-  library's router: `worker_request_*` / `worker_response_*` / `worker_env_*`
-  types, `worker_set_fetch_handler()`, `worker_set_router()`, and
+  library's own request/response types: `worker_request_*` / `worker_response_*` /
+  `worker_env_*`, `worker_set_fetch_handler()`, `worker_set_router()`, and
   `worker_handle_fetch()`, which is exported for a JavaScript host to drive.
+  Note `worker_set_router()` is accepted but **not used for dispatch** — with only a
+  router set, `worker_handle_fetch()` returns a 200 placeholder without matching any
+  route. Routing requires a fetch handler that branches on the URL itself.
   `examples/worker_example.c` exercises the layer natively.
   `examples/worker.js` sketches the JS side but is a **template, not a working
   deployment**. Three of the six C exports it names — `_worker_init`,

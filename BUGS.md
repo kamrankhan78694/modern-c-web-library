@@ -275,16 +275,23 @@ secure_zero(decoded, sizeof(decoded));
 
 ## Stress Test Results Summary
 
-All 37 stress tests pass with zero failures and zero memory leaks. The leak check runs on every push
-in the `Build, Test & Memcheck (Docker)` CI job, which executes the suite under Valgrind on Ubuntu:
+All 37 stress tests pass with zero failures. Valgrind runs on every push in the
+`Build, Test & Memcheck (Docker)` CI job, which executes the suite under Valgrind on Ubuntu — but
+see the caveat below the block: its result is **reported, not enforced**.
 
 ```
 Tests run: 37
 Tests passed: 37
 Tests failed: 0
 
-Valgrind: 0 errors, 0 leaks
+Valgrind: 0 errors, 0 leaks   (observed for test_stress; see caveat)
 ```
+
+> **Caveat.** The CI step wraps Valgrind in a shell `for` loop with no `set -e`, so the step's exit
+> status is only that of the **last** test binary — a failure in any earlier one is printed and
+> discarded. These figures are therefore observed rather than gated, and at least one definite leak
+> currently sits in the discarded set (`cache_get()` returns an owned copy the cache tests never
+> free). Fixing the gate and those leaks is tracked separately.
 
 ### What Passed Cleanly
 

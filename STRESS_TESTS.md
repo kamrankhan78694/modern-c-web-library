@@ -240,7 +240,7 @@ in [BUGS.md](BUGS.md).
 | All unit tests pass | ✅ | 166/166 (test_weblib) |
 | All stress tests pass | ✅ | 37/37 (test_stress) |
 | Full ctest run passes | ✅ | 6/6 suites by default; 13/13 with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` |
-| Memory leak free | ✅ | Valgrind: 0 leaks, 0 errors |
+| Memory leak free | 🟡 | Valgrind reports 0 leaks/0 errors for `test_stress`, but the CI step gates only on the last binary, and a known `cache_get()` leak sits in the unenforced set — see the caveat under Test Results |
 | Buffer overflow safe | ✅ | All `sprintf` → `snprintf` |
 | JSON depth limit | ✅ | MAX_DEPTH=512 prevents stack overflow |
 | Request size limits | ✅ | Body 1MB, headers 16KB |

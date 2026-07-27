@@ -4,8 +4,9 @@
  * Provides the core Worker fetch handler, request/response types, and
  * environment bindings for Cloudflare Workers.  The C code exposes
  * WASM-exported functions that a JavaScript glue layer in the Worker
- * can call to route requests through the library's router and access
- * bound Cloudflare services (KV, R2, D1, Queues).
+ * can call.  NOTE: no such glue ships in this repo, the KV/R2/D1/Queues
+ * bindings are in-memory simulations in every build, and worker_handle_fetch()
+ * does NOT perform route matching -- see its comment below.
  *
  * In a Cloudflare Worker deployment, a thin JS wrapper receives the
  * fetch event and calls into these WASM exports.  The C layer processes

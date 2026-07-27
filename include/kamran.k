@@ -2163,8 +2163,9 @@ void worker_set_router(router_t *router);
  * Handle an incoming Worker fetch event.  WASM-exported entry point.
  * If a custom handler is set, delegates to it.  Otherwise, if a router is set,
  * returns a 200 placeholder ("X-Worker-Routed: configured") WITHOUT matching any
- * route — the native simulation does not inspect the URL path or consult the
- * router's route table.  With neither handler nor router set, returns 503.
+ * route — the simulation (which is what every build uses, WASM included) does not
+ * inspect the URL path or consult the router's route table.  With neither handler
+ * nor router set, returns 503.
  */
 WASM_EXPORT
 worker_response_t *worker_handle_fetch(worker_request_t *req,
