@@ -294,6 +294,131 @@ static void test_tls_transport(void) {
 
     close(sv[0]);
 }
+
+/* Server that only accepts + reads (no response) — for the half-close case. */
+static void *server_thread_readonly(void *arg) {
+    static tls_transport_t t;
+    srv_result_t *r = (srv_result_t *)arg;
+    tls_server_config_t cfg;
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.cert_der = KAT_CERT;
+    cfg.cert_len = sizeof KAT_CERT;
+    cfg.ed25519_seed = KAT_ED_SEED;
+    cfg.ed25519_pub = KAT_ED_PUB;
+    cfg.server_eph_sk = KAT_SERVER_EPH;
+    cfg.server_random = KAT_SERVER_RND;
+
+    r->accept_rc = tls_transport_accept(&t, r->fd, &cfg);
+    if (r->accept_rc == 0) {
+        r->req_len = tls_transport_read(&t, r->req, sizeof r->req - 1);
+        if (r->req_len > 0) {
+            r->req[r->req_len] = '\0';
+        }
+    }
+    tls_transport_close(&t);
+    return NULL;
+}
+
+/*
+ * A one-shot client that coalesces Finished + request + close_notify into a single
+ * write, so the server sees them in one recv (engine: HANDSHAKE -> ESTABLISHED ->
+ * CLOSED within one pump). accept must still succeed and the request must survive.
+ */
+static void test_tls_transport_halfclose(void) {
+    int sv[2];
+    pthread_t tid;
+    srv_result_t res;
+    int cfd, shl, fll;
+    uint8_t ch[TLS_RECORD_HEADER_LEN + sizeof KAT_CH];
+    uint8_t sh[600], flight[2048];
+    uint8_t combo[512];
+    uint8_t finmsg[4 + 32];
+    static const uint8_t ccs[6] = { 0x14, 0x03, 0x03, 0x00, 0x01, 0x01 };
+    static const uint8_t close_alert[2] = { 0x01, 0x00 };   /* warning, close_notify */
+    size_t combol = 0, n = 0;
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        check_true("halfclose: socketpair created", 0);
+        return;
+    }
+    res.fd = sv[0];
+    res.accept_rc = -1;
+    res.write_rc = -1;
+    res.req_len = -1;
+    cfd = sv[1];
+    if (pthread_create(&tid, NULL, server_thread_readonly, &res) != 0) {
+        check_true("halfclose: server thread started", 0);
+        close(sv[0]);
+        close(sv[1]);
+        return;
+    }
+
+    ch[0] = TLS_CONTENT_HANDSHAKE;
+    ch[1] = 0x03;
+    ch[2] = 0x03;
+    ch[3] = (uint8_t)((sizeof KAT_CH) >> 8);
+    ch[4] = (uint8_t)(sizeof KAT_CH);
+    memcpy(ch + TLS_RECORD_HEADER_LEN, KAT_CH, sizeof KAT_CH);
+    write_all_c(cfd, ch, sizeof ch);
+    shl = read_record(cfd, sh, sizeof sh);
+    fll = read_record(cfd, flight, sizeof flight);
+    check_true("halfclose: received the server flight", shl > 0 && fll > 0);
+
+    /* Build one buffer: CCS || Finished(hs seq0) || request(ap seq0) || close_notify(ap seq1). */
+    memcpy(combo, ccs, sizeof ccs);
+    combol = sizeof ccs;
+    finmsg[0] = TLS_HS_FINISHED;
+    finmsg[1] = 0x00;
+    finmsg[2] = 0x00;
+    finmsg[3] = 0x20;
+    memcpy(finmsg + 4, KAT_CLIENT_FINISHED_VD, 32);
+    tls_record_seal(KAT_CLIENT_HS_KEY, KAT_CLIENT_HS_IV, 0, TLS_CONTENT_HANDSHAKE,
+                    finmsg, sizeof finmsg, 0, combo + combol, sizeof combo - combol, &n);
+    combol += n;
+    tls_record_seal(KAT_CLIENT_AP_KEY, KAT_CLIENT_AP_IV, 0, TLS_CONTENT_APPLICATION_DATA,
+                    (const uint8_t *)CLIENT_REQUEST, sizeof CLIENT_REQUEST - 1, 0,
+                    combo + combol, sizeof combo - combol, &n);
+    combol += n;
+    tls_record_seal(KAT_CLIENT_AP_KEY, KAT_CLIENT_AP_IV, 1, TLS_CONTENT_ALERT,
+                    close_alert, sizeof close_alert, 0, combo + combol, sizeof combo - combol, &n);
+    combol += n;
+    check_true("halfclose: sent coalesced Finished+request+close_notify",
+               write_all_c(cfd, combo, combol) == 0);
+    close(cfd);
+    pthread_join(tid, NULL);
+
+    check_true("halfclose: accept succeeds despite the coalesced close_notify",
+               res.accept_rc == 0);
+    check_true("halfclose: the buffered request survives and reads back exactly",
+               res.req_len == (ssize_t)(sizeof CLIENT_REQUEST - 1)
+               && memcmp(res.req, CLIENT_REQUEST, (size_t)res.req_len) == 0);
+    close(sv[0]);
+}
+
+/* close/teardown must wipe the decrypted application plaintext, not just the keys. */
+static void test_tls_transport_wipe(void) {
+    static tls_transport_t t;
+    size_t i;
+    int nonzero = 0;
+
+    tls_khannection_init(&t.conn, NULL);   /* HANDSHAKE state; cfg unused without a handshake */
+    t.fd = -1;
+    t.app_off = 0;
+    t.app_len = 100;
+    memset(t.app, 0xAB, sizeof t.app);   /* stand-in for buffered decrypted request bytes */
+
+    tls_transport_close(&t);   /* not ESTABLISHED, so no close_notify send; just teardown */
+
+    for (i = 0; i < sizeof t.app; i++) {
+        if (t.app[i] != 0) {
+            nonzero = 1;
+            break;
+        }
+    }
+    check_true("wipe: teardown zeroes the buffered decrypted plaintext",
+               !nonzero && t.app_len == 0 && t.app_off == 0);
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -302,6 +427,8 @@ int main(void) {
     return 1;
 #else
     test_tls_transport();
+    test_tls_transport_halfclose();
+    test_tls_transport_wipe();
     if (g_failures == 0) {
         printf("All TLS transport tests passed.\n");
     }

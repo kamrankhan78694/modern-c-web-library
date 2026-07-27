@@ -9,6 +9,7 @@
 
 #ifdef WEBLIB_TLS
 
+#include "kamran.k"   /* secure_zero */
 #include <errno.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -20,6 +21,17 @@
 #else
 #define TLS_SEND_FLAGS 0
 #endif
+
+/* Tear down: wipe the engine's key material AND the decrypted application
+ * plaintext buffered here (the strictly-more-sensitive secret — cookies, auth
+ * headers, request bodies), so neither lingers in the freed struct / a core dump.
+ * Idempotent. */
+static void transport_wipe(tls_transport_t *t) {
+    tls_khannection_wipe(&t->conn);
+    secure_zero(t->app, sizeof t->app);
+    t->app_off = 0;
+    t->app_len = 0;
+}
 
 /* Write every byte of `buf` to `fd`, retrying short writes and EINTR. 0 / -1. */
 static int send_all_fd(int fd, const uint8_t *buf, size_t len) {
@@ -57,7 +69,7 @@ static int transport_pump(tls_transport_t *t) {
         n = recv(t->fd, raw, sizeof raw, 0);
     } while (n < 0 && errno == EINTR);
     if (n < 0) {
-        tls_khannection_wipe(&t->conn);   /* fail closed: don't leave keys behind */
+        transport_wipe(t);   /* fail closed */
         return -1;
     }
     if (n == 0) {
@@ -69,12 +81,12 @@ static int transport_pump(tls_transport_t *t) {
                               t->app, sizeof t->app, &app_len);
     if (out_len > 0) {
         if (send_all_fd(t->fd, out, out_len) < 0) {
-            tls_khannection_wipe(&t->conn);
+            transport_wipe(t);
             return -1;
         }
     }
     if (rc == TLS_KHANNECTION_RC_ERROR) {
-        tls_khannection_wipe(&t->conn);   /* idempotent: the engine already wiped */
+        transport_wipe(t);   /* idempotent: the engine already wiped its own state */
         return -1;
     }
     t->app_off = 0;
@@ -106,15 +118,27 @@ int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *
 
     while (tls_khannection_state(&t->conn) == TLS_KHANNECTION_HANDSHAKE) {
         if (transport_pump(t) <= 0) {
-            tls_khannection_wipe(&t->conn);   /* error or EOF mid-handshake: fail closed */
+            transport_wipe(t);   /* error or EOF mid-handshake: fail closed */
             return -1;
         }
     }
-    if (tls_khannection_state(&t->conn) != TLS_KHANNECTION_ESTABLISHED) {
-        tls_khannection_wipe(&t->conn);
-        return -1;
+    /* Success is normally state ESTABLISHED. It is ALSO success if the peer
+     * coalesced its close_notify with (or right after) its Finished in one recv:
+     * the engine then runs HANDSHAKE -> ESTABLISHED -> CLOSED inside a single pump,
+     * so the terminal state is CLOSED. Application bytes can only be produced once
+     * the handshake has established, so a non-empty app buffer proves it completed
+     * and a request was received — keep it rather than discarding the request and
+     * misreporting a completed handshake as a failure. (The peer has closed its
+     * write side; responding to such a half-closed request is not yet supported —
+     * see the header's limitations.) */
+    if (tls_khannection_state(&t->conn) == TLS_KHANNECTION_ESTABLISHED) {
+        return 0;
     }
-    return 0;
+    if (tls_khannection_state(&t->conn) == TLS_KHANNECTION_CLOSED && t->app_len > 0) {
+        return 0;
+    }
+    transport_wipe(t);
+    return -1;
 }
 
 ssize_t tls_transport_read(tls_transport_t *t, void *buf, size_t len) {
@@ -166,11 +190,11 @@ int tls_transport_write(tls_transport_t *t, const void *buf, size_t len) {
         }
         if (tls_khannection_send(&t->conn, p + off, chunk, out, sizeof out, &out_len)
             != TLS_KHANNECTION_RC_OK) {
-            tls_khannection_wipe(&t->conn);   /* fail closed */
+            transport_wipe(t);   /* fail closed */
             return -1;
         }
         if (send_all_fd(t->fd, out, out_len) < 0) {
-            tls_khannection_wipe(&t->conn);
+            transport_wipe(t);
             return -1;
         }
         off += chunk;
@@ -190,9 +214,7 @@ void tls_transport_close(tls_transport_t *t) {
             (void)send_all_fd(t->fd, out, out_len);   /* best effort */
         }
     }
-    tls_khannection_wipe(&t->conn);
-    t->app_off = 0;
-    t->app_len = 0;
+    transport_wipe(t);   /* wipe keys AND any buffered decrypted plaintext */
 }
 
 #endif /* WEBLIB_TLS */

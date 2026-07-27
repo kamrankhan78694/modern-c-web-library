@@ -25,7 +25,13 @@
  * tls_khannection's profile and limits (one cipher/group/signature, 1-RTT, no
  * resumption/KeyUpdate/renegotiation). The ephemeral key and ServerHello random in
  * `cfg` must be fresh CSPRNG output per connection in production (see
- * server_handshake.h).
+ * server_handshake.h). No half-close: if the peer sends its close_notify before it
+ * has read a response (e.g. a one-shot client that shuts down its write side right
+ * after the request), tls_transport_accept still succeeds and the buffered request
+ * is readable, but tls_transport_write can no longer send a response (the engine is
+ * CLOSED). Full half-close (responding after the peer's close_notify) is deferred to
+ * the interoperability milestone; ordinary request/response clients that keep the
+ * connection open for the reply are unaffected.
  *
  * Verified in tests/test_tls_transport.c: a real handshake and encrypted
  * request/response over a socketpair, cross-checked against the independent oracle
