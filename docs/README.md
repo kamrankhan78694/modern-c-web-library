@@ -36,7 +36,7 @@ The library's stable, supported surface. All of it shipped in v1.0.0; 2.0.0 hard
 - Middleware chain processing
 - Request/response helpers
 - JSON parser and serializer
-- Cross-platform (Linux, macOS, Windows)
+- Cross-platform: Linux and macOS (both built and tested in CI). Windows is **not** supported — the networking core is POSIX-only; see Phase 17 in [NEXT_PHASE.md](../NEXT_PHASE.md)
 
 ### WebSocket Support
 - RFC 6455 compliant implementation

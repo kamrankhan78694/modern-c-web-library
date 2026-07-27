@@ -429,7 +429,7 @@ The `docker-run.sh` script provides convenient shortcuts:
 
 1. **Zero Setup**: Contributors don't need to install GCC, CMake, or other tools
 2. **Consistent Environment**: Same build environment for everyone
-3. **Platform Independent**: Works on Windows, macOS, Linux
+3. **Platform Independent**: the *container* runs anywhere Docker does, including Windows hosts — but the library inside it is built for Linux. A native Windows build is not supported (POSIX-only networking core)
 4. **CI/CD Ready**: Same Docker setup works in automated pipelines
 5. **Isolation**: Doesn't interfere with your system tools/libraries
 6. **Pure C Philosophy**: Docker is only for development; the library remains dependency-free

@@ -15,7 +15,7 @@ This is a **strict pure C project** with zero external dependencies. All contrib
 
 The same sources build for three targets, so a change has to be considered against all three:
 
-- **Native** (Linux/macOS/Windows) — the full library, including sockets, threads, WebSocket and the opt-in TLS layer.
+- **Native** (Linux/macOS only — the networking core is POSIX-only and Windows is not supported) — the full library, including sockets, threads, WebSocket and the opt-in TLS layer.
 - **WebAssembly** (Emscripten) — a pure-logic subset. `CMakeLists.txt` splits sources into `WEBLIB_SOURCES_WASM_SAFE` and `WEBLIB_SOURCES_NATIVE_ONLY`; anything doing OS I/O belongs in the latter and is excluded from WASM builds.
 - **Cloudflare Workers** — the `src/worker_*.c` runtime (fetch handler, KV, R2, D1, Queues), compiled to WASM. See `docs/WORKER_API.md`.
 
@@ -339,7 +339,7 @@ When adding platform-specific code:
 
 1. Use `#ifdef` guards matching existing patterns
 2. Provide fallback implementation for unsupported platforms
-3. Test on Linux, macOS, and Windows (if possible)
+3. Test on Linux and macOS (the two platforms CI builds; Windows is not supported)
 4. Document platform limitations in code comments
 
 ## Testing Strategy
@@ -436,7 +436,7 @@ Before implementing new functionality:
 
 1. Check `TODO.md` for planned approach and priority
 2. Verify it can be implemented in pure C without dependencies
-3. Consider platform portability (Linux/macOS/Windows)
+3. Consider platform portability (Linux/macOS; Windows is not supported today — see Phase 17)
 4. Write tests following existing test patterns
 5. Add example usage to `examples/` if user-facing
 6. Update `README.md` API reference section

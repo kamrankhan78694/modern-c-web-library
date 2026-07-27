@@ -11,7 +11,7 @@ framework written entirely in ISO C with no external dependencies. It can:
 - Generate C source files and headers that fit the existing structure and naming.
 - Implement and extend routing, middleware, async I/O, JSON, sessions, WebSocket and the
   Cloudflare Workers runtime modules.
-- Maintain the cross-platform CMake build (Linux, macOS, Windows, and Emscripten/WASM).
+- Maintain the cross-platform CMake build (Linux, macOS, and Emscripten/WASM; Windows is not supported — the networking core is POSIX-only).
 - Write example applications under `examples/` demonstrating library usage.
 - Write tests for the project's own lightweight test framework, and register new test
   binaries in `tests/CMakeLists.txt`.

@@ -162,7 +162,7 @@ Failures: 0    Success rate: 100%
 - ✅ Header parsing and management
 - ✅ Route parameter extraction
 - ✅ Response helpers (text, JSON, template)
-- ✅ Cross-platform support (Linux, macOS, Windows)
+- ✅ Cross-platform support: Linux and macOS (both in CI). ❌ Windows is **not** supported — the networking core is POSIX-only and never built on Windows; planned as Phase 17
 - ✅ WebAssembly target via Emscripten (`emcmake cmake ..`) — a WASM-safe subset: JSON, router, template engine, input validation, cookies, body parser, compression. OS-dependent modules (sockets, HTTP server, event loop, TLS) are excluded from WASM builds. See `examples/wasm_example.c`.
 - ✅ Cloudflare Workers runtime layer (`worker_*` fetch-event API) with pure-C KV, R2, D1 and Queues binding APIs — **in-memory simulations in every build (native, test, and WASM)**, not the real Cloudflare services. Reaching the real bindings would need a JS glue layer, and none ships here: `examples/worker.js` accepts `env` but never passes it into WASM, and no `wrangler.toml` ships. See [docs/WORKER_API.md](docs/WORKER_API.md).
 - ✅ WebSocket support (RFC 6455, threaded + async)
