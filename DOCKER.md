@@ -261,8 +261,16 @@ cmake .. && make 2>&1 | grep -i warning
 ### Step 6: Check Memory Leaks
 ```bash
 cd /workspace/build
-valgrind --leak-check=full ./tests/test_weblib
-# Should show "no leaks are possible" — CI gates on exactly this for every test binary
+valgrind --leak-check=full --show-leak-kinds=definite,indirect \
+         --errors-for-leak-kinds=definite,indirect --error-exitcode=1 \
+         ./tests/test_weblib
+# Must exit 0: zero definite and zero indirect leaks. This is the exact command CI runs,
+# over every tests/test_* binary, so check the others too before pushing.
+#
+# Do NOT expect Valgrind's "no leaks are possible" line. That appears only when zero bytes
+# remain at exit, including *still-reachable* — and this binary starts a thread pool, whose
+# cached thread stacks glibc never returns. Still-reachable and possible blocks are counted
+# in the LEAK SUMMARY but are not gated.
 ```
 
 ### Step 7: Commit and Push

@@ -286,7 +286,7 @@ Tests run: 37
 Tests passed: 37
 Tests failed: 0
 
-Valgrind: 0 errors, 0 leaks
+Valgrind: 0 errors, 0 definite leaks, 0 indirect leaks
 ```
 
 

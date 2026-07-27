@@ -99,7 +99,7 @@ been dropped rather than guessed at. What CI actually gates on — and what is s
 `valgrind --leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite,indirect --error-exitcode=1`
 enforces: zero errors and zero definite or indirect leaks, on every `tests/test_*` binary, on every push.
 
-> **History.** Until 2.0.1 this gate did not actually gate: the CI step wrapped Valgrind in a shell
+> **History.** This gate did not actually gate until PR #131 (landed after v2.0.0): the CI step wrapped Valgrind in a shell
 > `for` loop with no `set -e`, so the step's exit status was only the **last** binary's and a failure
 > in any earlier one was printed and discarded. A definite leak was hiding in that discarded set —
 > `cache_get()` returns an owned copy the cache tests never freed. Both the loop and the leaks are
