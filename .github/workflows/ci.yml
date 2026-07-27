@@ -142,7 +142,7 @@ jobs:
         run: cmake --build build-tls --parallel
 
       - name: Run full test suite (TLS on)
-        run: cd build-tls && ctest --output-on-failure --timeout 300
+        run: cd build-tls && ctest --output-on-failure --timeout 300 --no-tests=error
 
       - name: Configure (ASan + UBSan)
         run: |
@@ -159,12 +159,15 @@ jobs:
 
       # Only the TLS suites: the sanitizer signal we care about here is in the
       # crypto/parser/state-machine code.  halt_on_error makes UB fatal instead
-      # of merely logged, so a regression fails the job.
+      # of merely logged, so a regression fails the job.  --no-tests=error is
+      # essential with -R: ctest exits 0 when a filter matches nothing, so a
+      # rename or a dropped add_test() would silently stop running the suites
+      # while the job stayed green — the exact failure this whole job removes.
       - name: Run TLS suites under ASan/UBSan
         env:
           ASAN_OPTIONS: detect_leaks=0
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: cd build-tls-san && ctest --output-on-failure --timeout 300 -R '^Tls'
+        run: cd build-tls-san && ctest --output-on-failure --timeout 300 --no-tests=error -R '^Tls'
 
   # macOS cross-platform check — runs only on pull requests to avoid
   # burning expensive macOS minutes on every push to main.

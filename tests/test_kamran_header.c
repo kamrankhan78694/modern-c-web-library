@@ -3,13 +3,22 @@
 #include <string.h>
 
 /*
- * Assertion that survives NDEBUG.
+ * Assertions that survive NDEBUG.
  *
- * Bare CHECK() compiles to nothing when NDEBUG is defined, which CMake does for
- * the Release / RelWithDebInfo configurations — and RelWithDebInfo is exactly what
- * CI builds. This suite previously used CHECK() throughout, so in CI it passed
- * unconditionally: it would have reported success even if every invariant below
- * were false. CHECK() is always evaluated and makes main() return non-zero.
+ * This suite previously used the standard assert(), which the C library compiles
+ * to nothing when NDEBUG is defined — and CMake defines NDEBUG for the Release /
+ * RelWithDebInfo configurations, the latter being exactly what CI builds. Every
+ * assertion here was therefore removed by the preprocessor in CI, so the suite
+ * passed unconditionally: it would have reported success even if every invariant
+ * below were false.
+ *
+ * CHECK()   — always evaluated; records a failure and keeps going, so one broken
+ *             invariant does not hide the others.
+ * REQUIRE() — for preconditions that later statements depend on (chiefly non-NULL
+ *             pointers). Unlike CHECK() it returns immediately, because assert()
+ *             used to abort here: continuing past a failed pointer check would
+ *             dereference NULL, which is undefined behaviour rather than a
+ *             reported test failure.
  */
 static int g_failures = 0;
 #define CHECK(cond)                                                       \
@@ -19,11 +28,18 @@ static int g_failures = 0;
             g_failures++;                                                 \
         }                                                                 \
     } while (0)
+#define REQUIRE(cond)                                                     \
+    do {                                                                  \
+        if (!(cond)) {                                                    \
+            printf("FAIL (fatal): %s (%s:%d)\n", #cond, __FILE__, __LINE__); \
+            return 1;                                                     \
+        }                                                                 \
+    } while (0)
 
 int main(void) {
     const char *signature = weblib_kamran_signature();
 
-    CHECK(signature != NULL);
+    REQUIRE(signature != NULL);
     CHECK(strstr(signature, WEBLIB_AUTHOR_KAMRAN) != NULL);
 
     /* ---- Semantic Versioning tests ---- */
@@ -55,7 +71,7 @@ int main(void) {
     CHECK(WEBLIB_VERSION_ENCODE(0, 9, 9) < WEBLIB_VERSION_ENCODE(1, 0, 0));
 
     /* Runtime version API */
-    CHECK(weblib_version() != NULL);
+    REQUIRE(weblib_version() != NULL);
     CHECK(strcmp(weblib_version(), WEBLIB_VERSION) == 0);
 
     /* weblib_version_components returns correct values */
