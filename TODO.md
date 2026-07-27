@@ -363,7 +363,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
 - [x] ✅ **Continuous Integration** - Automated testing
   - GitHub Actions CI: `primary-checks` (Docker GCC build + full ctest + Valgrind), `clang-check`, `macos-check` (pull requests only), `docker-image-check`
   - `tls-check` — a RelWithDebInfo build with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` running all 13 suites, plus an ASan/UBSan build running the 7 TLS suites
-  - Valgrind memory check in `primary-checks` (runs on every binary; note it currently reports rather than gates — its shell loop keeps only the last exit status)
+  - Valgrind memory check gate in `primary-checks` (every test binary; a leak in any one fails the job)
   - Platform coverage today is Linux (GCC + Clang) and macOS (Clang, pull requests only); Windows and BSD runners are still open *(Phase 17, v2.5.0)*
 
 - [x] ✅ **Benchmarking Suite** - Performance benchmarks

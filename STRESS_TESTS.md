@@ -16,8 +16,10 @@ re-checked against the v2.0.0 tree on 2026-07-27*
 
 A production-level stress test suite was developed and is run on every push against the Modern C Web
 Library. The library demonstrates **stable behaviour and clean memory handling** across all tested
-components. Six issues were identified by the
-original run, documented in [BUGS.md](BUGS.md), ranging from Critical (SIGPIPE handling) to
+components, with zero **definite or indirect** memory leaks gated under Valgrind in CI (those are the
+kinds the gate treats as errors; *possible* and *still-reachable* blocks are shown but do not fail
+the job). Six issues were identified by the original run, documented in [BUGS.md](BUGS.md),
+ranging from Critical (SIGPIPE handling) to
 Informational; five were fixed before v1.0.0 shipped on 2026-02-22, and the sixth is partially
 addressed.
 
@@ -93,16 +95,15 @@ Valgrind Results (CI, Ubuntu/gcc):
 
 The original report quoted exact heap figures (393,359 allocs, all freed; 0 bytes in use at exit).
 Those were measured against the 28-test suite and are no longer accurate for 37 tests, so they have
-been dropped rather than guessed at. What is stated above is what
-`valgrind --leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=1` reports — which
-is not the same as what CI gates on; see the caveat immediately below.
+been dropped rather than guessed at. What CI actually gates on — and what is stated above — is what
+`valgrind --leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite,indirect --error-exitcode=1`
+enforces: zero errors and zero definite or indirect leaks, on every `tests/test_*` binary, on every push.
 
-> **Caveat, accurate as of 2.0.0.** Valgrind *runs* over every `tests/test_*` binary, but the CI
-> step wraps it in a shell `for` loop with no `set -e`, so the step's exit status is only that of
-> the **last** binary — a failure in any earlier one is printed and discarded. The numbers above
-> are therefore observed, not enforced, and at least one definite leak is currently in the
-> discarded set (`cache_get()` returns an owned copy that the cache tests never free). Fixing the
-> gate and the leaks is tracked separately; until that lands, do not read "0 leaks" as a gate.
+> **History.** This gate did not actually gate until PR #131 (landed after v2.0.0): the CI step wrapped Valgrind in a shell
+> `for` loop with no `set -e`, so the step's exit status was only the **last** binary's and a failure
+> in any earlier one was printed and discarded. A definite leak was hiding in that discarded set —
+> `cache_get()` returns an owned copy the cache tests never freed. Both the loop and the leaks are
+> fixed; the step now accumulates every binary's status.
 
 ### Detailed Results by Category
 
@@ -241,7 +242,7 @@ in [BUGS.md](BUGS.md).
 | All unit tests pass | ✅ | 166/166 (test_weblib) |
 | All stress tests pass | ✅ | 37/37 (test_stress) |
 | Full ctest run passes | ✅ | 6/6 suites by default; 13/13 with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` |
-| Memory leak free | 🟡 | Valgrind reports 0 leaks/0 errors for `test_stress`, but the CI step gates only on the last binary, and a known `cache_get()` leak sits in the unenforced set — see the caveat under Test Results |
+| Memory leak free | ✅ | Valgrind: 0 definite/indirect leaks, 0 errors — gated on every test binary in CI |
 | Buffer overflow safe | ✅ | All `sprintf` → `snprintf` |
 | JSON depth limit | ✅ | MAX_DEPTH=512 prevents stack overflow |
 | Request size limits | ✅ | Body 1MB, headers 16KB |

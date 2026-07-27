@@ -11,11 +11,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Stage 1: Primary gate ──────────────────────────────────────────
-  # Single Docker-based job replaces the old Docker job AND the native
-  # ubuntu/gcc job.  GCC build, full test suite, and Valgrind memcheck
-  # all happen inside Dockerfile.dev (which already ships gcc + valgrind).
-  # Docker Buildx layer caching keeps rebuilds fast.
+  # All five jobs run in PARALLEL. They used to be staged behind
+  # primary-checks ("save minutes if the primary fails"), but this is a
+  # public repository — Actions minutes are free, macOS included — so the
+  # gate saved nothing and doubled wall time: ~6.5 min (3.5 primary + 2.7
+  # slowest secondary) instead of ~3.5 (the longest single job). The
+  # concurrency group above already cancels superseded runs on the same ref.
+  #
+  # primary-checks: GCC build, full test suite, and Valgrind memcheck, all
+  # inside Dockerfile.dev (which already ships gcc + valgrind). Docker
+  # Buildx layer caching keeps rebuilds fast.
   primary-checks:
     name: Build, Test & Memcheck (Docker)
     runs-on: ubuntu-latest
@@ -42,29 +47,44 @@ jobs:
       - name: Run tests
         run: docker run --rm modern-c-weblib:dev /bin/bash -c "cd build && ctest --output-on-failure --timeout 120"
 
+      # A shell for-loop exits with the status of its LAST iteration, so the
+      # previous version of this step reported Valgrind failures for every
+      # binary but only *gated* on the last one (test_worker, by glob order) —
+      # a definite leak in test_weblib or test_stress was printed and then
+      # discarded, and the job stayed green. `rc` accumulates instead, so every
+      # binary still runs (one failure does not mask the rest) and any failure
+      # fails the step. --errors-for-leak-kinds is stated explicitly rather than
+      # relying on Valgrind's default, so the intent survives a version bump.
       - name: Valgrind memory check
         run: |
           docker run --rm modern-c-weblib:dev /bin/bash -c '
-            cd build
+            cd build || exit 1
+            rc=0
+            ran=0
             for test_bin in tests/test_*; do
               if [ -x "$test_bin" ]; then
                 echo "=== Valgrind: $test_bin ==="
+                ran=$((ran+1))
                 valgrind \
                   --leak-check=full \
                   --error-exitcode=1 \
+                  --errors-for-leak-kinds=definite,indirect \
                   --show-leak-kinds=definite,indirect \
-                  ./"$test_bin"
+                  ./"$test_bin" || rc=1
               fi
             done
+            if [ "$ran" -eq 0 ]; then
+              echo "ERROR: no test binaries matched tests/test_* - nothing was checked" >&2
+              exit 1
+            fi
+            echo "Valgrind checked $ran test binaries."
+            exit $rc
           '
-
-  # ── Stage 2: Secondary checks (only after Stage 1 passes) ─────────
 
   # Clang compilation — catches warnings/errors that GCC misses.
   # No valgrind (already covered above), so this is a lightweight job.
   clang-check:
     name: Clang Build & Test
-    needs: primary-checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -108,7 +128,6 @@ jobs:
   # TlsHttpTests; it is OFF in any production build.
   tls-check:
     name: TLS Build & Test (experimental layer)
-    needs: primary-checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -169,11 +188,11 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: cd build-tls-san && ctest --output-on-failure --timeout 300 --no-tests=error -R '^Tls'
 
-  # macOS cross-platform check — runs only on pull requests to avoid
-  # burning expensive macOS minutes on every push to main.
+  # macOS cross-platform check — runs only on pull requests: every push to
+  # main lands via a PR here, so the PR run already covered that commit and a
+  # second identical run on main adds latency without information.
   macos-check:
     name: macOS Compatibility
-    needs: primary-checks
     if: github.event_name == 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 10
@@ -205,7 +224,6 @@ jobs:
   # source code change (skipped for docs-only / CI-only edits).
   docker-image-check:
     name: Production Docker Image
-    needs: primary-checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

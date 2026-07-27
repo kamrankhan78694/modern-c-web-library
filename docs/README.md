@@ -196,7 +196,7 @@ Stress-test results are in [STRESS_TESTS.md](../STRESS_TESTS.md) — originally 
 ## Code Quality
 
 - **6 ctest suites in a default build** — `WebLibTests` (166 unit tests), `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`. Building with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` adds 7 more covering the experimental TLS layer, for 13 in total. Run them all with `cd build && ctest --output-on-failure`.
-- **Valgrind** — the default build runs the full suite under Valgrind in CI. Note the step only *gates* on the last test binary (a shell-loop bug), so its result is reported rather than enforced, and a known `cache_get()` leak in the tests sits in the unenforced set; fixing both is tracked separately. The TLS build is covered by an ASan/UBSan run instead, not Valgrind.
+- **Valgrind clean** — the default build runs the full suite under Valgrind in CI, and every binary's result gates the job: a definite or indirect leak anywhere fails it. The TLS build is covered by an ASan/UBSan run instead, not Valgrind.
 - **Static analysis** — Clean builds on GCC/Clang with `-Wall -Wextra -pedantic`
 - **CI/CD** — `primary-checks` (gcc build, full suite, Valgrind), `clang-check`, `tls-check` (TLS build plus an ASan/UBSan run of the TLS suites), `macos-check` (pull requests only), and `docker-image-check`
 - **Code review** — All changes reviewed

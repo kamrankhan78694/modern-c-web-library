@@ -3525,6 +3525,31 @@ void test_cache_create_destroy(void) {
     PASS();
 }
 
+/*
+ * cache_get() returns a NEWLY ALLOCATED copy that the caller owns (src/cache.c:
+ * `strdup(entry->value)`).  Writing `ASSERT(cache_get(c, "k") != NULL)` therefore
+ * leaks on every hit, which is exactly what these tests used to do at 20 call
+ * sites.  These helpers make the ownership impossible to get wrong: they free the
+ * copy and return only the answer the assertion needs.
+ *
+ * The cast in free() is required because the return type is `const char *`.
+ */
+static int cache_has(cache_t *c, const char *key) {
+    const char *v = cache_get(c, key);
+    if (!v) return 0;
+    free((void *)v);
+    return 1;
+}
+
+static int cache_value_is(cache_t *c, const char *key, const char *expect) {
+    const char *v = cache_get(c, key);
+    int ok;
+    if (!v) return 0;
+    ok = (strcmp(v, expect) == 0);
+    free((void *)v);
+    return ok;
+}
+
 void test_cache_set_get(void) {
     TEST("cache (set/get)");
 
@@ -3535,19 +3560,15 @@ void test_cache_set_get(void) {
     ASSERT(cache_set(c, "key1", "value1", 0) == 0);
     ASSERT(cache_count(c) == 1);
 
-    const char *val = cache_get(c, "key1");
-    ASSERT(val != NULL);
-    ASSERT(strcmp(val, "value1") == 0);
+    ASSERT(cache_value_is(c, "key1", "value1"));
 
     /* Update existing key */
     ASSERT(cache_set(c, "key1", "updated", 0) == 0);
     ASSERT(cache_count(c) == 1);
-    val = cache_get(c, "key1");
-    ASSERT(val != NULL);
-    ASSERT(strcmp(val, "updated") == 0);
+    ASSERT(cache_value_is(c, "key1", "updated"));
 
     /* Get non-existent key */
-    ASSERT(cache_get(c, "nonexistent") == NULL);
+    ASSERT(!cache_has(c, "nonexistent"));
 
     /* NULL safety */
     ASSERT(cache_set(NULL, "k", "v", 0) == -1);
@@ -3573,8 +3594,8 @@ void test_cache_delete(void) {
     /* Delete existing */
     ASSERT(cache_delete(c, "k1") == 0);
     ASSERT(cache_count(c) == 1);
-    ASSERT(cache_get(c, "k1") == NULL);
-    ASSERT(cache_get(c, "k2") != NULL);
+    ASSERT(!cache_has(c, "k1"));
+    ASSERT(cache_has(c, "k2"));
 
     /* Delete non-existent */
     ASSERT(cache_delete(c, "k1") == -1);
@@ -3600,7 +3621,7 @@ void test_cache_clear(void) {
 
     cache_clear(c);
     ASSERT(cache_count(c) == 0);
-    ASSERT(cache_get(c, "a") == NULL);
+    ASSERT(!cache_has(c, "a"));
 
     /* Clear empty cache is safe */
     cache_clear(c);
@@ -3625,21 +3646,21 @@ void test_cache_lru_eviction(void) {
     /* Adding 4th item should evict LRU (a) */
     cache_set(c, "d", "4", 0);
     ASSERT(cache_count(c) == 3);
-    ASSERT(cache_get(c, "a") == NULL);  /* evicted */
-    ASSERT(cache_get(c, "b") != NULL);
-    ASSERT(cache_get(c, "c") != NULL);
-    ASSERT(cache_get(c, "d") != NULL);
+    ASSERT(!cache_has(c, "a"));  /* evicted */
+    ASSERT(cache_has(c, "b"));
+    ASSERT(cache_has(c, "c"));
+    ASSERT(cache_has(c, "d"));
 
     /* Access b to make it most recently used */
-    cache_get(c, "b");
+    (void)cache_has(c, "b");
 
     /* Now add e; LRU should be c (b was just accessed, d was more recent) */
     cache_set(c, "e", "5", 0);
     ASSERT(cache_count(c) == 3);
-    ASSERT(cache_get(c, "c") == NULL);  /* evicted */
-    ASSERT(cache_get(c, "b") != NULL);
-    ASSERT(cache_get(c, "d") != NULL);
-    ASSERT(cache_get(c, "e") != NULL);
+    ASSERT(!cache_has(c, "c"));  /* evicted */
+    ASSERT(cache_has(c, "b"));
+    ASSERT(cache_has(c, "d"));
+    ASSERT(cache_has(c, "e"));
 
     cache_destroy(c);
     PASS();
@@ -3656,19 +3677,19 @@ void test_cache_ttl(void) {
     ASSERT(cache_count(c) == 1);
 
     /* Should be available immediately */
-    ASSERT(cache_get(c, "temp") != NULL);
+    ASSERT(cache_has(c, "temp"));
 
     /* Wait for expiration */
     sleep(2);
 
     /* Should be expired now */
-    ASSERT(cache_get(c, "temp") == NULL);
+    ASSERT(!cache_has(c, "temp"));
     ASSERT(cache_count(c) == 0);
 
     /* No-expiry entry should persist */
     cache_set(c, "permanent", "data", 0);
     sleep(1);
-    ASSERT(cache_get(c, "permanent") != NULL);
+    ASSERT(cache_has(c, "permanent"));
 
     cache_destroy(c);
     PASS();
