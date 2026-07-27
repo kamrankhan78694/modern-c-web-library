@@ -198,6 +198,13 @@ static size_t read_http_response(int cfd, uint64_t *sseq, char *out, size_t out_
 
     *records = 0;
     *max_pt = 0;
+    /* Clear the caller's buffer up front. It is reused across the keep-alive
+     * requests, so if this call reads nothing (a failed/short read) the leftover
+     * bytes from the PREVIOUS response would still satisfy the caller's strstr()
+     * checks — turning a real failure into a false pass. */
+    if (out_cap > 0) {
+        out[0] = '\0';
+    }
     for (i = 0; i < 64; i++) {
         size_t pl = 0;
         uint8_t ct = 0;
@@ -217,11 +224,13 @@ static size_t read_http_response(int cfd, uint64_t *sseq, char *out, size_t out_
         if (pl > *max_pt) {
             *max_pt = pl;
         }
-        if (total + pl < out_cap) {
-            memcpy(out + total, pt, pl);
-            total += pl;
-            out[total] = '\0';
+        if (total + pl >= out_cap) {
+            break;   /* buffer full: stop rather than silently truncating and then
+                      * evaluating the completeness check against partial data */
         }
+        memcpy(out + total, pt, pl);
+        total += pl;
+        out[total] = '\0';
         {
             /* Complete once the header terminator is present and the body has at
              * least the expected length. */

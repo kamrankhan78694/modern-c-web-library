@@ -98,10 +98,15 @@ echo "PASS: >16 KiB response ($BIG_LEN bytes) fragmented across TLS records and 
 
 # (b) Keep-alive: two requests on one connection. The first must NOT close, the
 # second closes. Two "HTTP/1.1 200" status lines prove the connection was reused.
+# The delays are deliberate but kept short (1s each on loopback). The first lets the
+# server answer request 1 before request 2 is written — sending both at once would
+# test HTTP *pipelining*, a different feature, rather than connection reuse. The
+# second keeps stdin open long enough for s_client to read the final response before
+# EOF tears the connection down.
 KA="$( { printf 'GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n'
-         sleep 2
+         sleep 1
          printf 'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
-         sleep 2
+         sleep 1
        } | $TO openssl s_client -quiet -connect "127.0.0.1:$PORT" -tls1_3 2>/dev/null )"
 KA_COUNT="$(printf '%s' "$KA" | grep -c "HTTP/1.1 200" || true)"
 if [ "$KA_COUNT" -lt 2 ]; then
