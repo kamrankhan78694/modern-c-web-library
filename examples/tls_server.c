@@ -39,6 +39,17 @@ static void handle_hello(http_request_t *req, http_response_t *res) {
     http_response_send_text(res, HTTP_OK, "Hello, World! (encrypted)\n");
 }
 
+/* A body larger than one TLS record's 2^14 plaintext limit, so the response must be
+ * fragmented across records — exercised by tests/interop_openssl.sh against a real
+ * OpenSSL client. The payload is a repeating A-Z pattern the script can verify. */
+#define BIG_BODY_LEN 40000
+static char g_big_body[BIG_BODY_LEN + 1];
+
+static void handle_big(http_request_t *req, http_response_t *res) {
+    (void)req;
+    http_response_send_text(res, HTTP_OK, g_big_body);
+}
+
 /* Read an entire file into a NUL-terminated buffer; caller frees. */
 static char *read_file(const char *path, size_t *len_out) {
     FILE *f = fopen(path, "rb");
@@ -99,6 +110,14 @@ int main(int argc, char **argv) {
     }
     router_add_route(router, HTTP_GET, "/", handle_root);
     router_add_route(router, HTTP_GET, "/hello", handle_hello);
+    {
+        int i;
+        for (i = 0; i < BIG_BODY_LEN; i++) {
+            g_big_body[i] = (char)('A' + (i % 26));
+        }
+        g_big_body[BIG_BODY_LEN] = '\0';
+    }
+    router_add_route(router, HTTP_GET, "/big", handle_big);
     http_server_set_router(g_server, router);
 
     if (http_server_enable_tls(g_server, cert, cert_len, key, key_len) != 0) {
@@ -121,7 +140,8 @@ int main(int argc, char **argv) {
         return 1;
     }
     printf("HTTPS server (EXPERIMENTAL pure-C TLS 1.3) on https://localhost:%u/\n", (unsigned)port);
-    printf("  GET /       GET /hello    (Ctrl+C to stop)\n");
+    printf("  GET /       GET /hello    GET /big (%d-byte body)    (Ctrl+C to stop)\n",
+           BIG_BODY_LEN);
     fflush(stdout);
 
     while (!shutdown_requested) {

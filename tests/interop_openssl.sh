@@ -68,6 +68,55 @@ printf '%s\n' "$RESP" | head -8
 if printf '%s' "$RESP" | grep -q "HTTP/1.1 200" \
    && printf '%s' "$RESP" | grep -q "Hello over pure-C TLS 1.3"; then
     echo "PASS: openssl s_client completed a TLS 1.3 + HTTPS round-trip against the pure-C server"
-    exit 0
+else
+    fail "no valid HTTPS 200 response received over TLS"
 fi
-fail "no valid HTTPS 200 response received over TLS"
+
+# ---------------------------------------------------------------------------
+# Milestone #1 acceptance, verified against a REAL OpenSSL client (not just our
+# in-process KAT client):
+#   (a) a >16 KiB response, which the server must fragment across TLS records at
+#       the 2^14 boundary and the client must reassemble byte-exactly;
+#   (b) multiple sequential requests over ONE TLS connection (keep-alive).
+# ---------------------------------------------------------------------------
+
+# (a) Large body: 40000 bytes of a repeating A-Z pattern from /big. The request must
+# use real CRLF line endings (a heredoc would send bare LF).
+BIG="$(printf 'GET /big HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' \
+    | $TO openssl s_client -quiet -connect "127.0.0.1:$PORT" -tls1_3 2>/dev/null)"
+# Body = everything after the first blank line; strip line endings before counting.
+BIG_BODY="$(printf '%s' "$BIG" | awk 'f{print} /^\r?$/{f=1}')"
+BIG_LEN="$(printf '%s' "$BIG_BODY" | tr -d '\r\n' | wc -c | tr -d ' ')"
+if [ "$BIG_LEN" -lt 40000 ]; then
+    fail ">16 KiB response over TLS: got $BIG_LEN body bytes, expected 40000 (record fragmentation/reassembly)"
+fi
+# The pattern must be intact across the record boundaries, not just the right length.
+if ! printf '%s' "$BIG_BODY" | tr -d '\r\n' | grep -q "^ABCDEFGHIJKLMNOPQRSTUVWXYZABC"; then
+    fail ">16 KiB response body is corrupted at the start (record reassembly)"
+fi
+echo "PASS: >16 KiB response ($BIG_LEN bytes) fragmented across TLS records and reassembled by a real OpenSSL client"
+
+# (b) Keep-alive: two requests on one connection. The first must NOT close, the
+# second closes. Two "HTTP/1.1 200" status lines prove the connection was reused.
+# The delays are deliberate but kept short (1s each on loopback). The first lets the
+# server answer request 1 before request 2 is written — sending both at once would
+# test HTTP *pipelining*, a different feature, rather than connection reuse. The
+# second keeps stdin open long enough for s_client to read the final response before
+# EOF tears the connection down.
+KA="$( { printf 'GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n'
+         sleep 1
+         printf 'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+         sleep 1
+       } | $TO openssl s_client -quiet -connect "127.0.0.1:$PORT" -tls1_3 2>/dev/null )"
+KA_COUNT="$(printf '%s' "$KA" | grep -c "HTTP/1.1 200" || true)"
+if [ "$KA_COUNT" -lt 2 ]; then
+    echo "--- keep-alive transcript ---"; printf '%s\n' "$KA" | head -20
+    fail "keep-alive: expected 2 responses on one TLS connection, saw $KA_COUNT"
+fi
+if ! printf '%s' "$KA" | grep -q "Hello, World! (encrypted)" \
+   || ! printf '%s' "$KA" | grep -q "Hello over pure-C TLS 1.3"; then
+    fail "keep-alive: both response bodies were not received on the reused connection"
+fi
+echo "PASS: two sequential HTTP requests served over ONE TLS connection (keep-alive) via openssl s_client"
+
+exit 0
