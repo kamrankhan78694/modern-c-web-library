@@ -73,14 +73,17 @@ if(NOT EMSCRIPTEN)
         add_test(NAME TlsTransportTests COMMAND test_tls_transport)
 
         # End-to-end http_server_enable_tls: a real TLS server + a KAT client doing a
-        # full HTTPS request/response over a loopback socket.
-        add_executable(test_tls_http test_tls_http.c)
-        target_include_directories(test_tls_http PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/tls
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src)
-        target_compile_definitions(test_tls_http PRIVATE WEBLIB_TLS)
-        target_link_libraries(test_tls_http weblib ${PLATFORM_LIBS})
-        add_test(NAME TlsHttpTests COMMAND test_tls_http)
+        # full HTTPS request/response over a loopback socket. Needs the deterministic
+        # RNG test hook, so it is built only when WEBLIB_TLS_TEST_HOOKS is enabled.
+        if(WEBLIB_TLS_TEST_HOOKS)
+            add_executable(test_tls_http test_tls_http.c)
+            target_include_directories(test_tls_http PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/../src/tls
+                ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+            target_compile_definitions(test_tls_http PRIVATE WEBLIB_TLS)
+            target_link_libraries(test_tls_http weblib ${PLATFORM_LIBS})
+            add_test(NAME TlsHttpTests COMMAND test_tls_http)
+        endif()
     endif()
 endif()
 

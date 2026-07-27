@@ -613,7 +613,9 @@ int http_server_set_async(http_server_t *server, bool enable);
  * @param cert_len   Length of cert_pem
  * @param key_pem    PEM "PRIVATE KEY" block (PKCS#8 Ed25519 private key)
  * @param key_len    Length of key_pem
- * @return 0 on success, -1 on failure (bad PEM/key, async mode, or already listening)
+ * @return 0 on success, -1 on failure: NULL/empty arguments, malformed certificate
+ *         PEM or private key, async mode enabled, TLS already enabled, or the server
+ *         already listening.
  */
 int http_server_enable_tls(http_server_t *server,
                            const char *cert_pem, size_t cert_len,

@@ -294,6 +294,17 @@ static int send_all(int fd, void *tls, const char *buf, size_t len);
 #define CONN_TLS(conn) ((void *)0)
 #endif
 static ssize_t conn_read(int fd, void *tls, void *buf, size_t len);
+
+/* True only when TLS termination is active for this server (always false in a build
+ * without TLS). Used to suppress plaintext error responses on an HTTPS port. */
+static bool server_tls_active(const http_server_t *s) {
+#ifdef WEBLIB_TLS
+    return s->tls_enabled;
+#else
+    (void)s;
+    return false;
+#endif
+}
 static http_request_t *http_request_create(void);
 static void http_request_destroy(http_request_t *req);
 static http_response_t *http_response_create(void);
@@ -680,7 +691,12 @@ static void *accept_connections(void *arg) {
         pthread_mutex_lock(&server->conn_lock);
         if (server->active_connections >= server->max_connections) {
             pthread_mutex_unlock(&server->conn_lock);
-            send_error_response(client_fd, NULL, HTTP_SERVICE_UNAVAILABLE, "Connection limit reached");
+            /* Pre-handshake overload rejection: a plaintext HTTP error on an HTTPS
+             * port would just be garbage to a TLS client (and leak plaintext), so
+             * under TLS we simply drop the connection. */
+            if (!server_tls_active(server)) {
+                send_error_response(client_fd, NULL, HTTP_SERVICE_UNAVAILABLE, "Connection limit reached");
+            }
             close(client_fd);
             continue;
         }
@@ -707,8 +723,11 @@ static void *accept_connections(void *arg) {
             
             if (server->pool) {
                 if (thread_pool_submit(server->pool, connection_work, conn) != 0) {
-                    /* Pool full or shutting down — reject connection */
-                    send_error_response(client_fd, NULL, HTTP_SERVICE_UNAVAILABLE, "Server Busy");
+                    /* Pool full or shutting down — reject connection (drop silently
+                     * under TLS; a plaintext error would be garbage to a TLS peer). */
+                    if (!server_tls_active(server)) {
+                        send_error_response(client_fd, NULL, HTTP_SERVICE_UNAVAILABLE, "Server Busy");
+                    }
                     close(client_fd);
                     free(conn);
                     pthread_mutex_lock(&server->conn_lock);
@@ -803,17 +822,28 @@ static void handle_websocket_connection(int client_fd, http_request_t *req) {
 }
 
 #ifdef WEBLIB_TLS
-/* Per-connection randomness for the TLS ephemeral key and ServerHello random.
- * Production uses the system CSPRNG; a test may install a deterministic hook via
- * http_server__tls_test_rng() (internal, not part of the public API). */
+#ifdef WEBLIB_TLS_TEST_HOOKS
+/* TEST-ONLY: pin the per-connection ephemeral key + ServerHello random for a
+ * deterministic handshake. Compiled ONLY when WEBLIB_TLS_TEST_HOOKS is defined
+ * (an opt-in CMake flag, never set in a production/library build) — installing a
+ * deterministic RNG here would destroy the security of every TLS session, so the
+ * symbol must not exist for ordinary consumers of the TLS build. */
 static int (*g_tls_rng)(void *buf, size_t len) = NULL;
 
 void http_server__tls_test_rng(int (*fn)(void *buf, size_t len)) {
     g_tls_rng = fn;
 }
+#endif /* WEBLIB_TLS_TEST_HOOKS */
 
+/* Per-connection randomness for the TLS ephemeral key and ServerHello random: the
+ * system CSPRNG (overridable only in a WEBLIB_TLS_TEST_HOOKS build). */
 static int tls_fill_random(uint8_t *buf, size_t len) {
-    return g_tls_rng ? g_tls_rng(buf, len) : secure_random_bytes(buf, len);
+#ifdef WEBLIB_TLS_TEST_HOOKS
+    if (g_tls_rng) {
+        return g_tls_rng(buf, len);
+    }
+#endif
+    return secure_random_bytes(buf, len);
 }
 
 /* Run the server TLS handshake over the accepted blocking socket. Returns an

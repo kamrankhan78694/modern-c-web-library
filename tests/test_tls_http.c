@@ -187,11 +187,20 @@ static void test_tls_http(void) {
 
     g_rng_call = 0;
     http_server__tls_test_rng(test_rng);
-    check_true("http-tls: enable_tls with a valid cert/key",
-               http_server_enable_tls(server, CERT_PEM, strlen(CERT_PEM),
-                                      KEY_PEM, strlen(KEY_PEM)) == 0);
+    {
+        int tls_rc = http_server_enable_tls(server, CERT_PEM, strlen(CERT_PEM),
+                                            KEY_PEM, strlen(KEY_PEM));
+        check_true("http-tls: enable_tls with a valid cert/key", tls_rc == 0);
+        if (tls_rc != 0) {
+            /* Bail: otherwise we would speak a TLS ClientHello to a plaintext server
+             * and read_record() would block on the misframed HTTP response. */
+            http_server_destroy(server);
+            router_destroy(router);
+            return;
+        }
+    }
 
-    for (p = 45443; p < 45473; p++) {
+    for (p = 45443; p < 46443; p++) {
         if (http_server_listen(server, (uint16_t)p) == 0) {
             port = (uint16_t)p;
             listening = 1;
@@ -206,8 +215,19 @@ static void test_tls_http(void) {
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    check_true("http-tls: client connected", cfd >= 0
-               && connect(cfd, (struct sockaddr *)&addr, sizeof addr) == 0);
+    {
+        int connected = (cfd >= 0
+                         && connect(cfd, (struct sockaddr *)&addr, sizeof addr) == 0);
+        check_true("http-tls: client connected", connected);
+        if (!connected) {
+            /* Bail cleanly rather than driving read_n()/read_record() on a dead fd. */
+            if (cfd >= 0) close(cfd);
+            http_server_stop(server);
+            http_server_destroy(server);
+            router_destroy(router);
+            return;
+        }
+    }
 
     /* Handshake (KAT client). */
     ch[0] = TLS_CONTENT_HANDSHAKE;
