@@ -130,6 +130,24 @@ static void hello_handler(http_request_t *req, http_response_t *res) {
     http_response_send_text(res, HTTP_OK, "TLS-OK");
 }
 
+/* A body comfortably larger than one TLS record's 2^14 plaintext limit, so the
+ * transport must fragment it across records (milestone acceptance criterion). */
+#define BIG_BODY_LEN 40000
+static char g_big_body[BIG_BODY_LEN + 1];
+
+static void big_handler(http_request_t *req, http_response_t *res) {
+    (void)req;
+    http_response_send_text(res, HTTP_OK, g_big_body);
+}
+
+static void fill_big_body(void) {
+    int i;
+    for (i = 0; i < BIG_BODY_LEN; i++) {
+        g_big_body[i] = (char)('A' + (i % 26));
+    }
+    g_big_body[BIG_BODY_LEN] = '\0';
+}
+
 /* ---- client-side socket + record helpers ---- */
 static int write_all_c(int fd, const uint8_t *buf, size_t n) {
     size_t off = 0;
@@ -158,6 +176,197 @@ static int read_record(int fd, uint8_t *buf, size_t cap) {
     if (TLS_RECORD_HEADER_LEN + body > cap) return -1;
     if (read_n(fd, buf + TLS_RECORD_HEADER_LEN, body) != (int)body) return -1;
     return (int)(TLS_RECORD_HEADER_LEN + body);
+}
+
+/*
+ * Read + decrypt server application records until a complete HTTP response has
+ * accumulated — headers plus at least `want_body` body bytes (or an alert / EOF /
+ * record cap). The server writes headers and body with separate transport writes,
+ * so a response always spans at least two records; stopping on a byte count alone
+ * would truncate at the header record. `*sseq` is the server's running application
+ * sequence number — it continues across keep-alive requests on the same connection,
+ * so the caller threads it through. Reports how many records carried the response
+ * and the largest single record plaintext, which is what proves 2^14 fragmentation.
+ * Returns total bytes accumulated.
+ */
+static size_t read_http_response(int cfd, uint64_t *sseq, char *out, size_t out_cap,
+                                 size_t want_body, int *records, size_t *max_pt) {
+    static uint8_t recbuf[TLS_RECORD_HEADER_LEN + TLS_RECORD_MAX_CIPHERTEXT];
+    static uint8_t pt[TLS_RECORD_HEADER_LEN + TLS_RECORD_MAX_CIPHERTEXT];
+    size_t total = 0;
+    int i;
+
+    *records = 0;
+    *max_pt = 0;
+    for (i = 0; i < 64; i++) {
+        size_t pl = 0;
+        uint8_t ct = 0;
+        int r = read_record(cfd, recbuf, sizeof recbuf);
+        if (r <= 0 || recbuf[0] != 0x17) {
+            break;
+        }
+        if (!tls_record_open(KAT_SERVER_AP_KEY, KAT_SERVER_AP_IV, *sseq,
+                             recbuf, (size_t)r, pt, sizeof pt, &pl, &ct)) {
+            break;
+        }
+        (*sseq)++;
+        if (ct != TLS_CONTENT_APPLICATION_DATA) {
+            break;   /* alert (e.g. close_notify) */
+        }
+        (*records)++;
+        if (pl > *max_pt) {
+            *max_pt = pl;
+        }
+        if (total + pl < out_cap) {
+            memcpy(out + total, pt, pl);
+            total += pl;
+            out[total] = '\0';
+        }
+        {
+            /* Complete once the header terminator is present and the body has at
+             * least the expected length. */
+            const char *b = strstr(out, "\r\n\r\n");
+            if (b != NULL && (total - (size_t)((b + 4) - out)) >= want_body) {
+                break;
+            }
+        }
+    }
+    return total;
+}
+
+/*
+ * Milestone #1 acceptance: multiple sequential HTTP requests over ONE TLS
+ * connection (keep-alive, which re-enters conn_read on the TLS path), and a
+ * response larger than one TLS record (>16 KiB) that must be fragmented across
+ * records at the 2^14 boundary and reassemble byte-exactly.
+ */
+static void test_tls_http_keepalive_large(void) {
+    http_server_t *server;
+    router_t *router;
+    uint16_t port = 0;
+    int listening = 0, p, cfd;
+    struct sockaddr_in addr;
+    struct timeval tv;
+    uint8_t ch[TLS_RECORD_HEADER_LEN + sizeof KAT_CH], sh[600], flight[2048], rec[512];
+    uint8_t finmsg[4 + 32];
+    static const uint8_t ccs[6] = { 0x14, 0x03, 0x03, 0x00, 0x01, 0x01 };
+    static char resp[BIG_BODY_LEN + 8192];
+    size_t rl = 0, got;
+    uint64_t sseq = 0, cseq = 0;
+    int records = 0;
+    size_t max_pt = 0;
+    static const char REQ1[] = "GET /hello HTTP/1.1\r\nHost: t\r\n\r\n";
+    static const char REQ2[] = "GET /big HTTP/1.1\r\nHost: t\r\n\r\n";
+    static const char REQ3[] = "GET /hello HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n";
+
+    fill_big_body();
+    server = http_server_create();
+    router = router_create();
+    check_true("ka: server + router created", server != NULL && router != NULL);
+    if (!server || !router) return;
+    router_add_route(router, HTTP_GET, "/hello", hello_handler);
+    router_add_route(router, HTTP_GET, "/big", big_handler);
+    http_server_set_router(server, router);
+
+    g_rng_call = 0;
+    http_server__tls_test_rng(test_rng);
+    if (http_server_enable_tls(server, CERT_PEM, strlen(CERT_PEM),
+                               KEY_PEM, strlen(KEY_PEM)) != 0) {
+        check_true("ka: enable_tls", 0);
+        http_server_destroy(server);
+        router_destroy(router);
+        return;
+    }
+    for (p = 46443; p < 47443; p++) {
+        if (http_server_listen(server, (uint16_t)p) == 0) {
+            port = (uint16_t)p;
+            listening = 1;
+            break;
+        }
+    }
+    check_true("ka: server listening", listening);
+    if (!listening) { http_server_destroy(server); router_destroy(router); return; }
+
+    cfd = socket(AF_INET, SOCK_STREAM, 0);
+    memset(&addr, 0, sizeof addr);
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    if (cfd < 0 || connect(cfd, (struct sockaddr *)&addr, sizeof addr) != 0) {
+        check_true("ka: client connected", 0);
+        if (cfd >= 0) close(cfd);
+        http_server_stop(server);
+        http_server_destroy(server);
+        router_destroy(router);
+        return;
+    }
+    /* Never block forever if the server fails to answer — a hang would stall CI. */
+    tv.tv_sec = 10;
+    tv.tv_usec = 0;
+    setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+
+    /* Handshake (KAT client). */
+    ch[0] = TLS_CONTENT_HANDSHAKE;
+    ch[1] = 0x03; ch[2] = 0x03;
+    ch[3] = (uint8_t)((sizeof KAT_CH) >> 8);
+    ch[4] = (uint8_t)(sizeof KAT_CH);
+    memcpy(ch + TLS_RECORD_HEADER_LEN, KAT_CH, sizeof KAT_CH);
+    write_all_c(cfd, ch, sizeof ch);
+    check_true("ka: server flight received",
+               read_record(cfd, sh, sizeof sh) > 0
+               && read_record(cfd, flight, sizeof flight) > 0);
+    write_all_c(cfd, ccs, sizeof ccs);
+    finmsg[0] = TLS_HS_FINISHED; finmsg[1] = 0; finmsg[2] = 0; finmsg[3] = 0x20;
+    memcpy(finmsg + 4, KAT_CLIENT_FINISHED_VD, 32);
+    tls_record_seal(KAT_CLIENT_HS_KEY, KAT_CLIENT_HS_IV, 0, TLS_CONTENT_HANDSHAKE,
+                    finmsg, sizeof finmsg, 0, rec, sizeof rec, &rl);
+    write_all_c(cfd, rec, rl);
+
+    /* ---- Request 1: small, keep-alive ---- */
+    tls_record_seal(KAT_CLIENT_AP_KEY, KAT_CLIENT_AP_IV, cseq++,
+                    TLS_CONTENT_APPLICATION_DATA, (const uint8_t *)REQ1, sizeof REQ1 - 1,
+                    0, rec, sizeof rec, &rl);
+    write_all_c(cfd, rec, rl);
+    got = read_http_response(cfd, &sseq, resp, sizeof resp, sizeof "TLS-OK" - 1,
+                             &records, &max_pt);
+    check_true("ka: request 1 answered 200 over TLS",
+               got > 0 && strstr(resp, "200") != NULL && strstr(resp, "TLS-OK") != NULL);
+    check_true("ka: request 1 response is keep-alive (connection stays open)",
+               strstr(resp, "keep-alive") != NULL || strstr(resp, "Keep-Alive") != NULL);
+
+    /* ---- Request 2: SAME connection, >16 KiB body ---- */
+    tls_record_seal(KAT_CLIENT_AP_KEY, KAT_CLIENT_AP_IV, cseq++,
+                    TLS_CONTENT_APPLICATION_DATA, (const uint8_t *)REQ2, sizeof REQ2 - 1,
+                    0, rec, sizeof rec, &rl);
+    write_all_c(cfd, rec, rl);
+    got = read_http_response(cfd, &sseq, resp, sizeof resp, BIG_BODY_LEN, &records, &max_pt);
+    check_true("ka: request 2 (same connection) answered 200",
+               got >= BIG_BODY_LEN && strstr(resp, "200") != NULL);
+    check_true("ka: >16 KiB body fragmented across multiple TLS records", records >= 2);
+    check_true("ka: a record hit the 2^14 plaintext boundary",
+               max_pt == TLS_RECORD_MAX_PLAINTEXT);
+    {
+        /* The body must reassemble byte-exactly after fragmentation. */
+        const char *body = strstr(resp, "\r\n\r\n");
+        check_true("ka: >16 KiB body reassembles byte-exactly",
+                   body != NULL && strlen(body + 4) == BIG_BODY_LEN
+                   && memcmp(body + 4, g_big_body, BIG_BODY_LEN) == 0);
+    }
+
+    /* ---- Request 3: SAME connection, explicit close ---- */
+    tls_record_seal(KAT_CLIENT_AP_KEY, KAT_CLIENT_AP_IV, cseq++,
+                    TLS_CONTENT_APPLICATION_DATA, (const uint8_t *)REQ3, sizeof REQ3 - 1,
+                    0, rec, sizeof rec, &rl);
+    write_all_c(cfd, rec, rl);
+    got = read_http_response(cfd, &sseq, resp, sizeof resp, sizeof "TLS-OK" - 1,
+                             &records, &max_pt);
+    check_true("ka: request 3 (third on one connection) answered 200",
+               got > 0 && strstr(resp, "TLS-OK") != NULL);
+
+    close(cfd);
+    http_server_stop(server);
+    http_server_destroy(server);
+    router_destroy(router);
 }
 
 static void test_tls_http(void) {
@@ -301,6 +510,7 @@ int main(void) {
     return 1;
 #else
     test_tls_http();
+    test_tls_http_keepalive_large();
     if (g_failures == 0) {
         printf("All TLS http integration tests passed.\n");
     }
