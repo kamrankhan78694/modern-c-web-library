@@ -617,7 +617,11 @@ The health endpoint is `/healthz`, not `/health`.
 ### Test with verbose output
 ```bash
 curl -v http://localhost:8080/api/tasks
-# Shows full HTTP headers, including the CORS headers added by the middleware
+# Shows the full response headers. The CORS middleware ignores requests with no
+# Origin header, so send one to see it act:
+#   curl -v -H 'Origin: http://example.com' http://localhost:8080/api/tasks
+# With allowed_origins = NULL (wildcard) that adds exactly one header:
+#   Access-Control-Allow-Origin: *
 ```
 
 ## Summary

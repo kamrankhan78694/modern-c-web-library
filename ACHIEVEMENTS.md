@@ -83,7 +83,7 @@ Failures: 0    Success rate: 100%
 - ✅ Integration tests (GET, POST, JSON, 404, malformed, sequential)
 - ✅ Request-smuggling, header-injection and path-normalization regressions
 - ✅ Cloudflare Workers bindings (KV, R2, D1, Queues) and the WASM-safe subset
-- ✅ TLS (opt-in): RFC known-answer tests for every primitive, DER/PEM/X.509 parsing, record layer, handshake state machine, a deterministic fuzzer over the untrusted-input path, and a real `openssl s_client` interop handshake
+- ✅ TLS (opt-in): RFC known-answer tests for every primitive, DER/ASN.1, PEM and Ed25519 key (PKCS#8/SPKI) parsing, record layer, handshake state machine, a deterministic fuzzer over the untrusted-input path, and a real `openssl s_client` interop handshake
 
 **Quality Assurance**:
 - Zero compiler warnings with strict flags (`-Wall -Wextra -pedantic`)
@@ -213,10 +213,14 @@ build you would have had if the TLS layer had never been written.
   fewer places for a downgrade or negotiation bug to hide.
 - Primitives, each with RFC known-answer tests: SHA-256, SHA-512, HMAC, HKDF, ChaCha20, Poly1305,
   ChaCha20-Poly1305 AEAD, X25519, Ed25519.
-- DER/ASN.1, PEM and X.509 parsing, hardened against malformed input.
+- DER/ASN.1 and PEM parsing, hardened against malformed input, plus PKCS#8 and
+  SubjectPublicKeyInfo Ed25519 key parsing built on them. The server certificate itself
+  is not parsed: its PEM body is base64-decoded to DER and sent opaquely, so there is
+  no X.509 certificate-field parsing and no chain validation.
 - A record layer honouring the 2^14 plaintext limit, with fragmentation.
-- A full server handshake state machine, including HelloRetryRequest (RFC 8446 §4.4.1) and ALPN
-  negotiation of `http/1.1`.
+- A full server handshake state machine, including HelloRetryRequest (RFC 8446 §4.1.4,
+  with the §4.4.1 synthetic `message_hash` transcript rewrite) and ALPN negotiation
+  of `http/1.1`.
 
 **How you turn it on**:
 ```c

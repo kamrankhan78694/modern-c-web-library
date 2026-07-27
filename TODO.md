@@ -38,7 +38,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - One profile only: `TLS_CHACHA20_POLY1305_SHA256` + X25519 + Ed25519
   - Record layer with the 2^14 plaintext limit and fragmentation (`src/tls/record.c`)
   - Server handshake state machine incl. HelloRetryRequest (RFC 8446 §4.1.4), with the §4.4.1 synthetic `message_hash` transcript rewrite on that path (`src/tls/server_handshake.c`)
-  - DER/ASN.1, PEM and X.509 *parsing* for one self-supplied Ed25519 certificate (`src/tls/der.c`, `pem.c`, `ed25519_key.c`)
+  - DER/ASN.1 and PEM *parsing* for the PKCS#8 Ed25519 private key (`src/tls/der.c`, `pem.c`, `ed25519_key.c`); the server certificate is base64-decoded from PEM to DER and sent opaquely — it is never parsed as X.509
   - ALPN negotiating `http/1.1` (RFC 7301)
   - Sans-IO connection engine + blocking-socket adapter (`src/tls/tls_khannection.c`, `tls_transport.c`)
   - `http_server_enable_tls(server, cert_pem, cert_len, key_pem, key_len)` — PEM **buffers with lengths**, not file paths (`include/kamran.k:620`); example in `examples/tls_server.c`

@@ -12,7 +12,8 @@ Nothing yet.
 ## [2.0.0] - 2026-07-27
 
 Seventy-two pull requests landed between v1.0.0 and this release (#54, #55 and
-#58–#129). Three things drive the major version: HTTPS can now be terminated
+#58–#129, excluding #64, which was closed without merging, and #122, which is an
+issue rather than a pull request). Three things drive the major version: HTTPS can now be terminated
 inside the library instead of requiring a reverse proxy in front of it, the
 library runs in two new places (WebAssembly and Cloudflare Workers), and the
 public header was renamed — which is the source-level break that makes this
@@ -82,7 +83,7 @@ name, the session data API, and template auto-escaping. Each is described under
     only by `TlsHttpTests`. It must never be enabled in a production build.
   - `examples/tls_server.c`, a runnable HTTPS server (#120), and
     `src/tls/README.md`, which documents the security scope — what is and is not
-    provided — in detail (added in #96, expanded in #125 and #127).
+    provided — in detail (added in #96, expanded most substantially in #125).
 - **WebAssembly target via Emscripten** (#69) — a WASM-safe subset builds under
   `emcmake cmake`: JSON, router, template engine, input validation, cookies, body
   parsing, and compression. The WebSocket modules, the benchmarking module, the
@@ -171,7 +172,9 @@ name, the session data API, and template auto-escaping. Each is described under
 - `BUGS.md` and a bug-pattern section in `CONTRIBUTING.md` (#62) — the defect
   classes found in review, written down so they stop recurring.
 - A Mermaid architecture flowchart (#67) and a PNG banner (#60) in `README.md`;
-  a DOI badge and refreshed documentation (#58).
+  a Windows-IOCP roadmap note in `docs/README.md` (#58). The DOI badge and the
+  post-1.0.0 documentation refresh (including `docs/README.md` itself) landed as direct
+  commits on `main` after the v1.0.0 tag, not via a pull request.
 
 ### Changed
 

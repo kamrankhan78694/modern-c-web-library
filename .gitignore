@@ -58,6 +58,7 @@ dkms.conf
 build/
 build-asan/
 build-tls/
+build-tls-san/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake

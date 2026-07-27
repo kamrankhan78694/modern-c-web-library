@@ -170,7 +170,8 @@ Phase 12 — DELIVERED in v2.0.0 (planned as v1.2.0): TLS 1.3 Handshake & HTTPS
    │       RFC 8446 §4.4.1 synthetic message_hash transcript rewrite on the HRR path
    ├── [x] Sans-IO connection engine + blocking-socket adapter — src/tls/tls_khannection.c,
    │       src/tls/tls_transport.c
-   ├── [x] X.509 / DER / PEM *parsing* for one self-supplied Ed25519 cert + PKCS#8 key
+   ├── [x] PEM + DER *parsing* for one self-supplied Ed25519 cert + PKCS#8 key — the key
+   │       is fully DER-parsed; the certificate is only PEM-decoded to DER and sent opaquely
    │       — src/tls/der.c, pem.c, ed25519_key.c
    ├── [ ] Certificate *chain validation* (RSA/ECDSA signature verification) — NOT built, Phase 21
    ├── [x] ALPN negotiation of http/1.1  (h2 depends on Phase 13, not yet built)

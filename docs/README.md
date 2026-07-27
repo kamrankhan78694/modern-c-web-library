@@ -191,7 +191,7 @@ Designed for high performance:
 - **LRU Cache**: Fast in-memory caching
 - **Compression**: Optional gzip for bandwidth savings
 
-Benchmark results are in [STRESS_TESTS.md](../STRESS_TESTS.md) — originally written against v0.9.0, with its figures re-verified against 2.0.0.
+Stress-test results are in [STRESS_TESTS.md](../STRESS_TESTS.md) — originally written against v0.9.0, with its test counts and per-test descriptions re-checked against 2.0.0. It is a pass/fail and static-limits report; it carries no throughput or latency numbers.
 
 ## Code Quality
 

@@ -159,7 +159,7 @@ cmake --build build-tls -j
 cd build-tls && ctest --output-on-failure --timeout 300
 
 # Breakpoints now bind in the TLS sources
-lldb ./build-tls/tests/test_tls_transport
+lldb ./tests/test_tls_transport
 (lldb) breakpoint set --name tls_server_hs_read_client_hello
 (lldb) breakpoint set --name tls_server_hs_read_client_finished
 (lldb) run

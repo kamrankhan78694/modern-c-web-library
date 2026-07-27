@@ -6,8 +6,8 @@ This is the API reference for the Modern C Web Library: the public surface decla
 in `include/kamran.k`, plus the pooled-database API in `include/db_pool.h`. Every
 signature below is copied from those headers — if a signature here and the header
 disagree, the header wins and this page is a bug. Behaviour notes are checked against
-the implementation in `src/`; the one place where a header's own comment has drifted
-from the code is called out inline, at [`router_route()`](#router).
+the implementation in `src/`; where a header comment and the code disagree, this page
+follows the code and notes the drift inline.
 
 Some subsystems have a dedicated document of their own. Where that is the case you
 get the signatures here and a link out for the design detail, rather than two copies
@@ -693,9 +693,12 @@ middleware_fn_t cors_middleware_create(const cors_options_t *options);
 void cors_middleware_destroy(void);
 ```
 
-Passing `NULL` gives permissive defaults, which is convenient in development and
-wrong in production. Name your origins explicitly before you ship — and note that
-`allow_credentials` with a wildcard origin is a combination browsers reject.
+Passing `NULL` returns `NULL` — no middleware is created, so always pass a real
+`cors_options_t`. Leaving `allowed_origins` NULL *inside* that struct selects the
+wildcard `*` origin: convenient in development and wrong in production, so name your
+origins explicitly before you ship. `allow_credentials` combined with a wildcard
+origin is refused outright by `cors_middleware_create()` (it returns NULL — CWE-942),
+and browsers reject it too.
 
 ---
 
@@ -1097,8 +1100,8 @@ void        env_secure_value_free(env_secure_value_t *sv);       // wipes, then 
 
 char *env_config_redact(const char *value);
 // Heap-allocated masked copy for logs; caller frees.
-// Values of 4 chars or fewer become "***"; longer ones keep the first and
-// last character (e.g. "s**********z"). NULL in → NULL out.
+// Values of 4 chars or fewer become "****"; longer ones keep the first and
+// last character (e.g. "s**********z"). NULL or empty in → NULL out.
 ```
 
 ```c
@@ -1117,11 +1120,11 @@ Apply the standard `WEBLIB_*` variables to a server in one call.
 int http_server_apply_env(http_server_t *server);
 // Returns: 0 on success, -1 if server is NULL
 ```
-Reads `WEBLIB_READ_TIMEOUT`, `WEBLIB_WRITE_TIMEOUT`, `WEBLIB_THREAD_COUNT`,
-`WEBLIB_MAX_CONNECTIONS`, and `WEBLIB_ASYNC_MODE`. Variables that are unset are
-skipped rather than reset, so anything you configured in code survives — which means
-you can call this after your own setup and let the environment override only what it
-actually specifies.
+Reads `WEBLIB_READ_TIMEOUT`, `WEBLIB_WRITE_TIMEOUT`, `WEBLIB_REQUEST_TIMEOUT`,
+`WEBLIB_THREAD_COUNT`, `WEBLIB_MAX_CONNECTIONS`, and `WEBLIB_ASYNC_MODE`. Variables
+that are unset are skipped rather than reset, so anything you configured in code
+survives — which means you can call this after your own setup and let the environment
+override only what it actually specifies.
 
 ---
 
@@ -1367,8 +1370,8 @@ int cache_set(cache_t *cache, const char *key, const char *value, int ttl_second
 // Both key and value are copied internally. Returns: 0 on success, -1 on failure
 
 const char *cache_get(cache_t *cache, const char *key);
-// Returns: the value, or NULL if missing or expired.
-// The pointer is INTERNAL — copy it if you need it beyond immediate use.
+// Returns: a NEWLY ALLOCATED copy of the value, or NULL if missing or expired.
+// CALLER OWNS the result and must free it: free((void *)val);
 
 int cache_delete(cache_t *cache, const char *key);  // 0 if deleted, -1 if not found
 void cache_clear(cache_t *cache);
@@ -1528,9 +1531,11 @@ WASM_EXPORT
 worker_response_t *worker_handle_fetch(worker_request_t *req, worker_env_t *env);
 ```
 
-Set a custom fetch handler and it is called for every request; set a router instead
-and `worker_handle_fetch()` does route matching for you with the same
-`router_add_route()` calls you would use natively.
+Set a custom fetch handler and it is called for every request. `worker_set_router()`
+is accepted but **not yet used for dispatch**: with only a router set,
+`worker_handle_fetch()` returns a 200 placeholder (`X-Worker-Routed: configured`,
+body `Router configured; native worker simulation does not perform route matching`)
+without matching any route; with neither handler nor router it returns 503.
 
 In native builds the KV, R2, D1, and Queue handles are backed by in-memory
 implementations, which is what makes it possible to test Worker code with the ordinary

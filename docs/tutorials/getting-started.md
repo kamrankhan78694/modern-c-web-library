@@ -158,7 +158,7 @@ Two things that trip people up:
 - **`http_server_listen()` does not block in the default threaded mode.** It binds,
   listens, starts the accept thread, and returns `0` (or `-1` on failure). Your `main`
   has to stay alive on its own — hence the `while (!shutdown_requested) sleep(1);` loop.
-  Every example in [`examples/`](../../examples/) uses this shape. (In async mode it is
+  Every threaded-mode example in [`examples/`](../../examples/) uses this shape. (In async mode it is
   the other way round: the call runs the event loop on your thread and only returns once
   the server is stopped.)
 - **Routes take an enum, not a string.** `HTTP_GET`, `HTTP_POST`, `HTTP_PUT`,
@@ -696,9 +696,7 @@ printf 'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' \
   | openssl s_client -quiet -connect 127.0.0.1:8443 -tls1_3
 ```
 
-You should see the certificate details, then a normal HTTP response body. The `/big`
-route returns a 40,000-byte body, which is a useful check that responses larger than one
-TLS record's 16 KiB plaintext limit are fragmented correctly.
+You should see a couple of verification lines (`depth=0 CN=...` and `verify error:num=18:self-signed certificate`, both expected for a self-signed cert), then a normal HTTP response body. `-quiet` suppresses OpenSSL's session and certificate output; to inspect the certificate the server actually sent, replace `-quiet` with `-ign_eof` — note that simply deleting `-quiet` is not enough, because `-quiet` implies `-ign_eof`, and without it s_client closes the connection at stdin EOF before the response arrives. The `/big` route returns a 40,000-byte body, which is a useful check that responses larger than one TLS record's 16 KiB plaintext limit are fragmented correctly.
 
 ### What you cannot do yet
 
