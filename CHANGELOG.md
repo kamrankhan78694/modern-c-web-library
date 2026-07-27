@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **`examples/worker_example.c` now defines the Worker lifecycle exports**
+  (`worker_init`, `worker_fetch`, `worker_cleanup`), so the `emcc` command
+  printed in `examples/worker.js` links as written — at 2.0.0 that command
+  failed because the example had only `main()` (see the 2.0.0 notes below).
+  The native demo is unchanged; `main()` now drives the same three functions
+  the JS glue calls. Also fixed a 32-byte leak the example had carried from
+  the start: the `worker_d1_exec()` DDL result was discarded, the same
+  owned-return class PR #75 fixed in the D1 tests.
+- **`examples/worker.js` header corrected**: it pointed at a `wrangler.toml`
+  "in this directory" that has never shipped (you write your own), and it now
+  states its real limitation outright — the glue accepts `env` but never
+  passes it into WASM, so a deployed Worker sees the library's in-memory
+  binding simulations, not the services bound in the Cloudflare dashboard.
+- **CI wall time halved (~6.5 → ~3.0 min)**: the four secondary jobs no longer
+  wait on `primary-checks` — the staging saved nothing on a public repository
+  (Actions minutes are free) and doubled every run. All five jobs run in
+  parallel; the concurrency group still cancels superseded runs.
+- **The Valgrind CI step now genuinely gates**: it previously reported every
+  binary but only the last one's exit status could fail the job, and it could
+  pass having tested nothing (empty glob, failed `cd`). It now accumulates
+  every binary's status, hard-fails if zero binaries matched, and prints how
+  many it checked. The `cache_get()` leaks it had been hiding (25 test call
+  sites) are fixed via helpers that make the ownership impossible to miss.
 
 ## [2.0.0] - 2026-07-27
 

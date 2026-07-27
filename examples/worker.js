@@ -2,16 +2,22 @@
  * worker.js - Cloudflare Worker JavaScript Glue
  *
  * Bridges the Cloudflare Workers fetch event to the C/WASM library.
- * The WASM module is compiled from worker_example.c (or your own C code)
- * using Emscripten.
+ * The WASM module is compiled from worker_example.c - which defines the
+ * worker_init / worker_fetch / worker_cleanup exports this glue calls -
+ * or from your own C file providing the same three functions (the Worker
+ * Quick Start in README.md shows the pattern).
  *
- * Build the WASM module:
+ * Build the WASM module (after `emcmake cmake` + `emmake make` in ../build-wasm):
  *   emcc -o worker.wasm.js worker_example.c -I../include -L../build-wasm -lweblib \
  *        -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,allocateUTF8,UTF8ToString \
  *        -sEXPORTED_FUNCTIONS=_worker_init,_worker_fetch,_worker_cleanup,_worker_response_get_status,_worker_response_get_body,_worker_response_destroy,_malloc,_free \
  *        -sWASM=1 -sMODULARIZE=1 -sEXPORT_NAME=createModule
  *
- * Deploy with wrangler (see wrangler.toml in this directory).
+ * Deploying needs a wrangler.toml you write yourself - none ships in this
+ * repo.  KNOWN LIMITATION: this glue accepts `env` in fetch() but never
+ * passes it into WASM, so the KV/R2/D1/Queues bindings your Worker sees are
+ * the library's in-memory simulations (set up in worker_init()), not the
+ * real Cloudflare services bound in the dashboard.
  *
  * Copyright (c) 2024 Modern C Web Library
  * Licensed under MIT License
