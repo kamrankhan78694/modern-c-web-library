@@ -20,6 +20,11 @@
 #define ALERT_LEVEL_WARNING       1
 #define ALERT_LEVEL_FATAL         2
 
+/* Cap on consecutive zero-length application_data records (RFC 8446 §5.1 allows
+ * empty records, but an unbounded run carries no data and only serves to spin a
+ * blocking reader — a well-behaved peer never sends anything close to this). */
+#define TLS_KHANNECTION_MAX_EMPTY_APP_RECORDS 32
+
 /* Append raw bytes to the output buffer. Returns 1 on success, 0 if they do not
  * fit (the caller turns that into a fatal internal_error). */
 static int out_append(uint8_t *out, size_t out_cap, size_t *out_len,
@@ -177,7 +182,18 @@ static tls_khannection_rc_t process_record(tls_khannection_t *c, const uint8_t *
 
         switch (inner_type) {
         case TLS_CONTENT_APPLICATION_DATA:
-            *app_len += plain_len;   /* expose the plaintext to the caller */
+            if (plain_len == 0) {
+                /* Empty application_data record: legal but data-free. Bound a run of
+                 * them so a peer cannot pin a blocking reader with an endless stream
+                 * of empties (they decrypt fine and advance recv_seq but yield no
+                 * app bytes, so the reader would otherwise loop forever). */
+                if (++c->empty_app_records > TLS_KHANNECTION_MAX_EMPTY_APP_RECORDS) {
+                    return conn_fail(c, out, out_cap, out_len, TLS_ALERT_UNEXPECTED_MESSAGE);
+                }
+                return TLS_KHANNECTION_RC_OK;
+            }
+            c->empty_app_records = 0;   /* real data resets the run */
+            *app_len += plain_len;      /* expose the plaintext to the caller */
             return TLS_KHANNECTION_RC_OK;
         case TLS_CONTENT_ALERT:
             /* The alert body was written at app+*app_len; consume it there without

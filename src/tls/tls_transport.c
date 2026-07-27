@@ -23,6 +23,19 @@
 #define TLS_SEND_FLAGS 0
 #endif
 
+/* Monotonic seconds for the wall-clock deadlines below — immune to wall-clock
+ * (NTP) steps that an attacker or the system could otherwise use to slip past or
+ * prematurely trip a deadline. Falls back to time() if CLOCK_MONOTONIC is absent. */
+static time_t tls_monotonic_seconds(void) {
+#if defined(CLOCK_MONOTONIC)
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        return ts.tv_sec;
+    }
+#endif
+    return time(NULL);
+}
+
 /* Tear down: wipe the engine's key material AND the decrypted application
  * plaintext buffered here (the strictly-more-sensitive secret — cookies, auth
  * headers, request bodies), so neither lingers in the freed struct / a core dump.
@@ -118,10 +131,12 @@ int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *
     t->app_off = 0;
     t->app_len = 0;
     t->eof = 0;
-    start = time(NULL);
+    /* Reuse the handshake budget to bound each post-handshake read too. */
+    t->read_timeout_seconds = timeout_seconds;
+    start = tls_monotonic_seconds();
 
     while (tls_khannection_state(&t->conn) == TLS_KHANNECTION_HANDSHAKE) {
-        if (timeout_seconds > 0 && (long)(time(NULL) - start) >= (long)timeout_seconds) {
+        if (timeout_seconds > 0 && (long)(tls_monotonic_seconds() - start) >= (long)timeout_seconds) {
             transport_wipe(t);   /* slow-loris: handshake exceeded its wall-clock budget */
             return -1;
         }
@@ -151,18 +166,34 @@ int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *
 
 ssize_t tls_transport_read(tls_transport_t *t, void *buf, size_t len) {
     size_t avail, n;
+    time_t start;
     if (t == NULL || buf == NULL) {
         return -1;
     }
     if (len == 0) {
         return 0;
     }
+    start = tls_monotonic_seconds();
     /* Serve from the buffer; pump the socket until some application data arrives or
      * the stream ends. */
     while (t->app_off == t->app_len) {
         int r;
         if (t->eof || tls_khannection_state(&t->conn) == TLS_KHANNECTION_CLOSED) {
             return 0;
+        }
+        /* Aggregate wall-clock guard, checked between pumps: a peer that keeps the
+         * socket fed but never completes a record (slow-drip) — or floods sub-limit
+         * empty records — would otherwise spin this loop, never returning control to
+         * the HTTP layer that enforces the whole-request deadline. This bounds the
+         * *fed-socket* case. The complementary case — the peer going silent so recv()
+         * blocks inside transport_pump — is bounded by SO_RCVTIMEO, which the server
+         * sets no larger than this budget (http_server caps it at request_timeout),
+         * so recv() returns and this check runs within the budget. Fail closed
+         * (wipe + -1); conn_read maps the -1 to a clean end-of-stream. */
+        if (t->read_timeout_seconds > 0 &&
+            (long)(tls_monotonic_seconds() - start) >= (long)t->read_timeout_seconds) {
+            transport_wipe(t);
+            return -1;
         }
         r = transport_pump(t);
         if (r < 0) {

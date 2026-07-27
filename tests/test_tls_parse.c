@@ -1703,6 +1703,39 @@ static void test_tls_khannection_hrr(void) {
     }
 }
 
+/* Audit finding #1 regression: a flood of zero-length application_data records
+ * (legal per RFC 8446 §5.1 but data-free) must be rejected once it exceeds the
+ * engine's consecutive-empty bound, so a blocking reader cannot be pinned. A single
+ * non-empty record in between resets the run. */
+static void test_tls_khannection_empty_flood(void) {
+    static uint8_t out[2048], app[256];
+    tls_server_config_t cfg;
+    tls_khannection_t c;
+    size_t ol = 0, al = 0;
+    tls_khannection_rc_t rc = TLS_KHANNECTION_RC_OK;
+    int i, rejected = 0;
+
+    conn_set_cfg(&cfg);
+    conn_establish(&c, &cfg);   /* inits c internally; leaves recv_seq at 0 */
+    check_true("conn/empty: established", tls_khannection_state(&c) == TLS_KHANNECTION_ESTABLISHED);
+
+    for (i = 0; i < 128; i++) {
+        uint8_t rec[64];
+        size_t rl = 0;
+        if (!tls_record_seal(KAT_CLIENT_AP_KEY, KAT_CLIENT_AP_IV, (uint64_t)i,
+                             TLS_CONTENT_APPLICATION_DATA, NULL, 0, 0,
+                             rec, sizeof rec, &rl)) {
+            break;   /* seal of an empty record should always succeed; guard anyway */
+        }
+        rc = tls_khannection_recv(&c, rec, rl, out, sizeof out, &ol, app, sizeof app, &al);
+        if (rc == TLS_KHANNECTION_RC_ERROR) { rejected = 1; break; }
+        if (al != 0) { break; }   /* an empty record must never surface app bytes */
+    }
+    check_true("conn/empty: an empty-record flood is rejected (no reader spin)",
+               rejected && tls_khannection_state(&c) == TLS_KHANNECTION_FAILED);
+    check_true("conn/empty: rejected within the bound (not unbounded)", i <= 40);
+}
+
 int main(void) {
 #ifndef WEBLIB_TLS
     printf("FAIL: test_tls_parse built without WEBLIB_TLS defined\n");
@@ -1722,6 +1755,7 @@ int main(void) {
     test_tls_alpn();
     test_tls_khannection();
     test_tls_khannection_hrr();
+    test_tls_khannection_empty_flood();
 
     if (g_failures == 0) {
         printf("All TLS parse tests passed.\n");

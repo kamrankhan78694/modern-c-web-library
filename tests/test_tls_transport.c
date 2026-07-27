@@ -163,6 +163,29 @@ static int read_record(int fd, uint8_t *buf, size_t cap) {
     return (int)(TLS_RECORD_HEADER_LEN + body);
 }
 
+/* Drive the client half of the KAT handshake to completion (CH, read flight, CCS,
+ * Finished). Returns 0 once the server is established, -1 on any socket error. */
+static int client_do_handshake(int cfd) {
+    uint8_t ch[TLS_RECORD_HEADER_LEN + sizeof KAT_CH];
+    uint8_t sh[600], flight[2048], rec[128], finmsg[4 + 32];
+    static const uint8_t ccs[6] = { 0x14, 0x03, 0x03, 0x00, 0x01, 0x01 };
+    size_t rl = 0;
+
+    ch[0] = TLS_CONTENT_HANDSHAKE; ch[1] = 0x03; ch[2] = 0x03;
+    ch[3] = (uint8_t)((sizeof KAT_CH) >> 8); ch[4] = (uint8_t)(sizeof KAT_CH);
+    memcpy(ch + TLS_RECORD_HEADER_LEN, KAT_CH, sizeof KAT_CH);
+    if (write_all_c(cfd, ch, sizeof ch) != 0) return -1;
+    if (read_record(cfd, sh, sizeof sh) <= 0) return -1;
+    if (read_record(cfd, flight, sizeof flight) <= 0) return -1;
+    if (write_all_c(cfd, ccs, sizeof ccs) != 0) return -1;
+    finmsg[0] = TLS_HS_FINISHED; finmsg[1] = 0x00; finmsg[2] = 0x00; finmsg[3] = 0x20;
+    memcpy(finmsg + 4, KAT_CLIENT_FINISHED_VD, 32);
+    if (!tls_record_seal(KAT_CLIENT_HS_KEY, KAT_CLIENT_HS_IV, 0, TLS_CONTENT_HANDSHAKE,
+                         finmsg, sizeof finmsg, 0, rec, sizeof rec, &rl)) return -1;
+    if (write_all_c(cfd, rec, rl) != 0) return -1;
+    return 0;
+}
+
 /* ---- server side, run on its own thread ---- */
 typedef struct {
     int fd;
@@ -485,6 +508,94 @@ static void test_tls_transport_handshake_timeout(void) {
                res.accept_rc != 0);
     close(sv[0]);
 }
+
+/* Server that establishes, then does a single read with a 1-second aggregate read
+ * budget (from the accept timeout). Records the read's return value. */
+typedef struct { int fd; int accept_rc; long read_rc; } srv_read_t;
+
+static void *server_thread_read_timeout(void *arg) {
+    static tls_transport_t t;
+    srv_read_t *r = (srv_read_t *)arg;
+    tls_server_config_t cfg;
+    struct timeval tv;
+    char buf[64];
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.cert_der = KAT_CERT;
+    cfg.cert_len = sizeof KAT_CERT;
+    cfg.ed25519_seed = KAT_ED_SEED;
+    cfg.ed25519_pub = KAT_ED_PUB;
+    cfg.server_eph_sk = KAT_SERVER_EPH;
+    cfg.server_random = KAT_SERVER_RND;
+    /* Per-recv timeout well above the drip interval so recv returns between drips
+     * (each drip counts as progress); the 1-second AGGREGATE read deadline must fire. */
+    tv.tv_sec = 3;
+    tv.tv_usec = 0;
+    setsockopt(r->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    r->accept_rc = tls_transport_accept(&t, r->fd, &cfg, 1);   /* handshake+read budget = 1s */
+    r->read_rc = 1;   /* sentinel: read not reached / returned >0 */
+    if (r->accept_rc == 0) {
+        r->read_rc = (long)tls_transport_read(&t, buf, sizeof buf);
+    }
+    tls_transport_close(&t);
+    return NULL;
+}
+
+/*
+ * Post-handshake slow-loris guard (audit #2): after a completed handshake, a peer
+ * that opens an application record with a large declared body and then dribbles
+ * bytes (never completing it) must be cut off by tls_transport_read's aggregate
+ * wall-clock deadline, not pin the worker thread forever.
+ */
+static void test_tls_transport_read_timeout(void) {
+    int sv[2];
+    pthread_t tid;
+    srv_read_t res;
+    int cfd, i;
+    /* Application record header declaring a 256-byte body we will never finish. */
+    static const uint8_t apphdr[5] = { 0x17, 0x03, 0x03, 0x01, 0x00 };
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        check_true("readloris: socketpair created", 0);
+        return;
+    }
+    res.fd = sv[0];
+    res.accept_rc = 999;
+    res.read_rc = 1;
+    cfd = sv[1];
+    if (pthread_create(&tid, NULL, server_thread_read_timeout, &res) != 0) {
+        check_true("readloris: server thread started", 0);
+        close(sv[0]);
+        close(sv[1]);
+        return;
+    }
+    if (client_do_handshake(cfd) != 0) {
+        check_true("readloris: client completed the handshake", 0);
+        close(cfd);
+        pthread_join(tid, NULL);
+        close(sv[0]);
+        return;
+    }
+    /* Now dribble an application record that never completes. */
+    write_all_c(cfd, apphdr, sizeof apphdr);
+    for (i = 0; i < 20; i++) {
+        uint8_t b = (uint8_t)i;
+        if (write_all_c(cfd, &b, 1) != 0) {
+            break;   /* server tore the connection down when its read deadline fired */
+        }
+        usleep(150000);   /* 150 ms between drips — the record never completes */
+    }
+    close(cfd);
+    pthread_join(tid, NULL);
+    check_true("readloris: handshake still completed", res.accept_rc == 0);
+    /* Strictly -1 (deadline/fail-closed), not 0: a 0 would mean a clean EOF, which
+     * here could only come from the client's post-loop close and would NOT prove the
+     * deadline fired. The 1s read budget expires (~1s) well before the client stops
+     * dribbling (~3s), so the read must return -1. */
+    check_true("readloris: dribbled post-handshake read aborted by the wall-clock deadline",
+               res.read_rc < 0);
+    close(sv[0]);
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -496,6 +607,7 @@ int main(void) {
     test_tls_transport_halfclose();
     test_tls_transport_wipe();
     test_tls_transport_handshake_timeout();
+    test_tls_transport_read_timeout();
     if (g_failures == 0) {
         printf("All TLS transport tests passed.\n");
     }

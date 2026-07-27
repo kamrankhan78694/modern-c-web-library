@@ -90,6 +90,13 @@ typedef struct {
     uint8_t recv_key[32], recv_iv[12];
     uint64_t send_seq, recv_seq;
     int keys_ready;
+
+    /* Consecutive zero-length application_data records received while ESTABLISHED.
+     * Empty records are legal (RFC 8446 §5.1, a traffic-analysis countermeasure) but
+     * a flood of them yields no application data and would otherwise spin the caller;
+     * too many in a row without real data is treated as abuse. Reset by any record
+     * that carries application bytes. */
+    uint32_t empty_app_records;
 } tls_khannection_t;
 
 /*

@@ -63,6 +63,11 @@ typedef struct {
     size_t  app_off;
     size_t  app_len;
     int     eof;   /* peer closed (close_notify or TCP EOF); reads return 0 */
+    /* Wall-clock budget (seconds, 0 = none) bounding a single tls_transport_read
+     * call, so a slow-drip or empty-record peer cannot pin the pump loop between the
+     * HTTP layer's own request-deadline checks. Set from tls_transport_accept's
+     * timeout. */
+    int     read_timeout_seconds;
 } tls_transport_t;
 
 /*
@@ -77,6 +82,9 @@ typedef struct {
  * limit). Per-recv socket timeouts (SO_RCVTIMEO) only bound a single read, so a
  * slow-drip client dribbling a byte at a time could otherwise pin this call
  * indefinitely; this aggregate deadline is the slow-loris guard for the handshake.
+ * It is ALSO retained (see tls_transport_t.read_timeout_seconds) as the per-call
+ * budget for each subsequent tls_transport_read, applying the same guard to the
+ * post-handshake read path.
  */
 int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *cfg,
                          int timeout_seconds);
