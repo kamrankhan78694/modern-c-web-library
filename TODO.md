@@ -41,7 +41,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - DER/ASN.1 and PEM *parsing* for the PKCS#8 Ed25519 private key (`src/tls/der.c`, `pem.c`, `ed25519_key.c`); the server certificate is base64-decoded from PEM to DER and sent opaquely — it is never parsed as X.509
   - ALPN negotiating `http/1.1` (RFC 7301)
   - Sans-IO connection engine + blocking-socket adapter (`src/tls/tls_khannection.c`, `tls_transport.c`)
-  - `http_server_enable_tls(server, cert_pem, cert_len, key_pem, key_len)` — PEM **buffers with lengths**, not file paths (`include/kamran.k:620`); example in `examples/tls_server.c`
+  - `http_server_enable_tls(server, cert_pem, cert_len, key_pem, key_len)` — PEM **buffers with lengths**, not file paths (`include/kamran.k:622`); example in `examples/tls_server.c`
   - Deterministic fuzzer over the untrusted-input path plus a real `openssl s_client` TLS 1.3 interop test (`TlsFuzzTests`, `TlsInteropOpenssl`)
   - **Not delivered** — tracked as Phase 21 in [NEXT_PHASE.md](NEXT_PHASE.md):
     - [ ] External cryptographic audit

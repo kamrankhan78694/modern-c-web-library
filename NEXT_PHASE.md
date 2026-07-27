@@ -771,7 +771,7 @@ SEQUENTIAL (W42–W46, Phase 19):
 
 | Module | Unit Test Gate | Security Gate | Result |
 |--------|---------------|--------------|--------|
-| SHA-256 / SHA-512 | RFC / FIPS 180-4 known-answer vectors | No timing side-channels in the compression function | ✅ `TlsCryptoTests` |
+| SHA-256 / SHA-512 | RFC / FIPS 180-4 known-answer vectors | No timing side-channels in the compression function | 🟡 SHA-512 vectors in `TlsCryptoTests`; SHA-256 has no KAT there — its short-message KAT lives in `WebLibTests` (`test_sha256_kat`), with no long-message or Monte Carlo vector |
 | AES-256-GCM | NIST SP 800-38D test cases 1–18 | Constant-time tag verification | ❌ Not built → Phase 21 W53 |
 | ChaCha20-Poly1305 | RFC 8439 §A test vectors | No secret-dependent branches | ✅ `TlsCryptoTests` |
 | X25519 / Ed25519 | RFC 7748 §5.2 scalar-mult and §6.1 Alice/Bob key-exchange vectors; RFC 8032 vectors | Constant-time ladder and field arithmetic | ✅ `TlsCryptoTests` |
@@ -787,7 +787,7 @@ SEQUENTIAL (W42–W46, Phase 19):
 |--------|-----------|--------|
 | TLS Record Layer | Encrypt/decrypt round-trip; reject oversized records; handle partial TCP reads; fragment large writes | ✅ `TlsTests`, `TlsTransportTests` |
 | TLS Handshake | Complete TLS 1.3 handshake, including the HelloRetryRequest path | ✅ `openssl s_client -tls1_3` in `TlsInteropOpenssl`. ❌ Browser green lock is **not** a gate and is not achieved — Ed25519-only server certificates have limited and inconsistent browser support |
-| Certificate Handling | Parse a self-supplied Ed25519 certificate + PKCS#8 key; reject malformed DER/PEM | 🟡 Parsing only. Chain building, signature verification and expiry checks are **not** implemented → Phase 21 W52 |
+| Certificate Handling | Parse a self-supplied Ed25519 certificate + PKCS#8 key; reject malformed DER/PEM | 🟡 The PKCS#8 **key** is DER-parsed and malformed input rejected; the **certificate** is only PEM-decoded to DER and sent opaquely, never parsed as X.509. Chain building, signature verification and expiry checks are **not** implemented → Phase 21 W52 |
 | HTTPS Integration | `https://localhost:8443/` returns 200; ALPN negotiates a protocol | ✅ via `TlsHttpTests` and `TlsInteropOpenssl`, including a >16 KiB fragmented response and two requests on one connection. ALPN negotiates `http/1.1`; `h2` waits on Phase 13 |
 | Build gating | TLS compiles only with `-DWEBLIB_ENABLE_TLS=ON`; with it OFF the build is byte-identical to a pre-TLS build | ✅ CMake option defaults OFF; `tls-check` CI job covers the ON path |
 

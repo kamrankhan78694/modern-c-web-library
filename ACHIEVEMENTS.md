@@ -164,7 +164,7 @@ Failures: 0    Success rate: 100%
 - ✅ Response helpers (text, JSON, template)
 - ✅ Cross-platform support (Linux, macOS, Windows)
 - ✅ WebAssembly target via Emscripten (`emcmake cmake ..`) — a WASM-safe subset: JSON, router, template engine, input validation, cookies, body parser, compression. OS-dependent modules (sockets, HTTP server, event loop, TLS) are excluded from WASM builds. See `examples/wasm_example.c`.
-- ✅ Cloudflare Workers runtime layer (`worker_*` fetch-event API) with pure-C KV, R2, D1 and Queues binding APIs — in-memory emulations for native and test builds, bridged to the real Cloudflare bindings by a JS glue layer (`examples/worker.js`) on deployment. See [docs/WORKER_API.md](docs/WORKER_API.md).
+- ✅ Cloudflare Workers runtime layer (`worker_*` fetch-event API) with pure-C KV, R2, D1 and Queues binding APIs — **in-memory simulations in every build (native, test, and WASM)**, not the real Cloudflare services. Reaching the real bindings would need a JS glue layer, and none ships here: `examples/worker.js` accepts `env` but never passes it into WASM, and no `wrangler.toml` ships. See [docs/WORKER_API.md](docs/WORKER_API.md).
 - ✅ WebSocket support (RFC 6455, threaded + async)
 - ✅ Request body parsing (URL-encoded, multipart, file upload)
 - ✅ Cookie handling (RFC 6265)
@@ -252,7 +252,7 @@ See `examples/tls_server.c`, which reads the two PEM files itself and passes the
 |--------|--------|---------|
 | Compiler Warnings | ✅ **Zero** | Clean build with `-Wall -Wextra -pedantic` |
 | Security Warnings | ✅ **Zero** | All unsafe functions replaced |
-| Memory Errors | ✅ **Zero** | Valgrind clean on every test binary; ASan/UBSan clean on the TLS suites |
+| Memory Errors | 🟡 **Reported zero, not gated** | Valgrind runs on every test binary but the CI step only gates on the last one, and a known `cache_get()` leak in the cache tests sits in the unenforced set; ASan/UBSan genuinely gate the TLS suites |
 | Static Analysis | ✅ **Pass** | No defects detected |
 
 ### Test Results
@@ -268,7 +268,7 @@ See `examples/tls_server.c`, which reads the two PEM files itself and passes the
 
 | Tool | Status | Result |
 |------|--------|--------|
-| Valgrind | ✅ Every push | The Docker job runs each `tests/test_*` binary under `--leak-check=full`; 0 errors, 0 definite/indirect leaks |
+| Valgrind | 🟡 Every push, not gating | The Docker job runs each `tests/test_*` binary under `--leak-check=full`, but its shell loop discards every exit status except the last, so results are reported rather than enforced |
 | AddressSanitizer + UBSan | ✅ Every push | The `tls-check` job builds with `-fsanitize=address,undefined` and runs the 7 TLS suites; 0 errors |
 | Buffer Overflow | ✅ Protected | All bounds checked |
 | Memory Leaks | ✅ Clean | Proper cleanup verified |
@@ -399,8 +399,8 @@ the native path.
 
 ### Technical Validation ✅
 - Proof of concept complete and working
-- 100% pass rate across all 13 ctest suites; every tracked bug in [BUGS.md](BUGS.md) is closed
-- Valgrind runs every test binary on every push; AddressSanitizer and UndefinedBehaviorSanitizer run the TLS suites. All clean.
+- 100% pass rate across all 13 ctest suites; nine of the ten bugs tracked in [BUGS.md](BUGS.md) are closed, with BUG-4 (middleware singleton state) partially fixed
+- Valgrind runs every test binary on every push (though the CI step currently gates only on the last one); AddressSanitizer and UndefinedBehaviorSanitizer gate the TLS suites.
 - Production-ready code quality for the plain-HTTP core. The TLS layer is explicitly **not** in that bucket: it is experimental, unaudited, and off by default.
 
 ### Market Differentiation ✅
@@ -417,7 +417,7 @@ the native path.
 
 ### Risk Management ✅
 - Security-first design
-- Memory safety checked continuously — Valgrind over every test binary, ASan/UBSan over the TLS suites, all clean in CI (this is C: checked, not guaranteed)
+- Memory safety checked continuously — Valgrind over every test binary (reported, not yet gated — see the CI table), ASan/UBSan gating the TLS suites (this is C: checked, not guaranteed)
 - No supply chain vulnerabilities
 - Clear licensing (MIT)
 

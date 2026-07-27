@@ -110,7 +110,7 @@ This policy emphasizes **C craftsmanship** over convenience through other ecosys
 - **Benchmarking Suite**: Throughput/latency measurement with percentile statistics
 - **Security Headers**: HSTS, CSP, X-Frame-Options and friends as a middleware
 - **Environment Config**: Configuration from environment variables with typed accessors (string, int, bool, port) and defaults
-- **WASM & Cloudflare Workers**: Emscripten build target plus a Workers runtime with KV, R2, D1, and Queues binding APIs — the bindings are **in-memory simulations in every build (native, test, and WASM)**, not the real Cloudflare services. No JS glue ships that would reach the real bindings: `examples/worker.js` is a stale template naming three C exports that do not exist, and no `wrangler.toml` ships
+- **WASM & Cloudflare Workers**: Emscripten build target plus a Workers runtime with KV, R2, D1, and Queues binding APIs — the bindings are **in-memory simulations in every build (native, test, and WASM)**, not the real Cloudflare services. No JS glue ships that would reach the real bindings: `examples/worker.js` never passes `env` into WASM, and no `wrangler.toml` ships
 - **TLS 1.3 (experimental)**: Hand-written, zero-dependency pure-C TLS 1.3 server termination via `http_server_enable_tls()` — `TLS_CHACHA20_POLY1305_SHA256` + X25519 + Ed25519 only, server-side, threaded mode only. Off by default — build with `-DWEBLIB_ENABLE_TLS=ON`. Native-only (not WASM/Workers). Interoperates with `openssl s_client`; browsers are **not** supported (Ed25519-only certificates). **UNAUDITED — not for production use without an external cryptographic audit.** See [`src/tls/README.md`](src/tls/README.md) and [`examples/tls_server.c`](examples/tls_server.c).
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design with zero external dependencies
@@ -805,8 +805,11 @@ See `examples/wasm_example.c` for a complete demonstration.
 The library provides first-class support for running inside
 [Cloudflare Workers](https://developers.cloudflare.com/workers/) via WASM.
 The Worker runtime layer (`worker_*` API) bridges the Workers fetch-event
-model to the library's router and response helpers, and provides in-memory
-emulations of Cloudflare's infrastructure bindings (KV, R2, D1, Queues).
+model to the library's request/response helpers, and provides in-memory
+simulations of Cloudflare's infrastructure bindings (KV, R2, D1, Queues) —
+in **every** build, native and WASM alike, not just locally. Note that
+`worker_set_router()` is accepted but **not used for dispatch**; see the
+note under Quick Start.
 
 #### Worker API Overview
 
@@ -814,7 +817,7 @@ emulations of Cloudflare's infrastructure bindings (KV, R2, D1, Queues).
 |----------|---------|
 | `worker_request_create(method, url)` | Create a request from fetch event data |
 | `worker_request_set_header/body()` | Populate request headers and body |
-| `worker_handle_fetch(req, env)` | Route request through configured handler/router |
+| `worker_handle_fetch(req, env)` | Dispatch to the handler registered with `worker_set_fetch_handler()`. **Routers are not dispatched**: with only `worker_set_router()` set it returns a 200 placeholder without matching any route; with neither, 503 |
 | `worker_response_get_status/body/header()` | Read response fields |
 | `worker_response_set_body_text/set_json()` | Convenience response builders |
 | `worker_env_create/add_binding()` | Environment with named service bindings |
@@ -830,6 +833,14 @@ emulations of Cloudflare's infrastructure bindings (KV, R2, D1, Queues).
 | **env** | `worker_env_t` | `fetch(request, env, ctx)` | `worker_env_create/add_binding/get_binding/destroy` |
 
 #### Quick Start
+
+> **Note:** `worker_set_router()` is accepted but **not used for dispatch**. The
+> native and WASM builds share one `worker_handle_fetch()` implementation that does
+> not inspect the URL path, so a router-only Worker answers *every* request —
+> including `/api/hello` below — with a 200 placeholder. To route, register a
+> handler with `worker_set_fetch_handler()` and branch on
+> `worker_request_get_url(req)` inside it. The router call below is shown because
+> it is the current API shape, not because it dispatches.
 
 **1. Write your Worker in C:**
 

@@ -16,7 +16,7 @@ re-checked against the v2.0.0 tree on 2026-07-27*
 
 A production-level stress test suite was developed and is run on every push against the Modern C Web
 Library. The library demonstrates **stable behaviour and clean memory handling** across all tested
-components, with zero memory leaks confirmed under Valgrind in CI. Six issues were identified by the
+components. Six issues were identified by the
 original run, documented in [BUGS.md](BUGS.md), ranging from Critical (SIGPIPE handling) to
 Informational; five were fixed before v1.0.0 shipped on 2026-02-22, and the sixth is partially
 addressed.
@@ -94,8 +94,14 @@ Valgrind Results (CI, Ubuntu/gcc):
 The original report quoted exact heap figures (393,359 allocs, all freed; 0 bytes in use at exit).
 Those were measured against the 28-test suite and are no longer accurate for 37 tests, so they have
 been dropped rather than guessed at. What CI actually gates on — and what is stated above — is what
-`valgrind --leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=1` enforces: zero
-errors and zero definite or indirect leaks, on every `tests/test_*` binary, on every push.
+`valgrind --leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=1` reports.
+
+> **Caveat, accurate as of 2.0.0.** Valgrind *runs* over every `tests/test_*` binary, but the CI
+> step wraps it in a shell `for` loop with no `set -e`, so the step's exit status is only that of
+> the **last** binary — a failure in any earlier one is printed and discarded. The numbers above
+> are therefore observed, not enforced, and at least one definite leak is currently in the
+> discarded set (`cache_get()` returns an owned copy that the cache tests never free). Fixing the
+> gate and the leaks is tracked separately; until that lands, do not read "0 leaks" as a gate.
 
 ### Detailed Results by Category
 
@@ -220,7 +226,7 @@ in [BUGS.md](BUGS.md).
 | 1 | **Critical** | No SIGPIPE handling — `send()` without `MSG_NOSIGNAL` can crash process | ✅ Fixed (`signal(SIGPIPE, SIG_IGN)` + `MSG_NOSIGNAL`) |
 | 2 | **High** | Session store lacks thread safety — no mutex in `session.c` | ✅ Fixed (`pthread_mutex_t` in `session_store_t`) |
 | 3 | **Medium** | `rand()` fallback in session/CSRF not thread-safe | ✅ Fixed — the fallback was removed entirely; both paths now use `secure_random_bytes()` and fail closed |
-| 4 | **Low** | Middleware singleton pattern limits to one instance per type | ⚠️ Partially fixed — `middleware_fn_t` gained `void *user_data` and `router_use_middleware_with_data()` was added; CORS, rate-limit, auth and logging honour it, but static files, CSRF, error handler, metrics and security headers still ignore it and remain one instance per type (see [docs/TECHNICAL_DEBT.md](docs/TECHNICAL_DEBT.md) §3) |
+| 4 | **Low** | Middleware singleton pattern limits to one instance per type | ⚠️ Partially fixed — `middleware_fn_t` gained `void *user_data` and `router_use_middleware_with_data()` was added; CORS, rate-limit, auth and logging read it (only CORS, auth and logging can be handed a per-instance pointer — rate-limit's state type is not public), but static files, CSRF, error handler, metrics and security headers still ignore it and remain one instance per type (see [docs/TECHNICAL_DEBT.md](docs/TECHNICAL_DEBT.md) §3) |
 | 5 | **Low** | Hard-coded MAX_TIMERS=64 with no query API | ✅ Fixed (`event_loop_get_timer_count()` / `_get_max_timers()`) |
 | 6 | **Info** | No keep-alive connection count limit | ✅ Fixed (`http_server_set_max_connections()`) |
 

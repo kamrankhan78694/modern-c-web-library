@@ -103,7 +103,9 @@ ctest --test-dir build-tls
 - `WEBLIB_ENABLE_TLS=OFF` (the default): the build is byte-identical to a build
   with no TLS code — nothing in this directory is compiled.
 - `WEBLIB_ENABLE_TLS=ON` on a native target: defines `WEBLIB_TLS`, compiles
-  `src/tls/*.c`, and builds the guarded `TlsTests` suite.
+  `src/tls/*.c`, and builds the seven guarded suites (`TlsTests`, `TlsCryptoTests`,
+  `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`, `TlsHttpTests`,
+  `TlsInteropOpenssl`; the last needs `-DWEBLIB_TLS_TEST_HOOKS=ON` for `TlsHttpTests`).
 - WASM / Emscripten builds ignore the option entirely (no sockets to wrap; the
   browser / Cloudflare edge terminates TLS).
 
@@ -115,8 +117,11 @@ ctest --test-dir build-tls
   HMAC-SHA256 / base64 out of `middleware_auth.c` / `websocket.c`; transport
   choke-point (`conn_read` / `conn_write`) proving no behavior change.
 - **Phase 1:** primitives from scratch, each with an RFC known-answer test
-  (ChaCha20, Poly1305, ChaCha20-Poly1305, HKDF, SHA-384/512, X25519, Ed25519).
-- **Phase 2:** PEM + minimal ASN.1/DER + X.509 loading.
+  (ChaCha20, Poly1305, ChaCha20-Poly1305, HKDF, SHA-512, X25519, Ed25519).
+  *(Landed, except SHA-384, which was never built — SHA-512 shipped instead.)*
+- **Phase 2 (landed, narrowed):** PEM + minimal ASN.1/DER, used to parse the PKCS#8
+  Ed25519 private key. **No X.509 parsing shipped** — the server certificate is
+  base64-decoded from PEM to DER and sent opaquely.
 - **Phase 3 (landed):** TLS 1.3 key schedule, record layer, handshake messages
   (ClientHello parser + server builders + auth crypto), the server handshake
   state machine (`server_handshake.c`), the sans-IO connection engine

@@ -98,14 +98,16 @@ name, the session data API, and template auto-escaping. Each is described under
   types, `worker_set_fetch_handler()`, `worker_set_router()`, and
   `worker_handle_fetch()`, which is exported for a JavaScript host to drive.
   `examples/worker_example.c` exercises the layer natively.
-  `examples/worker.js` sketches the JS side but is a **stale template, not a
-  working deployment**: of the six C exports it names, three do not exist
-  anywhere in this repo — `_worker_init`, `_worker_fetch` and `_worker_cleanup`.
-  (The other three, `_worker_response_get_status` / `_get_body` / `_destroy`, do
-  exist.) The shipped entry point is `worker_handle_fetch()`, which the file
-  never calls, so its `-sEXPORTED_FUNCTIONS` line cannot link as written. No
-  `wrangler.toml` ships alongside it either. Reconciling that file with the real
-  API is tracked as follow-up work.
+  `examples/worker.js` sketches the JS side but is a **template, not a working
+  deployment**. Three of the six C exports it names — `_worker_init`,
+  `_worker_fetch`, `_worker_cleanup` — are not library functions; you write them
+  in your own C file, as the Worker Quick Start in `README.md` shows. Two things
+  about it are genuinely broken, though: its own build command compiles
+  `examples/worker_example.c`, which defines none of the three (it has only
+  `main()`), so that command fails as printed; and its header points at a
+  `wrangler.toml` that does not ship. It also never passes `env` into WASM, so
+  the KV/R2/D1/Queues bindings are unreachable from it. Reconciling the file with
+  the Quick Start is tracked as follow-up work.
 - **Cloudflare infrastructure bindings: KV, R2, D1, and Queues** (#71) — pure-C
   APIs shaped like the corresponding Workers bindings
   (`worker_kv_get/put/delete/list`, `worker_r2_get/head/put/delete/list`,
@@ -114,8 +116,8 @@ name, the session data API, and template auto-escaping. Each is described under
   `worker_queue_message_ack`). **In every build — native, test, and WASM — these
   are backed by in-memory simulations**, not by Cloudflare's services: reaching
   the real bindings needs a JS glue layer, and none ships in this repo
-  (`examples/worker.js` names no binding export at all, and its fetch-side
-  exports do not exist — see above). The simulations have
+  (`examples/worker.js` names no binding export at all and never passes `env`
+  into WASM — see above). The simulations have
   fixed capacities (1024 KV entries, 1024 R2 objects, 1024 D1 rows, 4096 queued
   messages) — see `docs/WORKER_API.md`. `worker_d1_batch()` is **not** atomic,
   unlike Cloudflare's `env.DB.batch()`.

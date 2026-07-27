@@ -191,7 +191,9 @@ typedef struct static_file_config {
     const char *root_dir;       /* Root directory for static files */
     const char *index_file;     /* Default index file (default: "index.html") */
     int cache_max_age;          /* Cache-Control max-age in seconds (default: 3600) */
-    bool enable_etag;           /* Enable ETag support (default: true) */
+    bool enable_etag;           /* Enable ETag support.  NOTE: copied verbatim -- unlike
+                                   index_file and cache_max_age, no default is applied,
+                                   so a zero-initialised struct disables ETags. */
 } static_file_config_t;
 
 /* HTTP Request structure */
@@ -615,8 +617,10 @@ int http_server_set_async(http_server_t *server, bool enable);
  * @param cert_len   Length of cert_pem
  * @param key_pem    PEM "PRIVATE KEY" block (PKCS#8 Ed25519 private key)
  * @param key_len    Length of key_pem
- * @return 0 on success, -1 on failure: NULL/empty arguments, malformed certificate
- *         PEM or private key, async mode enabled, TLS already enabled, or the server
+ * @return 0 on success, -1 on failure.  In a build WITHOUT -DWEBLIB_ENABLE_TLS=ON
+ *         (the default) this is a stub that ALWAYS returns -1.  In a TLS build the
+ *         failure causes are: NULL/empty arguments, malformed certificate PEM or
+ *         private key, async mode enabled, TLS already enabled, or the server
  *         already listening.
  */
 int http_server_enable_tls(http_server_t *server,
@@ -1101,9 +1105,18 @@ void cors_middleware_destroy(void);
 /* ===== Rate Limiting Middleware API ===== */
 
 /**
- * Create a rate limiting middleware with the given configuration
- * @param config Rate limit configuration
- * @return Middleware function for use with router_use_middleware()
+ * Create a rate limiting middleware with the given configuration.
+ * @param config Rate limit configuration.  Must be non-NULL, and
+ *               requests_per_window, window_seconds and burst_size must each be > 0,
+ *               so a zero-initialised struct is rejected.
+ * @return Middleware function for use with router_use_middleware(), or NULL if
+ *         config is NULL or any of those three fields is <= 0.
+ *
+ * NOTE: the limiter state lives in a file-static, and ratelimiter_t is not part of
+ * this header, so there is no way for a caller to obtain a second instance.  Unlike
+ * CORS/auth/logging, this middleware cannot be given per-instance state via
+ * router_use_middleware_with_data(): passing a ratelimit_config_t* there would be
+ * type-confused with the internal ratelimiter_t and corrupt memory.
  */
 middleware_fn_t ratelimit_middleware_create(const ratelimit_config_t *config);
 
@@ -1960,7 +1973,9 @@ bool secure_compare(const void *a, const void *b, size_t len);
 
 /**
  * Fill a buffer with cryptographically secure random bytes.
- * Uses /dev/urandom on POSIX or BCryptGenRandom on Windows.
+ * Uses the best available system CSPRNG: arc4random_buf() on Apple/BSD,
+ * getrandom(2) on Linux, BCryptGenRandom on Windows, with /dev/urandom only as a
+ * fallback when getrandom is unavailable at runtime.  Fails closed.
  * Suitable for generating session IDs, CSRF tokens, nonces, etc.
  * @param buf  Destination buffer (must not be NULL)
  * @param len  Number of random bytes to generate (must be > 0)
@@ -2137,7 +2152,11 @@ int worker_env_binding_count(const worker_env_t *env);
 /** Register a custom fetch handler for the Worker. */
 void worker_set_fetch_handler(worker_fetch_handler_t handler);
 
-/** Set the library router for automatic route matching in Workers. */
+/**
+ * Record a router on the Worker runtime.  NOT used for dispatch:
+ * worker_handle_fetch() consults it only to choose between a 200 placeholder
+ * and a 503, and never matches a route.  See worker_handle_fetch below.
+ */
 void worker_set_router(router_t *router);
 
 /**
@@ -2175,7 +2194,8 @@ typedef struct {
     int    cursor;        /**< Cursor for next page (0 if complete). */
 } worker_kv_list_result_t;
 
-/** Create a KV namespace handle (simulated in native builds). */
+/** Create a KV namespace handle.  In-memory simulation in EVERY build,
+ *  including WASM/Workers — no glue to the real Cloudflare KV ships here. */
 worker_kv_t *worker_kv_create(const char *namespace_name);
 
 /** Destroy a KV namespace and free all stored entries. */

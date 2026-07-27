@@ -96,7 +96,7 @@ A hand-written TLS 1.3 server written in the same pure C as the rest of the libr
 ### WebAssembly and Cloudflare Workers targets
 
 - **WebAssembly (Emscripten)** — a WASM-safe subset builds under `emcmake cmake`: JSON, router, template engine, input validation, cookies, body parsing and compression. Sockets, the shared library and TLS are excluded there. Exports for a JavaScript host (`wasm_weblib_version()`, `wasm_weblib_capabilities()`, `wasm_weblib_has_capability()` and thin JSON wrappers) plus `examples/wasm_example.c`.
-- **Cloudflare Workers** — a fetch-event compatibility layer (`src/worker_runtime.c`) bridges a Worker's request/response model to the router, with pure-C APIs shaped like the KV, R2, D1 and Queues bindings. In a deployed Worker the JS glue bridges them to the real bindings; **in native and test builds they are backed by in-memory simulations** with fixed capacities, and `worker_d1_batch()` is not atomic the way Cloudflare's `env.DB.batch()` is. Details in [Cloudflare Workers API](WORKER_API.md).
+- **Cloudflare Workers** — a fetch-event compatibility layer (`src/worker_runtime.c`) bridges a Worker's request/response model to the router, with pure-C APIs shaped like the KV, R2, D1 and Queues bindings. **In every build — native, test, and WASM — these are backed by in-memory simulations**, not by Cloudflare's services: reaching the real bindings needs a JS glue layer, and none ships in this repo (`examples/worker.js` accepts `env` but never passes it into WASM, and no `wrangler.toml` ships). The simulations have fixed capacities, and `worker_d1_batch()` is not atomic the way Cloudflare's `env.DB.batch()` is. Details in [Cloudflare Workers API](WORKER_API.md).
 
 ### Upgrading from 1.0.0
 
@@ -196,7 +196,7 @@ Stress-test results are in [STRESS_TESTS.md](../STRESS_TESTS.md) — originally 
 ## Code Quality
 
 - **6 ctest suites in a default build** — `WebLibTests` (166 unit tests), `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`. Building with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` adds 7 more covering the experimental TLS layer, for 13 in total. Run them all with `cd build && ctest --output-on-failure`.
-- **Valgrind clean** — the default build runs the full suite under Valgrind in CI with zero leaks. The TLS build is covered by an ASan/UBSan run instead, not Valgrind.
+- **Valgrind** — the default build runs the full suite under Valgrind in CI. Note the step only *gates* on the last test binary (a shell-loop bug), so its result is reported rather than enforced, and a known `cache_get()` leak in the tests sits in the unenforced set; fixing both is tracked separately. The TLS build is covered by an ASan/UBSan run instead, not Valgrind.
 - **Static analysis** — Clean builds on GCC/Clang with `-Wall -Wextra -pedantic`
 - **CI/CD** — `primary-checks` (gcc build, full suite, Valgrind), `clang-check`, `tls-check` (TLS build plus an ASan/UBSan run of the TLS suites), `macos-check` (pull requests only), and `docker-image-check`
 - **Code review** — All changes reviewed

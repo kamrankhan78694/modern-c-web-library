@@ -12,11 +12,13 @@ deployment to Cloudflare Workers).  The main entry point
 > Where a table has a **Cloudflare** column, the `Value` column is what this
 > library actually enforces and the `Cloudflare` column is the real service's
 > limit — the two mostly agree, and each row that differs says so. Rows marked
-> **(in-memory impl)** are capacities of the native simulation you run locally,
-> from arrays sized at compile time in `src/worker_kv.c`, `src/worker_r2.c`,
-> `src/worker_d1.c`, and `src/worker_queues.c`. They have no Cloudflare
-> equivalent, so hitting one locally is not a sign your Worker will fail in
-> production. (The D1 table is entirely of this kind and has no Cloudflare
+> **(in-memory impl)** are capacities of the in-memory implementation, from
+> arrays sized at compile time in `src/worker_kv.c`, `src/worker_r2.c`,
+> `src/worker_d1.c`, and `src/worker_queues.c`. Those files are in the WASM-safe
+> source set, so **these capacities apply in every build — including a deployed
+> Worker**, not just locally: no JS glue ships that would reach the real
+> Cloudflare services. Hitting one is a real limit, not a local-testing
+> artefact. (The D1 table is entirely of this kind and has no Cloudflare
 > column.)
 
 ---
@@ -255,8 +257,10 @@ delegates to this handler instead of the library router.
 void worker_set_router(router_t *router);
 ```
 
-Set the library router for automatic route matching.  Used by
-`worker_handle_fetch()` when no custom fetch handler is registered.
+Record a router on the Worker runtime.  **It is not used for dispatch.**
+`worker_handle_fetch()` consults it only to decide between a 200 placeholder
+and a 503; it never inspects the URL path or matches a route.  See
+`worker_handle_fetch` below.
 
 ### `worker_handle_fetch`
 
@@ -453,10 +457,11 @@ void worker_kv_list_result_destroy(worker_kv_list_result_t *result);
   TTL, absolute expiration, and metadata.  Pass `NULL` for defaults.
 - `worker_kv_list()` returns a `worker_kv_list_result_t *` that must be
   freed with `worker_kv_list_result_destroy()`.
-- The native/in-memory implementation holds at most 1024 live keys per
-  namespace.  Once full, `worker_kv_put()` returns `-1` for a *new* key;
-  updates to existing keys and `worker_kv_delete()` still succeed.  This
-  is a limit of the local test implementation, not of Cloudflare KV.
+- The in-memory implementation holds at most 1024 live keys per namespace.
+  Once full, `worker_kv_put()` returns `-1` for a *new* key; updates to
+  existing keys and `worker_kv_delete()` still succeed.  This is not a limit
+  of Cloudflare KV — but since `src/worker_kv.c` compiles into the WASM build
+  too, it is the limit you get in a deployed Worker as well.
 
 ### Limits
 
