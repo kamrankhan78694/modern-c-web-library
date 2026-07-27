@@ -275,9 +275,11 @@ secure_zero(decoded, sizeof(decoded));
 
 ## Stress Test Results Summary
 
-All 37 stress tests pass with zero failures and zero memory leaks. The leak check runs on every push
-in the `Build, Test & Memcheck (Docker)` CI job, which executes every test binary under Valgrind on
-Ubuntu and fails the job if any of them leaks:
+All 37 stress tests pass with zero failures and zero **definite or indirect** memory leaks. The leak
+check runs on every push in the `Build, Test & Memcheck (Docker)` CI job, which executes every test
+binary under Valgrind on Ubuntu with
+`--errors-for-leak-kinds=definite,indirect` and fails the job if any of them reports one. *Possible*
+and *still-reachable* blocks are displayed but are not gated:
 
 ```
 Tests run: 37
