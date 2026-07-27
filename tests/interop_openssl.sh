@@ -22,6 +22,14 @@ trap cleanup EXIT
 command -v openssl >/dev/null 2>&1 || skip "openssl not found"
 [ -x "$SERVER" ] || skip "server binary '$SERVER' not found"
 
+# This test drives a real OpenSSL client through TLS 1.3 with an Ed25519 cert. A
+# different implementation behind the `openssl` name (LibreSSL/BoringSSL) or one
+# without a TLS 1.3-capable s_client behaves differently, so skip rather than fail
+# spuriously — a genuine server regression still fails, because on a capable OpenSSL
+# these pre-flight checks pass and only the handshake itself can then break.
+openssl version 2>/dev/null | grep -qi "^OpenSSL " || skip "not OpenSSL (e.g. LibreSSL); TLS 1.3 / Ed25519 support differs"
+openssl s_client -help 2>&1 | grep -q -- "-tls1_3" || skip "this openssl s_client has no -tls1_3"
+
 TO=""
 command -v timeout >/dev/null 2>&1 && TO="timeout 10"
 

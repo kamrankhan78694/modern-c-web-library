@@ -86,10 +86,13 @@ if(NOT EMSCRIPTEN)
         endif()
 
         # Real-client interoperability: openssl s_client vs the tls_server example.
-        # Skips gracefully if openssl is missing/too old (see the script).
-        if(TARGET tls_server)
+        # Skips gracefully if openssl is missing/too old (see the script). Registered
+        # only when a bash interpreter exists, so systems without bash (minimal CI /
+        # Windows-native) don't get a hard launch failure.
+        find_program(BASH_EXECUTABLE bash)
+        if(TARGET tls_server AND BASH_EXECUTABLE)
             add_test(NAME TlsInteropOpenssl
-                     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/interop_openssl.sh $<TARGET_FILE:tls_server>)
+                     COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/interop_openssl.sh $<TARGET_FILE:tls_server>)
         endif()
     endif()
 endif()
