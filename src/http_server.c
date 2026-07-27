@@ -870,7 +870,10 @@ static tls_transport_t *tls_do_handshake(http_server_t *server, int fd) {
     cfg.ed25519_pub = server->tls_ed25519_pub;
     cfg.server_eph_sk = eph;      /* borrowed only for the duration of the accept call */
     cfg.server_random = rnd;
-    if (tls_transport_accept(t, fd, &cfg) != 0) {
+    /* Bound the handshake by the same wall-clock budget the request loop uses, so a
+     * slow-drip client cannot pin this worker thread (slow-loris) during the
+     * handshake, which runs before the per-request deadline loop. */
+    if (tls_transport_accept(t, fd, &cfg, server->request_timeout_sec) != 0) {
         secure_zero(eph, sizeof eph);
         free(t);
         return NULL;
@@ -1327,7 +1330,16 @@ static int send_all(int fd, void *tls, const char *buf, size_t len) {
 static ssize_t conn_read(int fd, void *tls, void *buf, size_t len) {
 #ifdef WEBLIB_TLS
     if (tls != NULL) {
-        return tls_transport_read((tls_transport_t *)tls, buf, len);
+        /* tls_transport_read returns >0 bytes, 0 on close_notify, or -1 on a fatal
+         * error. The caller dispatches read failures on errno (EINTR retry / EAGAIN
+         * timeout / else 500) — a contract only recv() satisfies. A -1 here carries
+         * a STALE errno (the TLS error path performs a successful recv() then fails
+         * in the engine), which could spuriously retry (EINTR → 100% CPU spin), or
+         * become a bogus 408/500. A TLS error is always terminal — the engine has
+         * already wiped and emitted any alert — so collapse both close and error to
+         * a 0-byte end-of-stream, which the caller handles as a clean close. */
+        ssize_t r = tls_transport_read((tls_transport_t *)tls, buf, len);
+        return r > 0 ? r : 0;
     }
 #else
     (void)tls;
@@ -2453,7 +2465,17 @@ int http_server_set_async(http_server_t *server, bool enable) {
         fprintf(stderr, "Cannot change async mode while server is running\n");
         return -1;
     }
-    
+
+#ifdef WEBLIB_TLS
+    if (enable && server->tls_enabled) {
+        /* TLS termination is only wired for the threaded path; enabling async would
+         * otherwise silently serve plaintext on the HTTPS port. Mirror the reverse
+         * guard in http_server_enable_tls. */
+        fprintf(stderr, "Cannot enable async mode: TLS termination is enabled (threaded only)\n");
+        return -1;
+    }
+#endif
+
     if (enable && !server->event_loop) {
         /* Create event loop */
         server->event_loop = event_loop_create();

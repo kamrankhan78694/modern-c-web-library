@@ -200,6 +200,11 @@ static void test_tls_http(void) {
         }
     }
 
+    /* Enabling async after TLS must be refused — otherwise the async path would
+     * silently serve plaintext on the HTTPS port (adversarial-review finding). */
+    check_true("http-tls: set_async(true) rejected once TLS is enabled",
+               http_server_set_async(server, true) == -1);
+
     for (p = 45443; p < 46443; p++) {
         if (http_server_listen(server, (uint16_t)p) == 0) {
             port = (uint16_t)p;

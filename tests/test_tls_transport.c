@@ -17,6 +17,7 @@
 #ifdef WEBLIB_TLS
 #include <pthread.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <errno.h>
 #include "tls_transport.h"
@@ -184,7 +185,7 @@ static void *server_thread(void *arg) {
     cfg.server_eph_sk = KAT_SERVER_EPH;
     cfg.server_random = KAT_SERVER_RND;
 
-    r->accept_rc = tls_transport_accept(&t, r->fd, &cfg);
+    r->accept_rc = tls_transport_accept(&t, r->fd, &cfg, 0);   /* 0 = no handshake time limit */
     if (r->accept_rc == 0) {
         r->req_len = tls_transport_read(&t, r->req, sizeof r->req - 1);
         if (r->req_len > 0) {
@@ -309,7 +310,7 @@ static void *server_thread_readonly(void *arg) {
     cfg.server_eph_sk = KAT_SERVER_EPH;
     cfg.server_random = KAT_SERVER_RND;
 
-    r->accept_rc = tls_transport_accept(&t, r->fd, &cfg);
+    r->accept_rc = tls_transport_accept(&t, r->fd, &cfg, 0);   /* 0 = no handshake time limit */
     if (r->accept_rc == 0) {
         r->req_len = tls_transport_read(&t, r->req, sizeof r->req - 1);
         if (r->req_len > 0) {
@@ -419,6 +420,71 @@ static void test_tls_transport_wipe(void) {
     check_true("wipe: teardown zeroes the buffered decrypted plaintext",
                !nonzero && t.app_len == 0 && t.app_off == 0);
 }
+
+/* Server that accepts with a 1-second aggregate handshake deadline. */
+static void *server_thread_slowloris(void *arg) {
+    static tls_transport_t t;
+    srv_result_t *r = (srv_result_t *)arg;
+    tls_server_config_t cfg;
+    struct timeval tv;
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.cert_der = KAT_CERT;
+    cfg.cert_len = sizeof KAT_CERT;
+    cfg.ed25519_seed = KAT_ED_SEED;
+    cfg.ed25519_pub = KAT_ED_PUB;
+    cfg.server_eph_sk = KAT_SERVER_EPH;
+    cfg.server_random = KAT_SERVER_RND;
+    /* A generous per-recv timeout so recv returns between drips (each drip is
+     * "progress"); the 1-second AGGREGATE deadline is what must fire. */
+    tv.tv_sec = 3;
+    tv.tv_usec = 0;
+    setsockopt(r->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    r->accept_rc = tls_transport_accept(&t, r->fd, &cfg, 1);
+    tls_transport_close(&t);
+    return NULL;
+}
+
+/*
+ * Slow-loris guard: a client that opens a handshake record with a large declared
+ * body and then dribbles bytes (never completing it) must be cut off by the
+ * aggregate handshake deadline, not pin the worker forever.
+ */
+static void test_tls_transport_handshake_timeout(void) {
+    int sv[2];
+    pthread_t tid;
+    srv_result_t res;
+    int cfd, i;
+    /* Handshake record header declaring a 4096-byte body we will never finish. */
+    static const uint8_t hdr[5] = { 0x16, 0x03, 0x03, 0x10, 0x00 };
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        check_true("slowloris: socketpair created", 0);
+        return;
+    }
+    res.fd = sv[0];
+    res.accept_rc = 999;
+    cfd = sv[1];
+    if (pthread_create(&tid, NULL, server_thread_slowloris, &res) != 0) {
+        check_true("slowloris: server thread started", 0);
+        close(sv[0]);
+        close(sv[1]);
+        return;
+    }
+    write_all_c(cfd, hdr, sizeof hdr);
+    for (i = 0; i < 20; i++) {
+        uint8_t b = (uint8_t)i;
+        if (write_all_c(cfd, &b, 1) != 0) {
+            break;   /* server closed the connection when its deadline fired */
+        }
+        usleep(150000);   /* 150 ms between drips — the record never completes */
+    }
+    close(cfd);
+    pthread_join(tid, NULL);
+    check_true("slowloris: dribbled handshake aborted by the wall-clock deadline",
+               res.accept_rc != 0);
+    close(sv[0]);
+}
 #endif /* WEBLIB_TLS */
 
 int main(void) {
@@ -429,6 +495,7 @@ int main(void) {
     test_tls_transport();
     test_tls_transport_halfclose();
     test_tls_transport_wipe();
+    test_tls_transport_handshake_timeout();
     if (g_failures == 0) {
         printf("All TLS transport tests passed.\n");
     }
