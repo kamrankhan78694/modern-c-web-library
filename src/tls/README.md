@@ -78,12 +78,14 @@ correct `no_application_protocol` refusal.
   independent Python oracle.
 - ✅ **Adversarial-input robustness** — a deterministic ClientHello/record fuzzer
   (`tests/test_tls_fuzz.c`) runs clean under ASan/UBSan.
-- ⚠️ **Browsers (Chrome/Firefox/Safari): not expected to load a page today.** Not a
-  handshake bug — mainstream browsers do **not** accept an **Ed25519 server
-  certificate** for TLS. Because this profile is Ed25519-only, browser page-load is
-  effectively gated on adding an RSA/ECDSA certificate path (documented future), not
-  on any missing handshake feature. A TLS-1.3 + ChaCha20 + X25519 browser handshake
-  would otherwise be negotiable.
+- ⚠️ **Browsers (Chrome/Firefox/Safari): not something to rely on today.** Not a
+  handshake bug — the blocker is the **Ed25519-only certificate** profile. Ed25519
+  *server-certificate* support in mainstream browsers is limited and inconsistent
+  across browsers and versions (much more so than Ed25519 support elsewhere in the
+  ecosystem), so a browser page-load with this profile cannot be relied upon.
+  Removing this bound is gated on adding an RSA/ECDSA certificate path (documented
+  future), not on any missing handshake feature; the TLS-1.3 + ChaCha20 + X25519
+  handshake itself is otherwise negotiable with browsers.
 - **Known bound:** Ed25519-only — a client not offering `ed25519` in
   `signature_algorithms` (e.g. an old LibreSSL) is correctly refused with
   `handshake_failure`.
