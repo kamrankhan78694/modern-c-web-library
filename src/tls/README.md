@@ -20,17 +20,73 @@ proxy. The owner chose **Option A: hand-write TLS in pure C from scratch**
 (nginx-inspired), matching the repo's own ADR (`NEXT_PHASE.md`). No OpenSSL,
 mbedTLS, or any crypto library is linked; `PLATFORM_LIBS` gains no new dependency.
 
-## Scope (first milestone — planned, not yet built)
+## Scope (implemented)
 
 - **In:** TLS 1.3 (RFC 8446), **server-side only**; one cipher suite
   `TLS_CHACHA20_POLY1305_SHA256`; group **X25519**; signature **Ed25519**; one
-  self-supplied Ed25519 certificate.
+  self-supplied Ed25519 certificate; HelloRetryRequest (§4.1.4) for a client that
+  offers X25519 without a key_share; ALPN (RFC 7301) selecting `http/1.1`.
 - **Out (documented future):** TLS 1.2; AES-GCM and any other suite; RSA / ECDSA /
   P-256 / bignum; client-certificate verification; session resumption / tickets /
   0-RTT.
 - **Rationale:** ChaCha20-Poly1305 + X25519 + Ed25519 are constant-time by
   construction and need no big-integer machinery — the only responsible choice for
   hand-rolled crypto — and curl and every modern browser speak them.
+
+## Security scope — exactly what is and isn't provided
+
+This is an **experimental, unaudited** TLS 1.3 server. Read this before relying on
+it for anything.
+
+**Provided:** server-side TLS 1.3 termination for the single profile above; a
+forward-secret 1-RTT handshake (ephemeral X25519, fresh per connection); server
+authentication via an Ed25519 certificate + CertificateVerify; AEAD record
+protection (ChaCha20-Poly1305); constant-time verify_data / shared-secret checks;
+the RFC 8446 §7.4.2 all-zero-ECDH rejection; a fail-closed handshake state machine
+(every error latches a terminal state and wipes secrets); ALPN negotiation with a
+correct `no_application_protocol` refusal.
+
+**NOT provided (by design, this milestone):**
+
+- **No security audit.** The crypto and the state machine are hand-written and have
+  not been independently reviewed. Do not use this to protect real secrets.
+- **No cipher/curve/signature agility.** Exactly one of each. A client that cannot
+  offer all three is refused (`handshake_failure`); a client that offers ALPN with
+  no `http/1.1` is refused (`no_application_protocol`).
+- **No client authentication, session resumption / tickets / PSK, 0-RTT, or
+  KeyUpdate.**
+- **No middlebox-compatibility ChangeCipherSpec *emission* (RFC 8446 §D.4).** An
+  incoming dummy CCS from the client is accepted and ignored, but the server does
+  **not** emit its own. §D.4 makes this optional (`MAY`); direct clients (curl,
+  `openssl s_client`, browsers) complete the handshake without it. It matters only
+  on paths with legacy TLS-1.2-era middleboxes that mishandle a "bare" TLS 1.3
+  flow; such deployments should front this server with a proxy, or the emission can
+  be added later (it is a few bytes after ServerHello/HRR and is excluded from the
+  transcript).
+- **No downgrade-attack signalling beyond version pinning.** The server only
+  accepts TLS 1.3 (via `supported_versions`); it does not implement the RFC 8446
+  §4.1.3 downgrade sentinel in ServerHello.random, because it never negotiates an
+  older version to be downgraded *to*.
+- **Not wired for WebSocket-over-TLS or the async server path** (threaded mode
+  only), per the integration notes below.
+
+## Interoperability status (milestone #1)
+
+- ✅ **OpenSSL** — `openssl s_client -tls1_3` completes a real handshake + encrypted
+  HTTP request/response (`tests/interop_openssl.sh`, `examples/tls_server.c`).
+- ✅ **HelloRetryRequest** and ✅ **ALPN** (`http/1.1`), each cross-checked against an
+  independent Python oracle.
+- ✅ **Adversarial-input robustness** — a deterministic ClientHello/record fuzzer
+  (`tests/test_tls_fuzz.c`) runs clean under ASan/UBSan.
+- ⚠️ **Browsers (Chrome/Firefox/Safari): not expected to load a page today.** Not a
+  handshake bug — mainstream browsers do **not** accept an **Ed25519 server
+  certificate** for TLS. Because this profile is Ed25519-only, browser page-load is
+  effectively gated on adding an RSA/ECDSA certificate path (documented future), not
+  on any missing handshake feature. A TLS-1.3 + ChaCha20 + X25519 browser handshake
+  would otherwise be negotiable.
+- **Known bound:** Ed25519-only — a client not offering `ed25519` in
+  `signature_algorithms` (e.g. an old LibreSSL) is correctly refused with
+  `handshake_failure`.
 
 ## Build
 
@@ -73,15 +129,11 @@ ctest --test-dir build-tls
   The non-TLS path is byte-identical (the stress suite passes unchanged), and an
   end-to-end test drives a real TLS 1.3 request/response against the live server.
   Threaded mode only; WebSocket-over-TLS and the async path are not yet wired.
-- **Interoperability (milestone #1, in progress):** ✅ `openssl s_client` (OpenSSL
-  3.x) completes a real TLS 1.3 handshake + encrypted HTTP request/response against
-  the server — a genuine third-party client — locked in by `tests/interop_openssl.sh`
-  and demonstrated by `examples/tls_server.c`. ✅ **HelloRetryRequest** (RFC 8446
-  §4.1.4): a client that offers X25519 but sends no X25519 key_share is now
-  negotiated via a single HRR (with the §4.4.1 synthetic-transcript rewrite), rather
-  than refused. ✅ ClientHello / record fuzzing (`tests/test_tls_fuzz.c`). Remaining:
-  browser interop; optional middlebox-compat ChangeCipherSpec emission and ALPN.
-  Known bound: Ed25519-only, so a client not offering `ed25519` is correctly refused.
+- **Interoperability (milestone #1):** real `openssl s_client` interop,
+  HelloRetryRequest (§4.1.4 with the synthetic-transcript rewrite), ALPN (`http/1.1`),
+  and ClientHello/record fuzzing have all landed — see **"Interoperability status"**
+  above for the current matrix, the browser/Ed25519 bound, and the deliberate
+  middlebox-CCS-emission omission.
 
 Design references in-repo: the "Pure C TLS (not OpenSSL)" ADR in
 [`NEXT_PHASE.md`](../../NEXT_PHASE.md) and the Phase 11 TLS plan in

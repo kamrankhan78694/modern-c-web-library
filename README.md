@@ -1116,7 +1116,8 @@ For detailed metrics, achievements, and investment highlights, see [**ACHIEVEMEN
 - [x] Benchmarking suite
 - [x] REST API example
 - [x] Tutorial documentation
-- [ ] SSL/TLS support (pure C implementation)
+- [x] SSL/TLS support (pure-C TLS 1.3 server — **experimental / unaudited**; single
+  ChaCha20-Poly1305 + X25519 + Ed25519 profile, see [`src/tls/README.md`](src/tls/README.md))
 - [ ] HTTP/2 support
 
 ## Community & Support
