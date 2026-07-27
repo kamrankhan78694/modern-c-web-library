@@ -21,6 +21,12 @@ if(NOT EMSCRIPTEN)
     add_executable(rest_api_server rest_api_server.c)
     target_link_libraries(rest_api_server weblib ${PLATFORM_LIBS})
 
+    # HTTPS example — only when the experimental pure-C TLS layer is enabled
+    if(WEBLIB_ENABLE_TLS)
+        add_executable(tls_server tls_server.c)
+        target_link_libraries(tls_server weblib ${PLATFORM_LIBS})
+    endif()
+
     # Installation
     install(TARGETS simple_server async_server websocket_echo_server async_websocket_echo_server rest_api_server DESTINATION bin)
 endif()

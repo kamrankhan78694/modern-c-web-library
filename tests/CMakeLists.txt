@@ -84,6 +84,13 @@ if(NOT EMSCRIPTEN)
             target_link_libraries(test_tls_http weblib ${PLATFORM_LIBS})
             add_test(NAME TlsHttpTests COMMAND test_tls_http)
         endif()
+
+        # Real-client interoperability: openssl s_client vs the tls_server example.
+        # Skips gracefully if openssl is missing/too old (see the script).
+        if(TARGET tls_server)
+            add_test(NAME TlsInteropOpenssl
+                     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/interop_openssl.sh $<TARGET_FILE:tls_server>)
+        endif()
     endif()
 endif()
 
