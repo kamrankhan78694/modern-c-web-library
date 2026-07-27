@@ -72,8 +72,14 @@ typedef struct {
  * success (the connection is established and ready for read/write), -1 on any
  * failure (a fatal alert may have been written to the peer; the caller should close
  * `fd`). Does not take ownership of `fd`.
+ *
+ * `timeout_seconds` bounds the TOTAL wall-clock time of the handshake (0 = no
+ * limit). Per-recv socket timeouts (SO_RCVTIMEO) only bound a single read, so a
+ * slow-drip client dribbling a byte at a time could otherwise pin this call
+ * indefinitely; this aggregate deadline is the slow-loris guard for the handshake.
  */
-int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *cfg);
+int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *cfg,
+                         int timeout_seconds);
 
 /*
  * Read up to `len` decrypted application bytes into `buf`, blocking until at least

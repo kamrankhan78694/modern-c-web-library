@@ -5,6 +5,17 @@
 #include <time.h>
 #include <ctype.h>
 
+#ifdef WEBLIB_TLS
+/* Experimental pure-C TLS 1.3 termination (native-only, UNAUDITED). Only compiled
+ * when -DWEBLIB_ENABLE_TLS=ON; with it off, none of this is present and the server
+ * is byte-identical to a no-TLS build. */
+#include "tls/tls_transport.h"
+#include "tls/server_handshake.h"
+#include "tls/pem.h"
+#include "tls/ed25519_key.h"
+#include "tls/ed25519.h"
+#endif
+
 /* Portable case-insensitive substring search (replaces GNU strcasestr) */
 static const char *_portable_strcasestr(const char *haystack, const char *needle) {
     if (!haystack) return NULL;
@@ -214,6 +225,15 @@ struct http_server {
     struct async_connection *async_conns;  /* head of the live async-connection list,
                                               walked by the idle reaper; only touched
                                               from the (single-threaded) event loop */
+
+#ifdef WEBLIB_TLS
+    /* TLS termination config (set by http_server_enable_tls; read-only afterwards). */
+    bool tls_enabled;
+    uint8_t *tls_cert_der;            /* server certificate, DER (owned/freed by the server) */
+    size_t   tls_cert_len;
+    uint8_t  tls_ed25519_seed[32];    /* server signing key */
+    uint8_t  tls_ed25519_pub[32];
+#endif
 };
 
 /* Connection handler data */
@@ -223,6 +243,9 @@ typedef struct {
     http_parser_t parser;
     http_request_t *request;
     http_response_t *response;
+#ifdef WEBLIB_TLS
+    tls_transport_t *tls;   /* NULL = plaintext; set once the TLS handshake succeeds */
+#endif
 } connection_t;
 
 /* Async connection context */
@@ -257,9 +280,31 @@ static void *accept_connections(void *arg);
 static void *handle_connection(void *arg);
 static void handle_websocket_connection(int client_fd, http_request_t *req);
 static bool response_forces_close(http_response_t *res);
-static void send_response(int client_fd, http_response_t *res, bool keep_alive);
-static void send_error_response(int client_fd, http_status_t status, const char *message);
-static int send_all(int fd, const char *buf, size_t len);
+static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive);
+static void send_error_response(int client_fd, void *tls, http_status_t status, const char *message);
+static int send_all(int fd, void *tls, const char *buf, size_t len);
+
+/* Transport indirection: when `tls` is non-NULL the byte goes through the TLS
+ * engine, otherwise straight to the socket. CONN_TLS(conn) is the connection's TLS
+ * transport, and evaluates to NULL in a build without TLS so every call site stays
+ * unconditional. */
+#ifdef WEBLIB_TLS
+#define CONN_TLS(conn) ((void *)(conn)->tls)
+#else
+#define CONN_TLS(conn) ((void *)0)
+#endif
+static ssize_t conn_read(int fd, void *tls, void *buf, size_t len);
+
+/* True only when TLS termination is active for this server (always false in a build
+ * without TLS). Used to suppress plaintext error responses on an HTTPS port. */
+static bool server_tls_active(const http_server_t *s) {
+#ifdef WEBLIB_TLS
+    return s->tls_enabled;
+#else
+    (void)s;
+    return false;
+#endif
+}
 static http_request_t *http_request_create(void);
 static void http_request_destroy(http_request_t *req);
 static http_response_t *http_response_create(void);
@@ -568,7 +613,15 @@ void http_server_destroy(http_server_t *server) {
     }
     
     pthread_mutex_destroy(&server->conn_lock);
-    
+
+#ifdef WEBLIB_TLS
+    if (server->tls_cert_der) {
+        free(server->tls_cert_der);
+        server->tls_cert_der = NULL;
+    }
+    secure_zero(server->tls_ed25519_seed, sizeof server->tls_ed25519_seed);
+#endif
+
     free(server);
 }
 
@@ -638,7 +691,12 @@ static void *accept_connections(void *arg) {
         pthread_mutex_lock(&server->conn_lock);
         if (server->active_connections >= server->max_connections) {
             pthread_mutex_unlock(&server->conn_lock);
-            send_error_response(client_fd, HTTP_SERVICE_UNAVAILABLE, "Connection limit reached");
+            /* Pre-handshake overload rejection: a plaintext HTTP error on an HTTPS
+             * port would just be garbage to a TLS client (and leak plaintext), so
+             * under TLS we simply drop the connection. */
+            if (!server_tls_active(server)) {
+                send_error_response(client_fd, NULL, HTTP_SERVICE_UNAVAILABLE, "Connection limit reached");
+            }
             close(client_fd);
             continue;
         }
@@ -665,8 +723,11 @@ static void *accept_connections(void *arg) {
             
             if (server->pool) {
                 if (thread_pool_submit(server->pool, connection_work, conn) != 0) {
-                    /* Pool full or shutting down — reject connection */
-                    send_error_response(client_fd, HTTP_SERVICE_UNAVAILABLE, "Server Busy");
+                    /* Pool full or shutting down — reject connection (drop silently
+                     * under TLS; a plaintext error would be garbage to a TLS peer). */
+                    if (!server_tls_active(server)) {
+                        send_error_response(client_fd, NULL, HTTP_SERVICE_UNAVAILABLE, "Server Busy");
+                    }
                     close(client_fd);
                     free(conn);
                     pthread_mutex_lock(&server->conn_lock);
@@ -760,6 +821,68 @@ static void handle_websocket_connection(int client_fd, http_request_t *req) {
     websocket_connection_destroy(ws_conn);
 }
 
+#ifdef WEBLIB_TLS
+#ifdef WEBLIB_TLS_TEST_HOOKS
+/* TEST-ONLY: pin the per-connection ephemeral key + ServerHello random for a
+ * deterministic handshake. Compiled ONLY when WEBLIB_TLS_TEST_HOOKS is defined
+ * (an opt-in CMake flag, never set in a production/library build) — installing a
+ * deterministic RNG here would destroy the security of every TLS session, so the
+ * symbol must not exist for ordinary consumers of the TLS build. */
+static int (*g_tls_rng)(void *buf, size_t len) = NULL;
+
+void http_server__tls_test_rng(int (*fn)(void *buf, size_t len)) {
+    g_tls_rng = fn;
+}
+#endif /* WEBLIB_TLS_TEST_HOOKS */
+
+/* Per-connection randomness for the TLS ephemeral key and ServerHello random: the
+ * system CSPRNG (overridable only in a WEBLIB_TLS_TEST_HOOKS build). */
+static int tls_fill_random(uint8_t *buf, size_t len) {
+#ifdef WEBLIB_TLS_TEST_HOOKS
+    if (g_tls_rng) {
+        return g_tls_rng(buf, len);
+    }
+#endif
+    return secure_random_bytes(buf, len);
+}
+
+/* Run the server TLS handshake over the accepted blocking socket. Returns an
+ * established, heap-allocated transport on success, or NULL on failure (the
+ * transport already sent any alert and the caller closes the socket). The ephemeral
+ * key and ServerHello random are fresh per connection. */
+static tls_transport_t *tls_do_handshake(http_server_t *server, int fd) {
+    tls_transport_t *t = (tls_transport_t *)malloc(sizeof *t);
+    uint8_t eph[32], rnd[32];
+    tls_server_config_t cfg;
+
+    if (t == NULL) {
+        return NULL;
+    }
+    if (tls_fill_random(eph, sizeof eph) != 0 || tls_fill_random(rnd, sizeof rnd) != 0) {
+        secure_zero(eph, sizeof eph);
+        free(t);
+        return NULL;
+    }
+    memset(&cfg, 0, sizeof cfg);
+    cfg.cert_der = server->tls_cert_der;
+    cfg.cert_len = server->tls_cert_len;
+    cfg.ed25519_seed = server->tls_ed25519_seed;
+    cfg.ed25519_pub = server->tls_ed25519_pub;
+    cfg.server_eph_sk = eph;      /* borrowed only for the duration of the accept call */
+    cfg.server_random = rnd;
+    /* Bound the handshake by the same wall-clock budget the request loop uses, so a
+     * slow-drip client cannot pin this worker thread (slow-loris) during the
+     * handshake, which runs before the per-request deadline loop. */
+    if (tls_transport_accept(t, fd, &cfg, server->request_timeout_sec) != 0) {
+        secure_zero(eph, sizeof eph);
+        free(t);
+        return NULL;
+    }
+    secure_zero(eph, sizeof eph);
+    return t;
+}
+#endif /* WEBLIB_TLS */
+
 /* Handle single connection */
 static void *handle_connection(void *arg) {
     connection_t *conn = (connection_t *)arg;
@@ -769,6 +892,21 @@ static void *handle_connection(void *arg) {
     bool connection_open = true;
     char read_buf[READ_BUFFER_SIZE];
 
+#ifdef WEBLIB_TLS
+    if (server->tls_enabled) {
+        conn->tls = tls_do_handshake(server, client_fd);
+        if (conn->tls == NULL) {
+            /* Handshake failed; drop the connection (mirror the normal teardown). */
+            close(client_fd);
+            pthread_mutex_lock(&server->conn_lock);
+            server->active_connections--;
+            pthread_mutex_unlock(&server->conn_lock);
+            free(conn);
+            return NULL;
+        }
+    }
+#endif
+
     while (connection_open) {
         parser_result_t result = PARSER_INCOMPLETE;
         bool keep_alive = false;
@@ -776,7 +914,7 @@ static void *handle_connection(void *arg) {
         conn->request = http_request_create();
         conn->response = http_response_create();
         if (!conn->request || !conn->response) {
-            send_error_response(client_fd, HTTP_INTERNAL_ERROR, "Internal Server Error");
+            send_error_response(client_fd, CONN_TLS(conn), HTTP_INTERNAL_ERROR, "Internal Server Error");
             connection_open = false;
             goto iteration_cleanup;
         }
@@ -788,7 +926,7 @@ static void *handle_connection(void *arg) {
             http_parser_init(&conn->parser, conn->request);
             parser_initialized = true;
             if (conn->parser.state == PARSE_STATE_ERROR) {
-                send_error_response(client_fd, conn->parser.error_status, conn->parser.error_message);
+                send_error_response(client_fd, CONN_TLS(conn), conn->parser.error_status, conn->parser.error_message);
                 connection_open = false;
                 goto iteration_cleanup;
             }
@@ -809,7 +947,7 @@ static void *handle_connection(void *arg) {
              * from holding the worker thread indefinitely (slow-loris). */
             if (server->request_timeout_sec > 0 &&
                 (long)(monotonic_seconds() - request_start) >= (long)server->request_timeout_sec) {
-                send_error_response(client_fd, HTTP_REQUEST_TIMEOUT, "Request Timeout");
+                send_error_response(client_fd, CONN_TLS(conn), HTTP_REQUEST_TIMEOUT, "Request Timeout");
                 connection_open = false;
                 goto iteration_cleanup;
             }
@@ -817,9 +955,9 @@ static void *handle_connection(void *arg) {
             if (result == PARSER_EXPECT_CONTINUE) {
                 /* RFC 7231 §5.1.1: send 100 Continue before waiting for body */
                 static const char CONTINUE_RESP[] = "HTTP/1.1 100 Continue\r\n\r\n";
-                if (send_all(client_fd, CONTINUE_RESP, sizeof(CONTINUE_RESP) - 1) < 0) {
+                if (send_all(client_fd, CONN_TLS(conn), CONTINUE_RESP, sizeof(CONTINUE_RESP) - 1) < 0) {
                     perror("send 100 Continue failed");
-                    send_error_response(client_fd, HTTP_INTERNAL_ERROR, "Socket write error");
+                    send_error_response(client_fd, CONN_TLS(conn), HTTP_INTERNAL_ERROR, "Socket write error");
                     connection_open = false;
                     goto iteration_cleanup;
                 }
@@ -831,7 +969,7 @@ static void *handle_connection(void *arg) {
                 result = http_parser_execute(&conn->parser, NULL, 0);
                 continue;
             }
-            ssize_t bytes_read = recv(client_fd, read_buf, sizeof(read_buf), 0);
+            ssize_t bytes_read = conn_read(client_fd, CONN_TLS(conn), read_buf, sizeof(read_buf));
             if (bytes_read < 0) {
                 if (errno == EINTR) {
                     continue;
@@ -840,12 +978,12 @@ static void *handle_connection(void *arg) {
                     /* SO_RCVTIMEO fired: the client stalled without completing
                      * the request. That is a client timeout (408), not a
                      * server error (500). */
-                    send_error_response(client_fd, HTTP_REQUEST_TIMEOUT, "Request Timeout");
+                    send_error_response(client_fd, CONN_TLS(conn), HTTP_REQUEST_TIMEOUT, "Request Timeout");
                     connection_open = false;
                     goto iteration_cleanup;
                 }
                 perror("recv failed");
-                send_error_response(client_fd, HTTP_INTERNAL_ERROR, "Socket read error");
+                send_error_response(client_fd, CONN_TLS(conn), HTTP_INTERNAL_ERROR, "Socket read error");
                 connection_open = false;
                 goto iteration_cleanup;
             }
@@ -859,7 +997,7 @@ static void *handle_connection(void *arg) {
 
         if (result == PARSER_ERROR) {
             http_status_t status = conn->parser.error_status ? conn->parser.error_status : HTTP_BAD_REQUEST;
-            send_error_response(client_fd, status, conn->parser.error_message);
+            send_error_response(client_fd, CONN_TLS(conn), status, conn->parser.error_message);
             connection_open = false;
             goto iteration_cleanup;
         }
@@ -874,19 +1012,30 @@ static void *handle_connection(void *arg) {
 
         /* Check for WebSocket upgrade (status 101 Switching Protocols) */
         if (conn->response->status == HTTP_SWITCHING_PROTOCOLS) {
+#ifdef WEBLIB_TLS
+            if (conn->tls != NULL) {
+                /* WebSocket-over-TLS (wss) is not wired yet; refuse the upgrade
+                 * cleanly instead of speaking plaintext WS frames over the TLS
+                 * connection (deferred to the interoperability milestone). */
+                send_error_response(client_fd, CONN_TLS(conn), HTTP_SERVICE_UNAVAILABLE,
+                                    "WebSocket over TLS not supported");
+                connection_open = false;
+                goto iteration_cleanup;
+            }
+#endif
             /* Send the upgrade response */
-            send_response(client_fd, conn->response, false);
-            
+            send_response(client_fd, CONN_TLS(conn), conn->response, false);
+
             /* Enter WebSocket mode - this function won't return until WS closes */
             handle_websocket_connection(client_fd, conn->request);
-            
+
             /* WebSocket closed, exit connection loop */
             connection_open = false;
             goto iteration_cleanup;
         }
 
         keep_alive = conn->parser.keep_alive && !response_forces_close(conn->response);
-        send_response(client_fd, conn->response, keep_alive);
+        send_response(client_fd, CONN_TLS(conn), conn->response, keep_alive);
 
         if (!keep_alive) {
             connection_open = false;
@@ -906,13 +1055,20 @@ static void *handle_connection(void *arg) {
     if (parser_initialized) {
         http_parser_destroy(&conn->parser);
     }
+#ifdef WEBLIB_TLS
+    if (conn->tls != NULL) {
+        tls_transport_close(conn->tls);   /* close_notify (best effort) + wipe keys */
+        free(conn->tls);
+        conn->tls = NULL;
+    }
+#endif
     close(client_fd);
-    
+
     /* BUG-6 fix: Decrement active connection count */
     pthread_mutex_lock(&server->conn_lock);
     server->active_connections--;
     pthread_mutex_unlock(&server->conn_lock);
-    
+
     free(conn);
     return NULL;
 }
@@ -1148,7 +1304,14 @@ static void http_response_destroy(http_response_t *res) {
     free(res);
 }
 
-static int send_all(int fd, const char *buf, size_t len) {
+static int send_all(int fd, void *tls, const char *buf, size_t len) {
+#ifdef WEBLIB_TLS
+    if (tls != NULL) {
+        return tls_transport_write((tls_transport_t *)tls, buf, len);
+    }
+#else
+    (void)tls;
+#endif
     size_t sent_total = 0;
     while (sent_total < len) {
         ssize_t sent = send(fd, buf + sent_total, len - sent_total, SEND_FLAGS);
@@ -1161,6 +1324,27 @@ static int send_all(int fd, const char *buf, size_t len) {
         sent_total += (size_t)sent;
     }
     return 0;
+}
+
+/* recv() equivalent that transparently decrypts application data when `tls` is set. */
+static ssize_t conn_read(int fd, void *tls, void *buf, size_t len) {
+#ifdef WEBLIB_TLS
+    if (tls != NULL) {
+        /* tls_transport_read returns >0 bytes, 0 on close_notify, or -1 on a fatal
+         * error. The caller dispatches read failures on errno (EINTR retry / EAGAIN
+         * timeout / else 500) — a contract only recv() satisfies. A -1 here carries
+         * a STALE errno (the TLS error path performs a successful recv() then fails
+         * in the engine), which could spuriously retry (EINTR → 100% CPU spin), or
+         * become a bogus 408/500. A TLS error is always terminal — the engine has
+         * already wiped and emitted any alert — so collapse both close and error to
+         * a 0-byte end-of-stream, which the caller handles as a clean close. */
+        ssize_t r = tls_transport_read((tls_transport_t *)tls, buf, len);
+        return r > 0 ? r : 0;
+    }
+#else
+    (void)tls;
+#endif
+    return recv(fd, buf, len, 0);
 }
 
 static int serialize_response(http_response_t *res, bool keep_alive, char **header_out, size_t *header_len_out) {
@@ -1285,7 +1469,7 @@ static bool response_forces_close(http_response_t *res) {
     return false;
 }
 
-static void send_response(int client_fd, http_response_t *res, bool keep_alive) {
+static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive) {
     if (!res || res->sent) {
         return;
     }
@@ -1296,9 +1480,9 @@ static void send_response(int client_fd, http_response_t *res, bool keep_alive) 
         return;
     }
 
-    if (send_all(client_fd, header_buf, header_len) == 0) {
+    if (send_all(client_fd, tls, header_buf, header_len) == 0) {
         if (res->body && res->body_length > 0) {
-            send_all(client_fd, res->body, res->body_length);
+            send_all(client_fd, tls, res->body, res->body_length);
         }
     }
 
@@ -1306,14 +1490,14 @@ static void send_response(int client_fd, http_response_t *res, bool keep_alive) 
     res->sent = true;
 }
 
-static void send_error_response(int client_fd, http_status_t status, const char *message) {
+static void send_error_response(int client_fd, void *tls, http_status_t status, const char *message) {
     http_response_t *res = http_response_create();
     if (!res) {
         return;
     }
     const char *body = message ? message : "";
     http_response_send_text(res, status, body);
-    send_response(client_fd, res, false);
+    send_response(client_fd, tls, res, false);
     http_response_destroy(res);
 }
 
@@ -2281,7 +2465,17 @@ int http_server_set_async(http_server_t *server, bool enable) {
         fprintf(stderr, "Cannot change async mode while server is running\n");
         return -1;
     }
-    
+
+#ifdef WEBLIB_TLS
+    if (enable && server->tls_enabled) {
+        /* TLS termination is only wired for the threaded path; enabling async would
+         * otherwise silently serve plaintext on the HTTPS port. Mirror the reverse
+         * guard in http_server_enable_tls. */
+        fprintf(stderr, "Cannot enable async mode: TLS termination is enabled (threaded only)\n");
+        return -1;
+    }
+#endif
+
     if (enable && !server->event_loop) {
         /* Create event loop */
         server->event_loop = event_loop_create();
@@ -2298,6 +2492,72 @@ int http_server_set_async(http_server_t *server, bool enable) {
     server->async_mode = enable;
     return 0;
 }
+
+#ifdef WEBLIB_TLS
+int http_server_enable_tls(http_server_t *server, const char *cert_pem, size_t cert_len,
+                           const char *key_pem, size_t key_len) {
+    uint8_t *cert_der;
+    size_t cert_der_len = 0;
+    uint8_t key_der[256];   /* a PKCS#8 Ed25519 key is ~48 bytes; 256 is ample */
+    size_t key_der_len = 0;
+    uint8_t seed[32], pub[32];
+
+    if (!server || !cert_pem || cert_len == 0 || !key_pem || key_len == 0) {
+        return -1;
+    }
+    if (server->running) {
+        return -1;   /* must be configured before http_server_listen() */
+    }
+    if (server->async_mode) {
+        return -1;   /* TLS termination is only wired for the threaded path */
+    }
+    if (server->tls_enabled) {
+        return -1;   /* already enabled */
+    }
+
+    /* Certificate: decode the PEM "CERTIFICATE" block to DER (kept opaque and sent
+     * as-is in the handshake). The DER never exceeds the PEM's length. */
+    cert_der = (uint8_t *)malloc(cert_len);
+    if (!cert_der) {
+        return -1;
+    }
+    if (pem_decode("CERTIFICATE", cert_pem, cert_len, cert_der, cert_len, &cert_der_len) != 0
+        || cert_der_len == 0) {
+        free(cert_der);
+        return -1;
+    }
+
+    /* Private key: PEM "PRIVATE KEY" -> PKCS#8 DER -> raw Ed25519 seed; derive pub. */
+    if (pem_decode("PRIVATE KEY", key_pem, key_len, key_der, sizeof key_der, &key_der_len) != 0
+        || ed25519_parse_pkcs8(key_der, key_der_len, seed) != 0) {
+        secure_zero(key_der, sizeof key_der);
+        secure_zero(seed, sizeof seed);
+        free(cert_der);
+        return -1;
+    }
+    ed25519_public_key(pub, seed);
+
+    server->tls_cert_der = cert_der;
+    server->tls_cert_len = cert_der_len;
+    memcpy(server->tls_ed25519_seed, seed, sizeof server->tls_ed25519_seed);
+    memcpy(server->tls_ed25519_pub, pub, sizeof server->tls_ed25519_pub);
+    server->tls_enabled = true;
+
+    secure_zero(key_der, sizeof key_der);
+    secure_zero(seed, sizeof seed);
+    return 0;
+}
+#else
+int http_server_enable_tls(http_server_t *server, const char *cert_pem, size_t cert_len,
+                           const char *key_pem, size_t key_len) {
+    (void)server;
+    (void)cert_pem;
+    (void)cert_len;
+    (void)key_pem;
+    (void)key_len;
+    return -1;   /* built without TLS (reconfigure with -DWEBLIB_ENABLE_TLS=ON) */
+}
+#endif /* WEBLIB_TLS */
 
 /* Get event loop */
 event_loop_t *http_server_get_event_loop(http_server_t *server) {
@@ -2589,7 +2849,7 @@ static void async_accept_handler(int fd, int events, void *user_data) {
     conn->is_websocket = false;
     conn->ws_conn = NULL;
     if (!conn->request || !conn->response) {
-        send_error_response(client_fd, HTTP_INTERNAL_ERROR, "Internal Server Error");
+        send_error_response(client_fd, NULL, HTTP_INTERNAL_ERROR, "Internal Server Error");
         free_async_connection(conn);
         return;
     }
@@ -2598,7 +2858,7 @@ static void async_accept_handler(int fd, int events, void *user_data) {
     conn->parser_initialized = true;
     if (conn->parser.state == PARSE_STATE_ERROR) {
         http_status_t status = conn->parser.error_status ? conn->parser.error_status : HTTP_INTERNAL_ERROR;
-        send_error_response(client_fd, status, conn->parser.error_message);
+        send_error_response(client_fd, NULL, status, conn->parser.error_message);
         free_async_connection(conn);
         return;
     }

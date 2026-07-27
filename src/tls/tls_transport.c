@@ -12,6 +12,7 @@
 #include "kamran.k"   /* secure_zero */
 #include <errno.h>
 #include <string.h>
+#include <time.h>
 #include <sys/socket.h>
 
 /* Suppress SIGPIPE on send() where the platform supports the flag (Linux);
@@ -97,7 +98,9 @@ static int transport_pump(tls_transport_t *t) {
     return 1;
 }
 
-int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *cfg) {
+int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *cfg,
+                         int timeout_seconds) {
+    time_t start;
     if (t == NULL) {
         return -1;
     }
@@ -115,8 +118,13 @@ int tls_transport_accept(tls_transport_t *t, int fd, const tls_server_config_t *
     t->app_off = 0;
     t->app_len = 0;
     t->eof = 0;
+    start = time(NULL);
 
     while (tls_khannection_state(&t->conn) == TLS_KHANNECTION_HANDSHAKE) {
+        if (timeout_seconds > 0 && (long)(time(NULL) - start) >= (long)timeout_seconds) {
+            transport_wipe(t);   /* slow-loris: handshake exceeded its wall-clock budget */
+            return -1;
+        }
         if (transport_pump(t) <= 0) {
             transport_wipe(t);   /* error or EOF mid-handshake: fail closed */
             return -1;

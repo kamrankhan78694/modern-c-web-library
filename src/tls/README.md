@@ -64,12 +64,15 @@ ctest --test-dir build-tls
   the engine over a real fd; for the 1-RTT `TLS_CHACHA20_POLY1305_SHA256` + X25519 +
   Ed25519 flow, each cross-checked against an independent Python oracle (the adapter
   over an actual socketpair).
-- **Phase 4 — integration (next):** wire `tls_transport` into the threaded server
-  path and add `http_server_enable_tls`; internal TLS termination validated with a
-  local self-signed cert.
+- **Phase 4 — integration (landed):** `http_server_enable_tls()` wires
+  `tls_transport` into the threaded server path — the handshake runs on accept and
+  the request/response I/O is TLS-routed, so the server terminates TLS internally.
+  The non-TLS path is byte-identical (the stress suite passes unchanged), and an
+  end-to-end test drives a real TLS 1.3 request/response against the live server.
+  Threaded mode only; WebSocket-over-TLS and the async path are not yet wired.
 - **Interoperability (separate milestone):** real `curl` / `openssl s_client` /
   browser interop, negotiation edge cases, ClientHello fuzzing, honest security
-  labeling — tracked as its own milestone, not folded into integration.
+  labeling — tracked as its own milestone (#1), not folded into integration.
 
 Design references in-repo: the "Pure C TLS (not OpenSSL)" ADR in
 [`NEXT_PHASE.md`](../../NEXT_PHASE.md) and the Phase 11 TLS plan in

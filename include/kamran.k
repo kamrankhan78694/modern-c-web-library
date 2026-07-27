@@ -599,6 +599,29 @@ int event_loop_get_max_timers(void);
 int http_server_set_async(http_server_t *server, bool enable);
 
 /**
+ * Enable TLS termination on the server (EXPERIMENTAL / UNAUDITED — pure-C TLS 1.3,
+ * TLS_CHACHA20_POLY1305_SHA256 + X25519 + Ed25519, server-side, 1-RTT).
+ *
+ * Loads a PEM-encoded certificate and its PEM-encoded Ed25519 private key (PKCS#8);
+ * from then on every accepted connection is TLS-terminated before HTTP is spoken.
+ * Must be called before http_server_listen(). Only supported in the default
+ * threaded mode (returns -1 if async mode is enabled). This build is UNAUDITED and
+ * not for production use.
+ *
+ * @param server     Server instance
+ * @param cert_pem   PEM "CERTIFICATE" block (the server certificate, DER carried as-is)
+ * @param cert_len   Length of cert_pem
+ * @param key_pem    PEM "PRIVATE KEY" block (PKCS#8 Ed25519 private key)
+ * @param key_len    Length of key_pem
+ * @return 0 on success, -1 on failure: NULL/empty arguments, malformed certificate
+ *         PEM or private key, async mode enabled, TLS already enabled, or the server
+ *         already listening.
+ */
+int http_server_enable_tls(http_server_t *server,
+                           const char *cert_pem, size_t cert_len,
+                           const char *key_pem, size_t key_len);
+
+/**
  * Get the event loop associated with the server (async mode only)
  * @param server Server instance
  * @return Event loop instance or NULL if not in async mode

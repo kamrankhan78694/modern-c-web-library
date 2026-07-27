@@ -78,6 +78,10 @@ set(WEBLIB_SOURCES_NATIVE_ONLY
 # the option off, nothing below is added and the build is byte-identical to a
 # no-TLS build. Mirrors the WEBLIB_SOURCES_NATIVE_ONLY split (see src/tls/README.md).
 option(WEBLIB_ENABLE_TLS "Build the experimental pure-C TLS 1.3 layer (native-only, UNAUDITED)" OFF)
+# TEST-ONLY: expose http_server__tls_test_rng so tests can pin the per-connection TLS
+# randomness for deterministic handshakes. NEVER enable in a production/library build
+# — a deterministic RNG would destroy TLS security. Default OFF.
+option(WEBLIB_TLS_TEST_HOOKS "Expose TLS test hooks (deterministic RNG) — TEST ONLY" OFF)
 set(WEBLIB_SOURCES_TLS
     src/tls/tls.c
     src/tls/der.c
@@ -131,6 +135,9 @@ target_compile_definitions(weblib PRIVATE
 # native target (its sources were added to WEBLIB_SOURCES above under the same guard).
 if(WEBLIB_ENABLE_TLS AND NOT EMSCRIPTEN)
     target_compile_definitions(weblib PRIVATE WEBLIB_TLS)
+    if(WEBLIB_TLS_TEST_HOOKS)
+        target_compile_definitions(weblib PRIVATE WEBLIB_TLS_TEST_HOOKS)
+    endif()
 endif()
 
 if(NOT EMSCRIPTEN)
@@ -149,6 +156,9 @@ if(NOT EMSCRIPTEN)
     )
     if(WEBLIB_ENABLE_TLS)
         target_compile_definitions(weblib_shared PRIVATE WEBLIB_TLS)
+        if(WEBLIB_TLS_TEST_HOOKS)
+            target_compile_definitions(weblib_shared PRIVATE WEBLIB_TLS_TEST_HOOKS)
+        endif()
     endif()
 endif()
 
