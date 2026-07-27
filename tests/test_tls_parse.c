@@ -782,6 +782,81 @@ static const uint8_t KAT_FLIGHT_PLAIN[223] = {
     0xc0, 0x68, 0xa1, 0x2d, 0xba, 0xb5, 0xe3,
 };
 
+/* ===== HelloRetryRequest flow, from the independent hrr_oracle.py =====
+ * CH1 offers X25519 in supported_groups but a key_share for secp256r1 only, so the
+ * server must answer with a HelloRetryRequest. CH2 is the same ClientHello (same
+ * Random + session_id) now carrying the X25519 key_share. The keys below are
+ * derived over the §4.4.1-rewritten transcript
+ *   message_hash(Hash(CH1)) || HRR || CH2 || ServerHello || <flight...>
+ * so matching them proves the C server's transcript rewrite is correct. */
+static const uint8_t KAT_CH1[144] = {
+    0x01, 0x00, 0x00, 0x8c, 0x03, 0x03, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0x20, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+    0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x00,
+    0x02, 0x13, 0x03, 0x01, 0x00, 0x00, 0x41, 0x00, 0x2b, 0x00, 0x03, 0x02,
+    0x03, 0x04, 0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d, 0x00, 0x0d,
+    0x00, 0x04, 0x00, 0x02, 0x08, 0x07, 0x00, 0x33, 0x00, 0x26, 0x00, 0x24,
+    0x00, 0x17, 0x00, 0x20, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab,
+    0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab,
+    0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab, 0xab,
+};
+static const uint8_t KAT_CH2[144] = {
+    0x01, 0x00, 0x00, 0x8c, 0x03, 0x03, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1, 0xc1,
+    0xc1, 0xc1, 0x20, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+    0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x00,
+    0x02, 0x13, 0x03, 0x01, 0x00, 0x00, 0x41, 0x00, 0x2b, 0x00, 0x03, 0x02,
+    0x03, 0x04, 0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d, 0x00, 0x0d,
+    0x00, 0x04, 0x00, 0x02, 0x08, 0x07, 0x00, 0x33, 0x00, 0x26, 0x00, 0x24,
+    0x00, 0x1d, 0x00, 0x20, 0x79, 0xa6, 0x31, 0xee, 0xde, 0x1b, 0xf9, 0xc9,
+    0x8f, 0x12, 0x03, 0x2c, 0xde, 0xad, 0xd0, 0xe7, 0xa0, 0x79, 0x39, 0x8f,
+    0xc7, 0x86, 0xb8, 0x8c, 0xc8, 0x46, 0xec, 0x89, 0xaf, 0x85, 0xa5, 0x1a,
+};
+static const uint8_t KAT_HRR_RECORD[93] = {
+    0x16, 0x03, 0x03, 0x00, 0x58, 0x02, 0x00, 0x00, 0x54, 0x03, 0x03, 0xcf,
+    0x21, 0xad, 0x74, 0xe5, 0x9a, 0x61, 0x11, 0xbe, 0x1d, 0x8c, 0x02, 0x1e,
+    0x65, 0xb8, 0x91, 0xc2, 0xa2, 0x11, 0x16, 0x7a, 0xbb, 0x8c, 0x5e, 0x07,
+    0x9e, 0x09, 0xe2, 0xc8, 0xa8, 0x33, 0x9c, 0x20, 0x00, 0x01, 0x02, 0x03,
+    0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
+    0x1c, 0x1d, 0x1e, 0x1f, 0x13, 0x03, 0x00, 0x00, 0x0c, 0x00, 0x2b, 0x00,
+    0x02, 0x03, 0x04, 0x00, 0x33, 0x00, 0x02, 0x00, 0x1d,
+};
+static const uint8_t KAT_HRR_CLIENT_HS_KEY[32] = {
+    0x4e, 0x54, 0x60, 0x2c, 0x2a, 0xfd, 0x29, 0x53, 0x3a, 0x0e, 0xbe, 0x44,
+    0xb7, 0x9d, 0x32, 0x6d, 0xb5, 0x8a, 0xd3, 0x1c, 0x71, 0x7b, 0x12, 0xe4,
+    0xfb, 0x4d, 0x51, 0x71, 0x48, 0x09, 0x04, 0x4a,
+};
+static const uint8_t KAT_HRR_CLIENT_HS_IV[12] = {
+    0xef, 0x8e, 0x55, 0x6a, 0x59, 0x11, 0x72, 0x4d, 0x37, 0x5f, 0x29, 0x0f,
+};
+static const uint8_t KAT_HRR_CLIENT_FINISHED_VD[32] = {
+    0x57, 0xfb, 0xf1, 0x46, 0x76, 0xc1, 0xa3, 0xc2, 0xfa, 0xed, 0x3d, 0xdf,
+    0xe8, 0xfd, 0x46, 0x1e, 0x33, 0x46, 0x90, 0xa8, 0x90, 0x8c, 0xb9, 0x44,
+    0x50, 0x98, 0x56, 0x13, 0x99, 0xd0, 0x82, 0xc6,
+};
+static const uint8_t KAT_HRR_SERVER_AP_KEY[32] = {
+    0x21, 0xfa, 0xcf, 0xaf, 0x91, 0x18, 0xfe, 0xcb, 0x3b, 0xee, 0x6e, 0x3e,
+    0xe5, 0x1f, 0x3d, 0xd2, 0xa3, 0x14, 0x38, 0x6b, 0xee, 0xc5, 0x4f, 0xf8,
+    0x00, 0x88, 0x6a, 0x77, 0x04, 0xc0, 0x5f, 0x25,
+};
+static const uint8_t KAT_HRR_SERVER_AP_IV[12] = {
+    0x14, 0x4b, 0x17, 0x5a, 0x77, 0x70, 0x47, 0x77, 0x6e, 0xda, 0xd8, 0xd9,
+};
+static const uint8_t KAT_HRR_CLIENT_AP_KEY[32] = {
+    0x6f, 0xf4, 0x9d, 0xd9, 0x89, 0xf0, 0x84, 0xc8, 0x91, 0xbf, 0xc0, 0xa2,
+    0x4f, 0x25, 0xc2, 0x0c, 0xa6, 0x0d, 0x90, 0x18, 0x15, 0xf7, 0x43, 0xa5,
+    0xcb, 0x2b, 0x37, 0x03, 0xc6, 0x27, 0x73, 0x96,
+};
+static const uint8_t KAT_HRR_CLIENT_AP_IV[12] = {
+    0x29, 0x78, 0x47, 0x1c, 0x5e, 0x51, 0x8d, 0x97, 0xde, 0x56, 0x82, 0x66,
+};
+
 /* Find the first occurrence of `needle` in `hay` (portable; avoids memmem). */
 static long find_bytes(const uint8_t *hay, size_t hn, const uint8_t *needle, size_t nn) {
     size_t i;
@@ -798,17 +873,23 @@ static long find_bytes(const uint8_t *hay, size_t hn, const uint8_t *needle, siz
 
 /* Seal a client Finished { type(20) || u24 len(32) || verify_data } record with
  * the given client handshake key/IV at sequence 0 (what a real client sends). */
-static int seal_client_finished(const uint8_t *vd, uint8_t *rec, size_t rec_cap,
-                                size_t *rec_len) {
+static int seal_client_finished_with(const uint8_t *vd, const uint8_t *key,
+                                      const uint8_t *iv, uint8_t *rec, size_t rec_cap,
+                                      size_t *rec_len) {
     uint8_t msg[4 + 32];
     msg[0] = TLS_HS_FINISHED;
     msg[1] = 0x00;
     msg[2] = 0x00;
     msg[3] = 0x20;
     memcpy(msg + 4, vd, 32);
-    return tls_record_seal(KAT_CLIENT_HS_KEY, KAT_CLIENT_HS_IV, 0,
-                           TLS_CONTENT_HANDSHAKE, msg, sizeof msg, 0,
+    return tls_record_seal(key, iv, 0, TLS_CONTENT_HANDSHAKE, msg, sizeof msg, 0,
                            rec, rec_cap, rec_len);
+}
+
+static int seal_client_finished(const uint8_t *vd, uint8_t *rec, size_t rec_cap,
+                                size_t *rec_len) {
+    return seal_client_finished_with(vd, KAT_CLIENT_HS_KEY, KAT_CLIENT_HS_IV,
+                                     rec, rec_cap, rec_len);
 }
 
 /* Copy KAT_CH, overwrite `repl` at the offset of `pat`, feed it, and require the
@@ -966,8 +1047,12 @@ static void test_server_handshake(void) {
         static const uint8_t r_suite[]= {0x13,0x01};   /* AES-128-GCM, not ChaCha20 */
         static const uint8_t p_sig[]  = {0x00,0x0d,0x00,0x04,0x00,0x02,0x08,0x07};
         static const uint8_t r_sig[]  = {0x08,0x08};   /* ed448, not ed25519 */
-        static const uint8_t p_ks[]   = {0x00,0x33,0x00,0x26,0x00,0x24,0x00,0x1d,0x00,0x20};
-        static const uint8_t r_ks[]   = {0x00,0x1e};   /* wrong key_share group -> no X25519 share */
+        /* Drop X25519 from supported_groups entirely: with no group left to retry
+         * with, this is the terminal handshake_failure (not an HRR trigger). A
+         * key_share for a non-X25519 group while X25519 is still *offered* triggers
+         * an HRR instead — exercised in full by test_tls_hrr below. */
+        static const uint8_t p_grp[]  = {0x00,0x0a,0x00,0x04,0x00,0x02,0x00,0x1d};
+        static const uint8_t r_grp[]  = {0x00,0x1e};   /* x25519 -> unknown group */
         check_ch_reject("srv hs: no TLS 1.3 -> protocol_version", &cfg,
                         p_ver, sizeof p_ver, 5, r_ver, sizeof r_ver,
                         TLS_ALERT_PROTOCOL_VERSION);
@@ -977,8 +1062,8 @@ static void test_server_handshake(void) {
         check_ch_reject("srv hs: no ed25519 -> handshake_failure", &cfg,
                         p_sig, sizeof p_sig, 6, r_sig, sizeof r_sig,
                         TLS_ALERT_HANDSHAKE_FAILURE);
-        check_ch_reject("srv hs: no X25519 key_share -> handshake_failure", &cfg,
-                        p_ks, sizeof p_ks, 6, r_ks, sizeof r_ks,
+        check_ch_reject("srv hs: no X25519 group at all -> handshake_failure", &cfg,
+                        p_grp, sizeof p_grp, 6, r_grp, sizeof r_grp,
                         TLS_ALERT_HANDSHAKE_FAILURE);
     }
 
@@ -1051,15 +1136,20 @@ static void conn_set_cfg(tls_server_config_t *cfg) {
     cfg->server_random = KAT_SERVER_RND;
 }
 
-/* Frame KAT_CH as a plaintext handshake record. */
-static size_t conn_make_ch_record(uint8_t *rec) {
+/* Frame arbitrary handshake-message bytes as one plaintext handshake record. */
+static size_t frame_hs_record(uint8_t *rec, const uint8_t *msg, size_t n) {
     rec[0] = TLS_CONTENT_HANDSHAKE;
     rec[1] = 0x03;
     rec[2] = 0x03;
-    rec[3] = (uint8_t)((sizeof KAT_CH) >> 8);
-    rec[4] = (uint8_t)(sizeof KAT_CH);
-    memcpy(rec + 5, KAT_CH, sizeof KAT_CH);
-    return 5 + sizeof KAT_CH;
+    rec[3] = (uint8_t)(n >> 8);
+    rec[4] = (uint8_t)(n & 0xff);
+    memcpy(rec + 5, msg, n);
+    return 5 + n;
+}
+
+/* Frame KAT_CH as a plaintext handshake record. */
+static size_t conn_make_ch_record(uint8_t *rec) {
+    return frame_hs_record(rec, KAT_CH, sizeof KAT_CH);
 }
 
 /* Drive a fresh connection to ESTABLISHED (ClientHello then client Finished). */
@@ -1071,6 +1161,98 @@ static void conn_establish(tls_khannection_t *c, const tls_server_config_t *cfg)
     tls_khannection_recv(c, ch, chl, out, sizeof out, &ol, app, sizeof app, &al);
     seal_client_finished(KAT_CLIENT_FINISHED_VD, fin, sizeof fin, &finl);
     tls_khannection_recv(c, fin, finl, out, sizeof out, &ol, app, sizeof app, &al);
+}
+
+/* HelloRetryRequest round trip (RFC 8446 §4.1.4), checked against hrr_oracle.py.
+ * The synthetic-transcript rewrite (§4.4.1) is the highest-risk new logic, so the
+ * app keys — which depend on the ENTIRE rewritten transcript — are matched against
+ * the independent oracle: agreement proves the rewrite is byte-correct. */
+static void test_tls_hrr(void) {
+    tls_server_hs_t hs;
+    tls_server_config_t cfg;
+    uint8_t out[2048];
+    size_t out_len = 0;
+    uint8_t rec[128];
+    size_t rec_len = 0;
+    uint8_t sk[32], siv[12], ck[32], civ[12];
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.cert_der = KAT_CERT;
+    cfg.cert_len = sizeof KAT_CERT;
+    cfg.ed25519_seed = KAT_ED_SEED;
+    cfg.ed25519_pub = KAT_ED_PUB;
+    cfg.server_eph_sk = KAT_SERVER_EPH;
+    cfg.server_random = KAT_SERVER_RND;
+
+    /* ===== Part A: the happy path CH1 -> HRR -> CH2 -> flight -> DONE ===== */
+    tls_server_hs_init(&hs);
+    check_true("hrr: CH1 (no X25519 share) accepted",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH1, sizeof KAT_CH1,
+                                               out, sizeof out, &out_len) == 1);
+    check_true("hrr: phase -> WAIT_CH2",
+               tls_server_hs_phase(&hs) == TLS_SERVER_HS_WAIT_CH2);
+    check_true("hrr: HRR record matches independent oracle byte-for-byte",
+               out_len == sizeof KAT_HRR_RECORD
+               && memcmp(out, KAT_HRR_RECORD, out_len) == 0);
+    check_true("hrr: app keys withheld in WAIT_CH2",
+               tls_server_hs_app_keys(&hs, sk, siv, ck, civ) == 0);
+
+    check_true("hrr: CH2 (with X25519 share) accepted",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH2, sizeof KAT_CH2,
+                                               out, sizeof out, &out_len) == 1);
+    check_true("hrr: phase -> WAIT_FINISHED",
+               tls_server_hs_phase(&hs) == TLS_SERVER_HS_WAIT_FINISHED);
+    check_true("hrr: flight ServerHello record framed (type 22)",
+               out_len > 5 && out[0] == 0x16);
+
+    check_true("hrr: (harness) seal client Finished over rewritten transcript",
+               seal_client_finished_with(KAT_HRR_CLIENT_FINISHED_VD,
+                                         KAT_HRR_CLIENT_HS_KEY, KAT_HRR_CLIENT_HS_IV,
+                                         rec, sizeof rec, &rec_len) == 1);
+    check_true("hrr: client Finished verified -> DONE",
+               tls_server_hs_read_client_finished(&hs, rec, rec_len) == 1
+               && tls_server_hs_phase(&hs) == TLS_SERVER_HS_DONE);
+    check_true("hrr: app keys released after DONE",
+               tls_server_hs_app_keys(&hs, sk, siv, ck, civ) == 1);
+    check_true("hrr: server app key matches oracle", memcmp(sk, KAT_HRR_SERVER_AP_KEY, 32) == 0);
+    check_true("hrr: server app iv matches oracle",  memcmp(siv, KAT_HRR_SERVER_AP_IV, 12) == 0);
+    check_true("hrr: client app key matches oracle", memcmp(ck, KAT_HRR_CLIENT_AP_KEY, 32) == 0);
+    check_true("hrr: client app iv matches oracle",  memcmp(civ, KAT_HRR_CLIENT_AP_IV, 12) == 0);
+
+    /* ===== Part B: HRR-specific state-machine defences ===== */
+    /* B1: a client that ignores the retry (CH2 still lacks an X25519 share) is
+     * aborted with illegal_parameter — never answered with a second HRR. */
+    tls_server_hs_init(&hs);
+    tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH1, sizeof KAT_CH1, out, sizeof out, &out_len);
+    check_true("hrr: still-share-less CH2 -> illegal_parameter (no HRR loop)",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH1, sizeof KAT_CH1,
+                                               out, sizeof out, &out_len) == 0
+               && tls_server_hs_phase(&hs) == TLS_SERVER_HS_FAILED
+               && tls_server_hs_alert(&hs) == TLS_ALERT_ILLEGAL_PARAMETER);
+
+    /* B2: CH2 whose Random differs from CH1 violates RFC 8446 §4.1.2 -> abort. */
+    {
+        uint8_t ch2_bad[sizeof KAT_CH2];
+        memcpy(ch2_bad, KAT_CH2, sizeof KAT_CH2);
+        ch2_bad[6] ^= 0xff;   /* the 32-byte Random begins at offset 6 */
+        tls_server_hs_init(&hs);
+        tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH1, sizeof KAT_CH1, out, sizeof out, &out_len);
+        check_true("hrr: CH2 with altered Random -> illegal_parameter",
+                   tls_server_hs_read_client_hello(&hs, &cfg, ch2_bad, sizeof ch2_bad,
+                                                   out, sizeof out, &out_len) == 0
+                   && tls_server_hs_phase(&hs) == TLS_SERVER_HS_FAILED
+                   && tls_server_hs_alert(&hs) == TLS_ALERT_ILLEGAL_PARAMETER);
+    }
+
+    /* B3: after CH2 (WAIT_FINISHED) a further ClientHello is unexpected_message. */
+    tls_server_hs_init(&hs);
+    tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH1, sizeof KAT_CH1, out, sizeof out, &out_len);
+    tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH2, sizeof KAT_CH2, out, sizeof out, &out_len);
+    check_true("hrr: ClientHello after WAIT_FINISHED -> unexpected_message",
+               tls_server_hs_read_client_hello(&hs, &cfg, KAT_CH2, sizeof KAT_CH2,
+                                               out, sizeof out, &out_len) == 0
+               && tls_server_hs_phase(&hs) == TLS_SERVER_HS_FAILED
+               && tls_server_hs_alert(&hs) == TLS_ALERT_UNEXPECTED_MESSAGE);
 }
 
 static void test_tls_khannection(void) {
@@ -1308,6 +1490,59 @@ static void test_tls_khannection(void) {
 }
 #endif /* WEBLIB_TLS */
 
+/* HelloRetryRequest driven end-to-end through the connection engine: its
+ * record-type dispatch must route CH1 -> HRR, tolerate a middlebox-compat CCS
+ * between HRR and CH2, route CH2 -> flight, and the client Finished ->
+ * ESTABLISHED, after which application data flows under the HRR-derived keys. */
+static void test_tls_khannection_hrr(void) {
+    static uint8_t out[2048], app[256];
+    tls_server_config_t cfg;
+    tls_khannection_t c;
+    uint8_t ch1[5 + sizeof KAT_CH1], ch2[5 + sizeof KAT_CH2], fin[128];
+    static const uint8_t ccs_rec[6] = { 0x14, 0x03, 0x03, 0x00, 0x01, 0x01 };
+    size_t ch1l, ch2l, out_len = 0, app_len = 0, finl = 0;
+    tls_khannection_rc_t rc;
+
+    conn_set_cfg(&cfg);
+    ch1l = frame_hs_record(ch1, KAT_CH1, sizeof KAT_CH1);
+    ch2l = frame_hs_record(ch2, KAT_CH2, sizeof KAT_CH2);
+
+    tls_khannection_init(&c, &cfg);
+    rc = tls_khannection_recv(&c, ch1, ch1l, out, sizeof out, &out_len, app, sizeof app, &app_len);
+    check_true("conn/hrr: CH1 -> HelloRetryRequest, still HANDSHAKE",
+               rc == TLS_KHANNECTION_RC_OK && tls_khannection_state(&c) == TLS_KHANNECTION_HANDSHAKE
+               && out_len == sizeof KAT_HRR_RECORD && memcmp(out, KAT_HRR_RECORD, out_len) == 0);
+
+    rc = tls_khannection_recv(&c, ccs_rec, sizeof ccs_rec, out, sizeof out, &out_len, app, sizeof app, &app_len);
+    check_true("conn/hrr: CCS between HRR and CH2 dropped",
+               rc == TLS_KHANNECTION_RC_OK && out_len == 0
+               && tls_khannection_state(&c) == TLS_KHANNECTION_HANDSHAKE);
+
+    rc = tls_khannection_recv(&c, ch2, ch2l, out, sizeof out, &out_len, app, sizeof app, &app_len);
+    check_true("conn/hrr: CH2 -> flight emitted",
+               rc == TLS_KHANNECTION_RC_OK && out_len > 5 && out[0] == 0x16
+               && tls_khannection_state(&c) == TLS_KHANNECTION_HANDSHAKE);
+
+    seal_client_finished_with(KAT_HRR_CLIENT_FINISHED_VD, KAT_HRR_CLIENT_HS_KEY,
+                              KAT_HRR_CLIENT_HS_IV, fin, sizeof fin, &finl);
+    rc = tls_khannection_recv(&c, fin, finl, out, sizeof out, &out_len, app, sizeof app, &app_len);
+    check_true("conn/hrr: client Finished -> ESTABLISHED",
+               rc == TLS_KHANNECTION_RC_OK && tls_khannection_state(&c) == TLS_KHANNECTION_ESTABLISHED);
+
+    {
+        static const uint8_t req[] = "ping-after-hrr";
+        uint8_t recq[128];
+        size_t recql = 0;
+        tls_record_seal(KAT_HRR_CLIENT_AP_KEY, KAT_HRR_CLIENT_AP_IV, 0,
+                        TLS_CONTENT_APPLICATION_DATA, req, sizeof req - 1, 0,
+                        recq, sizeof recq, &recql);
+        rc = tls_khannection_recv(&c, recq, recql, out, sizeof out, &out_len, app, sizeof app, &app_len);
+        check_true("conn/hrr: client app data decrypts under the HRR-derived key",
+                   rc == TLS_KHANNECTION_RC_OK && app_len == sizeof req - 1
+                   && memcmp(app, req, app_len) == 0);
+    }
+}
+
 int main(void) {
 #ifndef WEBLIB_TLS
     printf("FAIL: test_tls_parse built without WEBLIB_TLS defined\n");
@@ -1323,7 +1558,9 @@ int main(void) {
     test_client_hello();
     test_hs_build();
     test_server_handshake();
+    test_tls_hrr();
     test_tls_khannection();
+    test_tls_khannection_hrr();
 
     if (g_failures == 0) {
         printf("All TLS parse tests passed.\n");

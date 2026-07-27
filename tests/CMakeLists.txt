@@ -57,7 +57,9 @@ if(NOT EMSCRIPTEN)
 
         # TLS parsing tests (DER/ASN.1, later PEM/X.509) — malformed-input hardened
         add_executable(test_tls_parse test_tls_parse.c)
-        target_include_directories(test_tls_parse PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/tls)
+        target_include_directories(test_tls_parse PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/tls
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src)
         target_compile_definitions(test_tls_parse PRIVATE WEBLIB_TLS)
         target_link_libraries(test_tls_parse weblib ${PLATFORM_LIBS})
         add_test(NAME TlsParseTests COMMAND test_tls_parse)

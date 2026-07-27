@@ -71,6 +71,15 @@ int tls_build_server_hello(tls_writer_t *w, const uint8_t random[32],
                            const uint8_t *session_id, size_t session_id_len,
                            const uint8_t x25519_public_key[32]);
 
+/* HelloRetryRequest (RFC 8446 §4.1.4): structurally a ServerHello carrying the
+ * special "HelloRetryRequest" Random (SHA-256 of "HelloRetryRequest"), echoing
+ * `session_id` (<=32), selecting TLS_CHACHA20_POLY1305_SHA256, and carrying
+ * supported_versions (0x0304) and a key_share naming only the group the server
+ * requires (X25519) with no key_exchange. Sent when the ClientHello offers X25519
+ * in supported_groups but did not include an X25519 key_share. */
+int tls_build_hello_retry_request(tls_writer_t *w,
+                                  const uint8_t *session_id, size_t session_id_len);
+
 /* EncryptedExtensions (RFC 8446 §4.3.1): an empty extensions block. */
 int tls_build_encrypted_extensions(tls_writer_t *w);
 

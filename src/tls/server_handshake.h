@@ -25,9 +25,16 @@
  *     defeating small-subgroup / degenerate-key inputs.
  *
  * SCOPE / KNOWN LIMITATIONS (this phase — all documented, none silent):
- *   - Full 1-RTT handshake only. No HelloRetryRequest: a ClientHello that does not
- *     already carry an X25519 key_share is rejected with handshake_failure rather
- *     than negotiated down via HRR.
+ *   - HelloRetryRequest (RFC 8446 §4.1.4) IS supported for the one case it can
+ *     matter here: a ClientHello that offers X25519 in supported_groups but sends
+ *     no X25519 key_share triggers a single HRR, and the client's second
+ *     ClientHello (now carrying the share) completes the handshake. A client that
+ *     does not offer X25519 at all is still rejected with handshake_failure (there
+ *     is no other group to retry with). The CH1/CH2 consistency check per §4.1.2
+ *     is a documented subset (Random and legacy_session_id must be unchanged); the
+ *     full extension-by-extension diff is not performed, which is safe because the
+ *     transcript binds CH1+HRR+CH2 and any on-the-wire tampering is fatal at the
+ *     client Finished. At most one HRR is ever sent (no HRR loop).
  *   - No client authentication (no CertificateRequest), no session resumption / PSK,
  *     no early data, no KeyUpdate.
  *   - The whole server flight {EncryptedExtensions, Certificate, CertificateVerify,
@@ -55,6 +62,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "handshake_auth.h"   /* tls_transcript_t, retained across an HRR round trip */
 
 /* ---- alerts we may raise (RFC 8446 §6) --------------------------------- */
 #define TLS_ALERT_UNEXPECTED_MESSAGE 10
@@ -69,11 +77,15 @@
 /* ---- phases ------------------------------------------------------------ */
 /*
  * The single source of truth for "what will I accept now". Phases only advance
- * START -> WAIT_FINISHED -> DONE on success; any error jumps to FAILED, which is
- * terminal (every entry point refuses to do further work once FAILED).
+ * START -> [WAIT_CH2 ->] WAIT_FINISHED -> DONE on success; any error jumps to
+ * FAILED, which is terminal (every entry point refuses to do further work once
+ * FAILED). WAIT_CH2 is entered only on the HelloRetryRequest path and is left for
+ * WAIT_FINISHED once the second ClientHello is processed — never back to START,
+ * and a second HRR is never sent.
  */
 typedef enum {
-    TLS_SERVER_HS_START = 0,     /* awaiting ClientHello */
+    TLS_SERVER_HS_START = 0,     /* awaiting (first) ClientHello */
+    TLS_SERVER_HS_WAIT_CH2,      /* HelloRetryRequest sent; awaiting second ClientHello */
     TLS_SERVER_HS_WAIT_FINISHED, /* server flight emitted; awaiting client Finished */
     TLS_SERVER_HS_DONE,          /* client Finished verified; application keys ready */
     TLS_SERVER_HS_FAILED         /* terminal error; all secrets wiped */
@@ -115,6 +127,16 @@ typedef struct {
     uint8_t  server_ap_iv[12];
     uint8_t  client_ap_key[32];
     uint8_t  client_ap_iv[12];
+
+    /* Live only across a HelloRetryRequest round trip (phase WAIT_CH2). Non-secret
+     * (hashes/echoes of public handshake messages); reset once CH2 is processed.
+     * `transcript` already contains the synthetic message_hash(CH1) and the HRR, so
+     * the second ClientHello is absorbed directly onto it. `ch1_random` /
+     * `ch1_session_id` pin the §4.1.2 consistency check on CH2. */
+    tls_transcript_t transcript;
+    uint8_t  ch1_random[32];
+    uint8_t  ch1_session_id[32];
+    uint8_t  ch1_session_id_len;
 } tls_server_hs_t;
 
 /*
@@ -124,30 +146,39 @@ typedef struct {
 void tls_server_hs_init(tls_server_hs_t *hs);
 
 /*
- * Event 1 — process the ClientHello.
+ * Event 1 — process a ClientHello (the first one, or the second after an HRR).
  *
  * `ch_msg`/`ch_len` is the ClientHello *handshake message* (HandshakeType ||
  * uint24 length || body), i.e. the record payload with the 5-byte record header
  * already stripped by the transport. `cfg` supplies the server identity and the
- * injected ephemeral/random.
+ * injected ephemeral/random. This entry point is re-entrant across the HRR round
+ * trip: the caller feeds every plaintext-handshake ClientHello record to it and it
+ * dispatches on the current phase.
  *
- * On success (phase START only): validates the offered parameters, performs the
- * X25519 key agreement (with the §7.4.2 all-zero check), runs the key schedule,
- * builds and transcript-absorbs the server flight, and writes the response to
- * `out` (capacity `out_cap`), setting *out_len to its length. `out` and `out_len`
- * must be non-NULL — a NULL `out_len` is rejected with internal_error so a caller
- * always learns the response length. The response is:
+ * From phase START:
+ *   - If the ClientHello already carries an acceptable X25519 key_share, it does
+ *     the full 1-RTT flight (as below) and advances START -> WAIT_FINISHED.
+ *   - If it offers X25519 in supported_groups but sent no X25519 key_share, it
+ *     writes a HelloRetryRequest record to `out`, remembers the transcript, and
+ *     advances START -> WAIT_CH2, returning 1 with *out_len set to the HRR record.
+ *
+ * From phase WAIT_CH2: processes the second ClientHello (which must now carry the
+ * X25519 key_share and be consistent with the first per RFC 8446 §4.1.2), then
+ * does the full flight and advances WAIT_CH2 -> WAIT_FINISHED.
+ *
+ * The full-flight response written to `out` (capacity `out_cap`) is:
  *
  *     ServerHello record  (TLSPlaintext, ContentType handshake)
  *   || protected flight   (one TLSCiphertext, ContentType application_data,
  *                          sealing {EncryptedExtensions, Certificate,
  *                          CertificateVerify, Finished})
  *
- * Advances START -> WAIT_FINISHED and returns 1.
+ * `out` and `out_len` must be non-NULL — a NULL `out_len` is rejected with
+ * internal_error so a caller always learns the response length.
  *
  * On any failure returns 0, latches phase FAILED, sets the alert (query with
  * tls_server_hs_alert), leaves *out_len 0, and wipes every secret. Calling in any
- * phase other than START is itself a failure (unexpected_message).
+ * phase other than START or WAIT_CH2 is itself a failure (unexpected_message).
  */
 int tls_server_hs_read_client_hello(tls_server_hs_t *hs,
                                      const tls_server_config_t *cfg,

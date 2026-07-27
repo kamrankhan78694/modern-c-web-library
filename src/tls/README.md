@@ -76,10 +76,12 @@ ctest --test-dir build-tls
 - **Interoperability (milestone #1, in progress):** ✅ `openssl s_client` (OpenSSL
   3.x) completes a real TLS 1.3 handshake + encrypted HTTP request/response against
   the server — a genuine third-party client — locked in by `tests/interop_openssl.sh`
-  and demonstrated by `examples/tls_server.c`. Remaining: browser interop; clients
-  that offer only a non-X25519 key_share (needs HelloRetryRequest); optional
-  middlebox-compat ChangeCipherSpec emission and ALPN; ClientHello fuzzing. Known
-  bound: Ed25519-only, so a client not offering `ed25519` is correctly refused.
+  and demonstrated by `examples/tls_server.c`. ✅ **HelloRetryRequest** (RFC 8446
+  §4.1.4): a client that offers X25519 but sends no X25519 key_share is now
+  negotiated via a single HRR (with the §4.4.1 synthetic-transcript rewrite), rather
+  than refused. ✅ ClientHello / record fuzzing (`tests/test_tls_fuzz.c`). Remaining:
+  browser interop; optional middlebox-compat ChangeCipherSpec emission and ALPN.
+  Known bound: Ed25519-only, so a client not offering `ed25519` is correctly refused.
 
 Design references in-repo: the "Pure C TLS (not OpenSSL)" ADR in
 [`NEXT_PHASE.md`](../../NEXT_PHASE.md) and the Phase 11 TLS plan in
