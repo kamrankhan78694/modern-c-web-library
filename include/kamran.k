@@ -32,12 +32,12 @@ extern "C" {
  *
  * Update these macros (and CMakeLists.txt project VERSION) when releasing.
  */
-#define WEBLIB_VERSION_MAJOR 1
+#define WEBLIB_VERSION_MAJOR 2
 #define WEBLIB_VERSION_MINOR 0
 #define WEBLIB_VERSION_PATCH 0
 
 /** Full version string in "MAJOR.MINOR.PATCH" form. */
-#define WEBLIB_VERSION "1.0.0"
+#define WEBLIB_VERSION "2.0.0"
 
 /** Server identity string embedded in HTTP Server header. */
 #define WEBLIB_VERSION_STRING "weblib/" WEBLIB_VERSION " (author:" WEBLIB_AUTHOR_KAMRAN ")"
@@ -60,7 +60,7 @@ extern "C" {
 const char *weblib_kamran_signature(void);
 
 /**
- * Return the library version string (e.g. "1.0.0").
+ * Return the library version string (e.g. "2.0.0").
  */
 const char *weblib_version(void);
 

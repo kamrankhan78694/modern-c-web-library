@@ -21,6 +21,8 @@ The workflow is already set up! It will run automatically when you:
 
 **This is the easiest method!** ⭐
 
+> **A manual run does not produce a version tag.** The `type=semver` patterns in `docker-publish.yml` only fire on a tag ref, so a `workflow_dispatch` run from `main` pushes `main`, `sha-<sha>` and `latest` — but no `2.0.0` / `2.0` / `2`. Push the `v2.0.0` git tag (or publish the GitHub release) when you want the versioned tags.
+
 ---
 
 ## Option 2: Using the Publish Script
@@ -32,7 +34,7 @@ If you have Docker running locally:
 open -a Docker  # macOS
 
 # Then run the publish script
-./publish-package.sh 1.0.0
+./publish-package.sh 2.0.0
 ```
 
 You'll need a GitHub Personal Access Token with `write:packages` permission:
@@ -40,6 +42,8 @@ You'll need a GitHub Personal Access Token with `write:packages` permission:
 2. Select scopes: `write:packages`, `read:packages`
 3. Generate token
 4. Use it when the script prompts
+
+> **Heads-up on the tag name.** `publish-package.sh` pushes `...:v${VERSION}` (with a `v`), while the GitHub Actions path pushes `...:${VERSION}` (without one, because `docker/metadata-action` strips it). Only the unprefixed form is documented to users in [DOCKER_PACKAGE.md](DOCKER_PACKAGE.md), so prefer Option 1, or use the explicit commands in Option 3 below.
 
 ---
 
@@ -49,9 +53,9 @@ You'll need a GitHub Personal Access Token with `write:packages` permission:
 # 1. Start Docker
 open -a Docker  # macOS
 
-# 2. Build the image
+# 2. Build the image (tags are unprefixed, matching what CI publishes)
 docker build -f Dockerfile.release \
-  -t ghcr.io/kamrankhan78694/modern-c-web-library:v1.0.0 \
+  -t ghcr.io/kamrankhan78694/modern-c-web-library:2.0.0 \
   -t ghcr.io/kamrankhan78694/modern-c-web-library:latest \
   .
 
@@ -59,9 +63,11 @@ docker build -f Dockerfile.release \
 echo $GITHUB_TOKEN | docker login ghcr.io -u kamrankhan78694 --password-stdin
 
 # 4. Push the images
-docker push ghcr.io/kamrankhan78694/modern-c-web-library:v1.0.0
+docker push ghcr.io/kamrankhan78694/modern-c-web-library:2.0.0
 docker push ghcr.io/kamrankhan78694/modern-c-web-library:latest
 ```
+
+Keep the version in step 2 in sync with `CMakeLists.txt`, `include/kamran.k` and the `org.opencontainers.image.version` labels in `Dockerfile.release` (currently `2.0.0`).
 
 ---
 

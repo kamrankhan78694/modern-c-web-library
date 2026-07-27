@@ -8,6 +8,17 @@ deployment to Cloudflare Workers).  The main entry point
 
 > **Header:** `#include "kamran.k"`
 
+> **About the limits tables.** Every service below has a `### Limits` section.
+> Where a table has a **Cloudflare** column, the `Value` column is what this
+> library actually enforces and the `Cloudflare` column is the real service's
+> limit — the two mostly agree, and each row that differs says so. Rows marked
+> **(in-memory impl)** are capacities of the native simulation you run locally,
+> from arrays sized at compile time in `src/worker_kv.c`, `src/worker_r2.c`,
+> `src/worker_d1.c`, and `src/worker_queues.c`. They have no Cloudflare
+> equivalent, so hitting one locally is not a sign your Worker will fail in
+> production. (The D1 table is entirely of this kind and has no Cloudflare
+> column.)
+
 ---
 
 ## Table of Contents
@@ -438,14 +449,20 @@ void worker_kv_list_result_destroy(worker_kv_list_result_t *result);
   TTL, absolute expiration, and metadata.  Pass `NULL` for defaults.
 - `worker_kv_list()` returns a `worker_kv_list_result_t *` that must be
   freed with `worker_kv_list_result_destroy()`.
+- The native/in-memory implementation holds at most 1024 live keys per
+  namespace.  Once full, `worker_kv_put()` returns `-1` for a *new* key;
+  updates to existing keys and `worker_kv_delete()` still succeed.  This
+  is a limit of the local test implementation, not of Cloudflare KV.
 
 ### Limits
 
 | Limit | Value | Cloudflare |
 |-------|-------|------------|
 | Max key length | 512 bytes | 512 bytes |
+| Max value length | 25 MiB | 25 MiB |
 | Default list limit | 1000 | 1000 |
 | Max metadata size | 1024 bytes | 1024 bytes |
+| Max entries per namespace | 1024 (in-memory impl) | no documented key-count limit |
 
 ---
 
@@ -529,12 +546,20 @@ void worker_r2_list_result_destroy(worker_r2_list_result_t *result);
   (body is `NULL`).
 - `worker_r2_list()` returns a `worker_r2_list_result_t *` with metadata-
   only objects.  Free with `worker_r2_list_result_destroy()`.
+- The in-memory bucket holds at most 1024 objects.  Once full,
+  `worker_r2_put()` returns `-1` for a *new* key; overwriting an existing
+  key still succeeds.
 
 ### Limits
 
 | Limit | Value | Cloudflare |
 |-------|-------|------------|
-| Max key length | 1024 bytes | 1024 bytes |
+| Max key length | not enforced | 1024 bytes |
+| Max objects per bucket | 1024 (in-memory impl) | no documented object-count limit |
+
+The in-memory R2 simulation does not validate key length: keys longer than
+Cloudflare's 1024-byte limit are accepted locally but would be rejected by real
+R2.  Keep your own keys within 1024 bytes.
 
 ---
 
@@ -552,7 +577,7 @@ statements, parameter binding, and batch execution.
 | `stmt.first()` | `worker_d1_stmt_first(stmt)` |
 | `stmt.all()` | `worker_d1_stmt_all(stmt)` |
 | `env.DB.exec(sql)` | `worker_d1_exec(db, sql)` |
-| `env.DB.batch([...])` | `worker_d1_batch(db, stmts, count, &out_count)` |
+| `env.DB.batch([...])` | `worker_d1_batch(db, stmts, count, &out_count)` (not atomic — see key points) |
 
 ### Types
 
@@ -608,7 +633,12 @@ void worker_d1_result_destroy(worker_d1_result_t *result);
   for DDL like `CREATE TABLE`).
 - `worker_d1_batch()` executes an array of prepared statements in
   sequence.  Returns an array of result pointers (`*out_count` results).
-  On failure returns `NULL`.
+  **The batch is not atomic.**  On failure it returns `NULL` and sets
+  `*out_count` to 0, but the statements that ran before the failing one
+  have already been applied and are not rolled back — and the zeroed
+  count means the caller cannot tell how many landed.  This differs from
+  Cloudflare D1's `env.DB.batch()`, which runs as an implicit
+  transaction.  Do not rely on all-or-nothing semantics.
 
 ### Example
 
@@ -641,9 +671,24 @@ worker_d1_destroy(db);
 
 ### Limits
 
+These are all limits of the in-memory D1 simulation — several (max rows, max
+tables) have no Cloudflare equivalent at all, so there is no comparison column
+here.
+
 | Limit | Value |
 |-------|-------|
-| Max bind parameters | 32 |
+| Max bind parameters | 100 |
+| Max tables | 32 |
+| Max columns per table | 32 |
+| Max rows per table | 1024 |
+| Max SQL statement length | 8191 bytes |
+| Max cell value length | 1023 bytes (longer values are truncated) |
+| Max table/column name length | 63 bytes |
+
+`worker_d1_prepare()` returns `NULL` for over-long SQL, and an `INSERT` returns
+`NULL` once a table has 1024 rows.  Cell values over 1023 bytes are silently
+truncated rather than rejected, so keep them short if exact round-tripping
+matters.
 
 ---
 
@@ -712,10 +757,15 @@ void worker_queue_batch_destroy(worker_queue_batch_t *batch);
 - `worker_queue_send()` enqueues a binary body.
   `worker_queue_send_text()` and `worker_queue_send_json()` are
   convenience wrappers.
-- `worker_queue_send_batch()` is atomic: all messages are enqueued or
-  none.  Up to 100 messages per batch.
-- `worker_queue_consume()` dequeues messages in a batch.  The
-  `max_wait_seconds` parameter is ignored in the in-memory implementation.
+- `worker_queue_send_batch()` validates the whole batch up front — count,
+  each message size, and the resulting queue depth — and returns `-1`
+  without enqueuing anything if any check fails.  Up to 100 messages per
+  batch.  (The only way to get a partial enqueue is an allocation failure
+  part-way through the send loop.)
+- `worker_queue_consume()` dequeues messages in a batch.  A `max_batch`
+  of 0 or less defaults to 10, and anything above 100 is clamped to 100.
+  The `max_wait_seconds` parameter is ignored in the in-memory
+  implementation — it returns immediately with whatever is queued.
 - `worker_queue_message_ack()` marks a message as processed.
 - `worker_queue_batch_destroy()` frees the batch and all contained
   messages.
@@ -724,6 +774,12 @@ void worker_queue_batch_destroy(worker_queue_batch_t *batch);
 
 | Limit | Value | Cloudflare |
 |-------|-------|------------|
-| Max message size | 128 KB | 128 KB |
+| Max message size | 128 KiB | 128 KB |
 | Max batch size | 100 messages | 100 messages |
-| Max batch total | 256 KB | 256 KB |
+| Max batch total | not enforced locally | 256 KB |
+| Max queued messages | 4096 (in-memory impl) | no documented queue-depth limit |
+
+`worker_queue_send_batch()` checks the message count, each individual message
+size, and the resulting queue depth — but never the aggregate batch size.  A
+100-message batch of 128 KiB messages (12.8 MiB) is accepted locally and would
+be rejected by real Cloudflare Queues, so stay under 256 KB per batch yourself.

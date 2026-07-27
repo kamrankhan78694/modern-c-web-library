@@ -1,6 +1,6 @@
 # Deployment Guide
 
-**Modern C Web Library v1.0.0** — Production Deployment
+**Modern C Web Library v2.0.0** — Production Deployment
 
 This document describes how to build, package, and deploy applications built with the Modern C Web Library.
 
@@ -80,6 +80,11 @@ http_server_set_thread_count(server, 16);
 /* Socket timeouts — prevent slow-loris attacks */
 http_server_set_timeout(server, 30, 30);  /* read_sec, write_sec */
 
+/* Concurrent connection cap — the default is only 128, in both threaded
+   and async mode. Raise it deliberately, alongside your file-descriptor
+   limit (LimitNOFILE / ulimit -n). */
+http_server_set_max_connections(server, 1024);
+
 /* Register health check for load-balancer probes */
 health_check_register(router);
 
@@ -96,7 +101,7 @@ http_server_listen(server, 8080);
 | Write timeout | 30 s | 30 s | Prevents stalled connections |
 | Max body size | 1 MiB | (compile-time) | `MAX_BODY_BYTES` in http_server.c |
 | Max headers | 100 | (compile-time) | `MAX_HEADER_COUNT` in http_server.c |
-| Max connections | 128 | (compile-time) | `MAX_CONNECTIONS` in http_server.c |
+| Max connections | 128 | Raise to fit your load | Runtime: `http_server_set_max_connections()` (must be ≥ 1). 128 is the `MAX_CONNECTIONS` default in http_server.c |
 
 ## Deployment Patterns
 
@@ -112,24 +117,32 @@ ssh server '/opt/myapp/myapp 8080'
 
 ### Docker Container
 
-Use the provided `Dockerfile.release` as a base:
+The repository ships a production `Dockerfile.release` (multi-stage, `-DBUILD_TESTS=OFF`, non-root `weblib` user, `HEALTHCHECK`) that builds the bundled example servers. To containerise **your own** app against the library, a minimal image looks like this:
 
 ```dockerfile
+# Stage 1 — builder. This is the only stage with a compiler.
 FROM ubuntu:22.04 AS builder
-RUN apt-get update && apt-get install -y build-essential cmake
+RUN apt-get update && apt-get install -y build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
 COPY . /src
 WORKDIR /src/build
-RUN cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)
+RUN cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF \
+    && make -j"$(nproc)"
+# myapp.c arrived with `COPY . /src`. Build it here, where the toolchain lives.
+RUN mkdir -p /out \
+    && gcc -O2 -o /out/myapp /src/myapp.c -I/src/include -L/src/build -lweblib -lpthread
 
+# Stage 2 — runtime. No compiler, no source, no root.
 FROM ubuntu:22.04
-COPY --from=builder /src/build/libweblib.a /usr/local/lib/
-COPY --from=builder /src/include/ /usr/local/include/
-COPY myapp.c /app/
+RUN useradd -m -u 1000 weblib
+COPY --from=builder --chown=weblib:weblib /out/myapp /app/myapp
 WORKDIR /app
-RUN gcc -O2 -o myapp myapp.c -lweblib -lpthread
+USER weblib
 EXPOSE 8080
 CMD ["./myapp", "8080"]
 ```
+
+`weblib` is a **static** library, so the finished binary carries everything it needs — the runtime stage does not need `libweblib.a` or the headers, and it must not install a compiler.
 
 ### Systemd Service
 
@@ -188,6 +201,39 @@ server {
     }
 }
 ```
+
+### Built-in TLS — Experimental, Not for Production
+
+Alongside the proxy-termination pattern above, v2.0.0 adds a hand-written, zero-dependency pure-C TLS 1.3 **server**, exposed as `http_server_enable_tls()` and compiled only when the CMake option `WEBLIB_ENABLE_TLS` is set. It defaults to **OFF**: with it off, no `src/tls/` code is compiled at all.
+
+It is **EXPERIMENTAL and UNAUDITED**. It has had no external cryptographic audit, and it is not for production without one. For anything you actually serve, terminate TLS at nginx, Caddy, HAProxy or your cloud load balancer, as shown above.
+
+If you want to evaluate it in a non-production environment, these are the boundaries:
+
+- **Native only.** The option has no effect on WASM/Emscripten or Cloudflare Workers builds.
+- **Server only.** There is no TLS client.
+- **Threaded mode only.** `http_server_enable_tls()` returns `-1` if async mode is enabled, and it must be called before `http_server_listen()`.
+- **No WebSocket over TLS.** A WebSocket upgrade on a TLS connection is refused with 503.
+- **One profile.** Cipher suite `TLS_CHACHA20_POLY1305_SHA256`, X25519 key exchange, Ed25519 signatures — so an Ed25519 certificate and a PKCS#8 Ed25519 private key. No AES-GCM, no RSA, no ECDSA, no TLS 1.2.
+- **No browser support.** A real `openssl s_client` handshake and HTTPS round-trip is verified in CI, but browser page-load is not achieved: browser support for Ed25519-only certificates is limited and inconsistent.
+
+The API takes PEM **buffers with explicit lengths**, not file paths — read the files yourself (see `examples/tls_server.c`):
+
+```c
+int http_server_enable_tls(http_server_t *server,
+                           const char *cert_pem, size_t cert_len,
+                           const char *key_pem,  size_t key_len);
+```
+
+Build it with:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWEBLIB_ENABLE_TLS=ON
+cmake --build build --parallel
+cd build && ctest --output-on-failure
+```
+
+`WEBLIB_TLS_TEST_HOOKS` (default OFF) gates a deterministic-RNG seam used only by the `TlsHttpTests` suite. It must never be enabled in a production build. See [`src/tls/README.md`](../src/tls/README.md).
 
 ## Health Checks
 
@@ -276,6 +322,7 @@ Automatically fills `{"error":"Not Found","status":404}` for unhandled errors.
 Before deploying to production, verify:
 
 - [ ] Run behind a reverse proxy with TLS termination (nginx, Caddy, HAProxy)
+- [ ] Do **not** enable the built-in TLS layer (`-DWEBLIB_ENABLE_TLS=ON` / `http_server_enable_tls()`) in production — it is EXPERIMENTAL and UNAUDITED, and not for production without an external cryptographic audit. See [Built-in TLS](#built-in-tls--experimental-not-for-production).
 - [ ] Set socket timeouts (`http_server_set_timeout`)
 - [ ] Enable rate limiting (`ratelimit_middleware_create`)
 - [ ] Enable CSRF protection for browser-facing endpoints (`csrf_middleware_create`)

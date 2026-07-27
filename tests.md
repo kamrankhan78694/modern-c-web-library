@@ -2,6 +2,23 @@
 
 Each test reviewed for **false greens** — tests that pass but don't actually validate what they claim to test.
 
+## Scope of this audit
+
+This report covers **`tests/test_weblib.c` only**. It does not cover the other ctest suites —
+`test_stress`, `test_kamran_header`, `test_async_websocket`, `test_worker`, `test_wasm`, or the seven
+TLS suites (`TlsTests`, `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`,
+`TlsHttpTests`, `TlsInteropOpenssl`).
+
+The audit itself was performed against the **129 tests** present at the time (commits `839b244` /
+`cc665d9`). `tests/test_weblib.c` now runs **166 tests**. The 37 added since are listed in their own
+table below with the position they occupy in `main()`; they have **not** been reviewed for false
+greens.
+
+Two things to know about the main table before you read it. The `#` column is audit order, which
+for tests added mid-list no longer matches current `main()` order. And the **Printed name** column
+records the name as it stood at audit time — where a 🔴 row's fix included a rename, the new name is
+in the Notes, not the column (tests 19, 29 and 113).
+
 ## Legend
 
 | Symbol | Meaning |
@@ -9,6 +26,7 @@ Each test reviewed for **false greens** — tests that pass but don't actually v
 | ✅ | **OK** — test name matches what it verifies |
 | ⚠️ | **Weak** — test is honest but coverage is thin |
 | 🔴 | **False green** — test name/comment claims something that is never verified; fixed in this PR |
+| ❓ | **Not yet audited** — added after this audit; no false-green review has been done |
 
 ---
 
@@ -128,7 +146,7 @@ Each test reviewed for **false greens** — tests that pass but don't actually v
 | 110 | `test_crc32_compute` | `crc32_compute` | ✅ | Known value for "123456789", NULL, empty. |
 | 111 | `test_compression_negotiate` | `compression_negotiate` | ✅ | gzip accepted, quality, rejected, missing, NULL, wildcard. |
 | 112 | `test_compression_should_compress` | `compression_should_compress` | ✅ | Text types yes, binary no, size threshold, NULL. |
-| 113 | `test_gzip_compress_valid` | `gzip (compress produces valid output)` | 🔴 | Named "gzip compress produces valid output" but **only tests CRC32** (already tested in #110). `gzip_compress` is not in the public API and is never called. **Fixed**: replaced with `http_response_send_compressed` call, verify gzip magic bytes or fallback body match. |
+| 113 | `test_gzip_compress_valid` | `gzip (compress produces valid output)` | 🔴 | Named "gzip compress produces valid output" but **only tests CRC32** (already tested in #110). `gzip_compress` is not in the public API and is never called. **Fixed**: replaced with `http_response_send_compressed` call, verify gzip magic bytes or fallback body match; renamed to `gzip (compress via send_compressed)`. |
 | 114 | `test_benchmark_timestamp` | `benchmark_timestamp_us` | ✅ | Non-zero, monotonic. |
 | 115 | `test_benchmark_stats` | `benchmark (NULL handling)` | ✅ | NULL path, NULL stats, zero requests. |
 | 116 | `test_benchmark_print` | `benchmark_print` | ✅ | NULL fp, NULL stats, /dev/null. |
@@ -148,16 +166,69 @@ Each test reviewed for **false greens** — tests that pass but don't actually v
 
 ---
 
+## Tests added since this audit — not yet reviewed
+
+These 37 tests were added to `tests/test_weblib.c` after the audit above. They all pass, but none has
+been checked for false greens, so treat the descriptions as "what the test is named", not "what the
+test was verified to assert". `main() #` is the test's position in the current `main()` (1–166).
+
+| main() # | Function | Printed name | Verdict |
+|---|----------|-------------|---------|
+| 9 | `test_json_number_precision` | `json_stringify (number precision / round-trip)` | ❓ |
+| 12 | `test_json_parse_locale_independent` | `json_parse/stringify (locale-independent numbers)` | ❓ |
+| 39 | `test_cors_rejects_wildcard_with_credentials` | `cors refuses wildcard origin + credentials (CWE-942)` | ❓ |
+| 40 | `test_cors_wildcard_does_not_reflect` | `cors wildcard emits '*' and never reflects Origin / credentials` | ❓ |
+| 51 | `test_session_get_data_owned_copy` | `session_get_data returns an independent owned copy (UAF-safe)` | ❓ |
+| 52 | `test_session_data_ops_on_dead_session` | `session data ops on destroyed/unknown session fail safely` | ❓ |
+| 53 | `test_session_keyed_access_reclaims_expired` | `keyed data access reclaims an expired session slot` | ❓ |
+| 54 | `test_session_cookie_idle_timeout` | `session-cookie (max_age=0) idle-timeout reclamation` | ❓ |
+| 64 | `test_template_autoescape` | `template (auto-escape / raw)` | ❓ |
+| 67 | `test_sha256_kat` | `sha256 (RFC 6234 known-answer)` | ❓ |
+| 68 | `test_hmac_sha256_kat` | `hmac_sha256 (RFC 4231 known-answer)` | ❓ |
+| 69 | `test_base64_kat` | `base64_decode (RFC 4648 known-answer)` | ❓ |
+| 71 | `test_jwt_auth_verify` | `jwt_auth (verify: alg/exp/nbf)` | ❓ |
+| 74 | `test_db_pool_destroy_race` | `db_pool (destroy with checked-out + blocked acquirers)` | ❓ |
+| 75 | `test_db_pool_double_release` | `db_pool (double release is a safe no-op)` | ❓ |
+| 127 | `test_compression_negotiate_locale` | `compression_negotiate (locale-independent q-value)` | ❓ |
+| 146 | `test_env_config_get_string` | `env_config_get (string accessor)` | ❓ |
+| 147 | `test_env_config_get_int` | `env_config_get_int (integer accessor)` | ❓ |
+| 148 | `test_env_config_get_bool` | `env_config_get_bool (boolean accessor)` | ❓ |
+| 149 | `test_env_config_get_port` | `env_config_get_port (port accessor)` | ❓ |
+| 150 | `test_env_config_require` | `env_config_require (required variable)` | ❓ |
+| 151 | `test_env_config_server_apply` | `http_server_apply_env (server integration)` | ❓ |
+| 152 | `test_env_config_is_set` | `env_config_is_set (presence check)` | ❓ |
+| 153 | `test_env_secure_value_lifecycle` | `env_secure_value lifecycle (get/read/free)` | ❓ |
+| 154 | `test_env_secure_value_missing` | `env_secure_value (missing variable returns NULL)` | ❓ |
+| 155 | `test_env_secure_value_null_safety` | `env_secure_value (NULL-safety on accessors)` | ❓ |
+| 156 | `test_env_secure_value_wipe` | `env_secure_value (memory wipe on free)` | ❓ |
+| 157 | `test_env_config_redact` | `env_config_redact (log-safe masking)` | ❓ |
+| 158 | `test_env_config_redact_integration` | `env_config_redact (integration with secure value)` | ❓ |
+| 159 | `test_secure_zero` | `secure_zero (memory wipe)` | ❓ |
+| 160 | `test_secure_compare` | `secure_compare (constant-time comparison)` | ❓ |
+| 161 | `test_secure_random_bytes` | `secure_random_bytes (CSPRNG)` | ❓ |
+| 162 | `test_security_headers_create_destroy` | `security_headers_middleware (create/destroy)` | ❓ |
+| 163 | `test_parser_cl_before_te_smuggling` | `parser (Content-Length before Transfer-Encoding → 400)` | ❓ |
+| 164 | `test_header_injection_rejected` | `header injection (CRLF in value → rejected)` | ❓ |
+| 165 | `test_websocket_fragment_oom` | `websocket fragment buffer OOM → clean close` | ❓ |
+| 166 | `test_websocket_oversized_frame` | `websocket oversized frame rejected (DoS guard)` | ❓ |
+
+---
+
 ## Summary
 
 | Category | Count |
 |----------|-------|
-| ✅ OK | 109 |
+| ✅ OK | 111 |
 | ⚠️ Weak (honest but thin) | 5 |
 | 🔴→✅ False green (fixed) | 13 |
-| **Total** | **129** |
+| **Total audited** | **129** |
+| ❓ Added since this audit, not yet reviewed | 37 |
+| **Tests in `test_weblib.c` today** | **166** |
 
-### False greens fixed in this PR
+The ✅ figure was previously written as 109, which did not sum to 129. Tallying the verdict column of
+the table above gives 111 ✅ / 5 ⚠️ / 13 🔴→✅.
+
+### False greens fixed in this PR (commit `cc665d9`)
 
 1. **test_event_loop_timeout** — dead `timeout_called` code never asserted
 2. **test_websocket_frame_encode** — tested connection creation, not frame encoding

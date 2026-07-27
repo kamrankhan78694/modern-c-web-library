@@ -2,7 +2,7 @@
 
 **Modern C Web Library** - A Pure C Web Framework
 
-*Last Updated: February 2026*
+*Last Updated: July 2026 (v2.0.0)*
 
 ---
 
@@ -10,7 +10,7 @@
 
 The Modern C Web Library has successfully demonstrated that **enterprise-grade web functionality can be achieved entirely in pure ISO C**, without external dependencies. This achievement validates the feasibility of building modern, secure, and high-performance web backends using nothing but standard C and platform APIs.
 
-**Key Achievement**: A production-ready v1.0.0 HTTP web framework built from scratch in pure C, proving that modern web development doesn't require external libraries or higher-level languages.
+**Key Achievement**: A v2.0.0 HTTP web framework built from scratch in pure C — production-ready for plain-HTTP workloads on Linux — proving that modern web development doesn't require external libraries or higher-level languages. It runs natively, in WebAssembly, and on Cloudflare Workers, and now ships an opt-in TLS 1.3 server that is **experimental and unaudited** (see below).
 
 ---
 
@@ -36,12 +36,19 @@ The Modern C Web Library has successfully demonstrated that **enterprise-grade w
 
 **Achievement**: Comprehensive test suite with 100% pass rate.
 
-**Metrics**:
+**Metrics**: `ctest` runs **6 suites** in a default build and **13** when the experimental TLS layer
+is enabled together with its test hooks. Both configurations pass 100%.
+
 ```
-Tests run: 129
-Tests passed: 129
-Tests failed: 0
-Success rate: 100%
+Default build (TLS off) — 6 suites:
+  WebLibTests (166 tests), KamranHeaderTests, AsyncWebSocketTests,
+  StressTests (37 tests), WorkerTests (32 tests), WasmTests (16 tests)
+
+With -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON — 13 suites:
+  the 6 above, plus TlsTests, TlsCryptoTests, TlsParseTests,
+  TlsTransportTests, TlsFuzzTests, TlsHttpTests, TlsInteropOpenssl
+
+Failures: 0    Success rate: 100%
 ```
 
 **Test Coverage**:
@@ -74,11 +81,14 @@ Success rate: 100%
 - ✅ Response compression (gzip, CRC32)
 - ✅ Benchmarking suite
 - ✅ Integration tests (GET, POST, JSON, 404, malformed, sequential)
+- ✅ Request-smuggling, header-injection and path-normalization regressions
+- ✅ Cloudflare Workers bindings (KV, R2, D1, Queues) and the WASM-safe subset
+- ✅ TLS (opt-in): RFC known-answer tests for every primitive, DER/PEM/X.509 parsing, record layer, handshake state machine, a deterministic fuzzer over the untrusted-input path, and a real `openssl s_client` interop handshake
 
 **Quality Assurance**:
-- Zero compiler warnings with strict flags (`-Wall -Wextra`)
-- AddressSanitizer integration for memory safety
-- Valgrind compatibility for leak detection
+- Zero compiler warnings with strict flags (`-Wall -Wextra -pedantic`)
+- AddressSanitizer + UndefinedBehaviorSanitizer in CI (the TLS suites run under both)
+- Valgrind memcheck on every push (Docker job, Ubuntu/gcc)
 - Memory-safe operations throughout codebase
 
 ### 3. Security Hardening ✅
@@ -153,6 +163,8 @@ Success rate: 100%
 - ✅ Route parameter extraction
 - ✅ Response helpers (text, JSON, template)
 - ✅ Cross-platform support (Linux, macOS, Windows)
+- ✅ WebAssembly target via Emscripten (`emcmake cmake ..`) — a WASM-safe subset: JSON, router, template engine, input validation, cookies, body parser, compression. OS-dependent modules (sockets, HTTP server, event loop, TLS) are excluded from WASM builds. See `examples/wasm_example.c`.
+- ✅ Cloudflare Workers runtime layer (`worker_*` fetch-event API) with pure-C KV, R2, D1 and Queues binding APIs — in-memory emulations for native and test builds, bridged to the real Cloudflare bindings by a JS glue layer (`examples/worker.js`) on deployment. See [docs/WORKER_API.md](docs/WORKER_API.md).
 - ✅ WebSocket support (RFC 6455, threaded + async)
 - ✅ Request body parsing (URL-encoded, multipart, file upload)
 - ✅ Cookie handling (RFC 6265)
@@ -176,13 +188,55 @@ Success rate: 100%
 - ✅ Response compression (gzip, DEFLATE)
 - ✅ Async WebSocket (event loop integration)
 - ✅ Benchmarking suite (throughput, latency percentiles)
-- ✅ GitHub Actions CI (Linux + macOS, Valgrind)
+- ✅ GitHub Actions CI (Ubuntu gcc + Valgrind in Docker, clang build, TLS build with ASan/UBSan, macOS on PRs, production Docker image check)
+- ✅ TLS 1.3 / HTTPS server (**EXPERIMENTAL · UNAUDITED**) — hand-written and zero-dependency, enabled with `http_server_enable_tls()`. Server-side only, threaded mode only, native-only, and opt-in via `-DWEBLIB_ENABLE_TLS=ON` (default OFF — with it off, no `src/tls` code is compiled at all). Not for production use without an external cryptographic audit. See section 7 below and [`src/tls/README.md`](src/tls/README.md).
 
 **API Design**:
 - Clean, intuitive function naming
 - Consistent error handling patterns
 - Memory ownership clearly defined
 - Type-safe interfaces with enums
+
+### 7. TLS 1.3 Server — EXPERIMENTAL, UNAUDITED ⚠️
+
+**Achievement**: A hand-written, zero-dependency TLS 1.3 server in 5,481 lines of C — no OpenSSL,
+no BoringSSL, no mbedTLS.
+
+**Read this first**: this code has **not** had an external cryptographic audit. Do not put it in
+front of real users or real secrets until it has. It is off by default (`WEBLIB_ENABLE_TLS=OFF`);
+with the option off, none of `src/tls/` is compiled and you get byte-for-byte the same HTTP-only
+build you would have had if the TLS layer had never been written.
+
+**What it implements**:
+- A single, deliberately narrow profile: cipher suite `TLS_CHACHA20_POLY1305_SHA256`, X25519 key
+  exchange, Ed25519 signatures. No AES-GCM, no RSA, no ECDSA, no TLS 1.2 — fewer moving parts means
+  fewer places for a downgrade or negotiation bug to hide.
+- Primitives, each with RFC known-answer tests: SHA-256, SHA-512, HMAC, HKDF, ChaCha20, Poly1305,
+  ChaCha20-Poly1305 AEAD, X25519, Ed25519.
+- DER/ASN.1, PEM and X.509 parsing, hardened against malformed input.
+- A record layer honouring the 2^14 plaintext limit, with fragmentation.
+- A full server handshake state machine, including HelloRetryRequest (RFC 8446 §4.4.1) and ALPN
+  negotiation of `http/1.1`.
+
+**How you turn it on**:
+```c
+int rc = http_server_enable_tls(server,
+                                cert_pem, cert_len,   /* PEM buffers, not file paths */
+                                key_pem,  key_len);
+```
+See `examples/tls_server.c`, which reads the two PEM files itself and passes the buffers.
+
+**Honest limits**:
+- **Server-side only** — there is no TLS client.
+- **Threaded mode only** — `http_server_enable_tls()` returns -1 if async mode is set.
+- **Native-only** — not available in WASM or Cloudflare Workers builds.
+- **No WebSocket over TLS** — a WS upgrade on a TLS connection is refused with 503.
+- **Interop is verified against `openssl s_client`, not browsers.** CI runs a genuine TLS 1.3
+  handshake and HTTPS round-trip, including a >16 KiB response fragmented across records and two
+  requests on one connection. **Browser page-load is not achieved**: Ed25519-only certificates have
+  limited and inconsistent browser support.
+- `WEBLIB_TLS_TEST_HOOKS` (default OFF) gates a deterministic-RNG seam used by `TlsHttpTests` only.
+  It must never be enabled in a production build.
 
 ---
 
@@ -192,26 +246,26 @@ Success rate: 100%
 
 | Metric | Status | Details |
 |--------|--------|---------|
-| Compiler Warnings | ✅ **Zero** | Clean build with `-Wall -Wextra` |
+| Compiler Warnings | ✅ **Zero** | Clean build with `-Wall -Wextra -pedantic` |
 | Security Warnings | ✅ **Zero** | All unsafe functions replaced |
-| Memory Errors | ✅ **Zero** | AddressSanitizer clean |
+| Memory Errors | ✅ **Zero** | Valgrind clean on every test binary; ASan/UBSan clean on the TLS suites |
 | Static Analysis | ✅ **Pass** | No defects detected |
 
 ### Test Results
 
 | Metric | Value | Status |
 |--------|-------|--------|
-| Test Suite Size | 129 tests | ✅ Comprehensive |
-| Pass Rate | 100% | ✅ All passing |
+| Test Suite Size | 6 ctest suites by default (13 with the experimental TLS build); 166 unit + 37 stress tests | ✅ Comprehensive |
+| Pass Rate | 100% in both configurations | ✅ All passing |
 | Failed Tests | 0 | ✅ Perfect score |
-| Code Coverage | All modules | ✅ Complete |
+| Code Coverage | Not measured — there is no gcov/lcov instrumentation in the build or CI | ⚠️ Not tracked |
 
 ### Memory Safety
 
 | Tool | Status | Result |
 |------|--------|--------|
-| AddressSanitizer | ✅ Enabled | Zero errors |
-| Valgrind Ready | ✅ Compatible | Leak detection available |
+| Valgrind | ✅ Every push | The Docker job runs each `tests/test_*` binary under `--leak-check=full`; 0 errors, 0 definite/indirect leaks |
+| AddressSanitizer + UBSan | ✅ Every push | The `tls-check` job builds with `-fsanitize=address,undefined` and runs the 7 TLS suites; 0 errors |
 | Buffer Overflow | ✅ Protected | All bounds checked |
 | Memory Leaks | ✅ Clean | Proper cleanup verified |
 
@@ -238,6 +292,9 @@ Success rate: 100%
 - **Phase 8 (v0.8.0)**: CSRF middleware, logging, error handler, input validation, health check
 - **Phase 9 (v0.9.0)**: Response compression, caching, metrics, async WebSocket, benchmarking
 - **Phase 10 (v1.0.0)**: REST API example, tutorials, documentation, release readiness
+- **Post-1.0 hardening (Mar–Jul 2026)**: security code review closing all 10 tracked bugs, CSPRNG hardening (fail-closed, no predictable fallback), request-smuggling and header-injection regressions, path canonicalization, async idle-connection reaper
+- **WASM + Workers (Apr 2026)**: Emscripten target with a WASM-safe module subset; Cloudflare Workers runtime layer with KV, R2, D1 and Queues bindings
+- **Phase 11–12 (v2.0.0, Jul 2026)**: experimental pure-C TLS 1.3 server — crypto primitives with RFC known-answer tests, record layer, server handshake state machine, HelloRetryRequest, ALPN, deterministic fuzzer, `openssl s_client` interop in CI
 
 ---
 
@@ -269,6 +326,12 @@ Success rate: 100%
 - BSD (kqueue backend)
 - Windows (compatible via MinGW/MSVC)
 - Any POSIX system (poll fallback)
+- WebAssembly via Emscripten (WASM-safe subset; no sockets, server, event loop or TLS)
+- Cloudflare Workers (`worker_*` fetch-event API with KV/R2/D1/Queues bindings)
+
+Neither the WASM nor the Workers target is built in CI today — `WasmTests` and `WorkerTests` run
+natively against the in-memory emulations, so treat both targets as working but less exercised than
+the native path.
 
 ### 4. Educational Foundation
 **Advantage**: Demonstrates modern C design patterns and serves as teaching material.
@@ -307,10 +370,12 @@ Success rate: 100%
 
 ---
 
-## Future Roadmap (Post-v1.0.0)
+## Future Roadmap (Post-v2.0.0)
 
 ### Near-Term
-- **SSL/TLS Support**: Pure C TLS 1.2+ implementation (AES-GCM, SHA-256, RSA/ECDSA)
+- **External cryptographic audit of the TLS layer** — the gate that has to clear before TLS can be called anything but experimental
+- **Broader TLS profile**: AES-GCM cipher suite and RSA/ECDSA certificate support, which is what browser interop needs — Ed25519-only certificates have limited and inconsistent browser support today
+- **TLS coverage gaps**: client mode, async-mode TLS, WebSocket-over-TLS (`wss`), session resumption and tickets, client-certificate verification
 - **HTTP/2 Support**: Binary framing, stream multiplexing, HPACK compression
 - **Directory Listing**: Auto-generated directory indexes for static file serving
 
@@ -330,9 +395,9 @@ Success rate: 100%
 
 ### Technical Validation ✅
 - Proof of concept complete and working
-- 100% test coverage on core functionality
-- Zero critical bugs in production
-- Production-ready code quality
+- 100% pass rate across all 13 ctest suites; every tracked bug in [BUGS.md](BUGS.md) is closed
+- Valgrind runs every test binary on every push; AddressSanitizer and UndefinedBehaviorSanitizer run the TLS suites. All clean.
+- Production-ready code quality for the plain-HTTP core. The TLS layer is explicitly **not** in that bucket: it is experimental, unaudited, and off by default.
 
 ### Market Differentiation ✅
 - Only pure C web framework with async I/O
@@ -348,7 +413,7 @@ Success rate: 100%
 
 ### Risk Management ✅
 - Security-first design
-- Memory safety guaranteed
+- Memory safety checked continuously — Valgrind over every test binary, ASan/UBSan over the TLS suites, all clean in CI (this is C: checked, not guaranteed)
 - No supply chain vulnerabilities
 - Clear licensing (MIT)
 
@@ -358,9 +423,9 @@ Success rate: 100%
 
 The Modern C Web Library has successfully achieved its core mission: **proving that modern web backends can be built entirely in pure C without sacrificing functionality, security, or developer experience.**
 
-With 100% test pass rate, zero security warnings, comprehensive tooling, and a clear roadmap, the project is positioned for growth as both an educational resource and a production-ready framework.
+With a 100% test pass rate, zero security warnings, comprehensive tooling, and a clear roadmap, the project is positioned for growth as both an educational resource and — for plain-HTTP workloads — a production-ready framework.
 
-**Status**: v1.0.0 released — production-ready for deployment, with comprehensive tutorials and documentation.
+**Status**: v2.0.0 released — the plain-HTTP core is production-ready for deployment, with comprehensive tutorials and documentation. The new TLS 1.3 layer is experimental and unaudited, ships off by default, and should not be deployed until it has had an external cryptographic audit.
 
 ---
 
@@ -373,4 +438,4 @@ With 100% test pass rate, zero security warnings, comprehensive tooling, and a c
 - **Contributing**: See CONTRIBUTING.md for development guidelines
 - **Author**: Kamran Khan
 
-*This document represents the technical achievements and business value of the Modern C Web Library project as of February 2026.*
+*This document represents the technical achievements and business value of the Modern C Web Library project as of the v2.0.0 release (July 2026).*

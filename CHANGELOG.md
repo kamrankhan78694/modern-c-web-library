@@ -7,10 +7,157 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [2.0.0] - 2026-07-27
+
+Seventy-two pull requests landed between v1.0.0 and this release (#54, #55 and
+#58–#129). Three things drive the major version: HTTPS can now be terminated
+inside the library instead of requiring a reverse proxy in front of it, the
+library runs in two new places (WebAssembly and Cloudflare Workers), and the
+public header was renamed — which is the source-level break that makes this
+2.0.0 rather than 1.1.0.
+
+The bulk of the work, however, is security hardening: an internal bug audit and
+the twenty-two pull requests that followed it, listed under *Security* below. If
+you are running v1.0.0, read that section before deciding when to upgrade.
+
+**Upgrading from 1.0.0 breaks source compatibility in three places** — the header
+name, the session data API, and template auto-escaping. Each is described under
+*Changed*.
+
 ### Added
-- **v2.0.0 Roadmap** — Comprehensive 10-phase development plan (Phases 11–20)
-  - Phase 11 (v1.1.0): TLS Foundation — crypto primitives (SHA-256, AES-GCM, ChaCha20, X25519, HKDF)
-  - Phase 12 (v1.2.0): TLS 1.3 Handshake & HTTPS — record layer, handshake, certificates, ALPN
+
+- **Pure-C TLS 1.3 server — EXPERIMENTAL, UNAUDITED, OFF by default** (#96–#128).
+  Hand-written HTTPS termination in 5,481 lines of C under `src/tls/`, with no
+  OpenSSL, mbedTLS, or any other crypto library linked. Build it with
+  `-DWEBLIB_ENABLE_TLS=ON`; with the option off (the default) no `src/tls/` code
+  is compiled at all and the build is byte-identical to what it was before.
+  - **Do not put this in front of anything you care about without an external
+    cryptographic audit.** The primitives and — more importantly — the handshake
+    state machine are hand-written and have not been independently reviewed.
+  - New public API (`include/kamran.k`):
+    `int http_server_enable_tls(http_server_t *server, const char *cert_pem, size_t cert_len, const char *key_pem, size_t key_len)`.
+    It takes PEM **buffers with explicit lengths**, not file paths — see
+    `examples/tls_server.c`, which reads the files itself and passes the buffers.
+    Must be called before `http_server_listen()`.
+  - Scope, stated exactly: **server-side only** (there is no TLS client);
+    **threaded mode only** — the call returns -1 when async mode is enabled;
+    **native builds only** — not available under WASM or Cloudflare Workers; and
+    **WebSocket-over-TLS is refused** with 503 rather than silently downgraded to
+    plaintext frames.
+  - One profile, no agility: cipher suite `TLS_CHACHA20_POLY1305_SHA256`, key
+    exchange X25519, signature Ed25519. No TLS 1.2, no AES-GCM, no RSA or ECDSA,
+    no client certificates, no session resumption / tickets / PSK, no 0-RTT, no
+    KeyUpdate. A client that cannot offer all three is refused with
+    `handshake_failure`.
+  - Crypto primitives, each with RFC known-answer tests: SHA-256, SHA-512,
+    HMAC-SHA256, HKDF and HKDF-Expand-Label, ChaCha20, Poly1305,
+    ChaCha20-Poly1305 AEAD, X25519, Ed25519 (#97–#105). SHA-256/HMAC-SHA256 and
+    Base64 were promoted to a shared `src/crypto/` module so the TLS layer and
+    the JWT/CSRF code use one implementation (#97, #107).
+  - Certificate and key handling, all hardened against malformed input: a
+    bounds-checked DER/ASN.1 reader, a PEM (RFC 7468) reader, and Ed25519 key
+    extraction from PKCS#8 private keys and X.509 SPKI (#106, #108, #109).
+  - Protocol: key schedule (RFC 8446 §7.1), record layer (§5) enforcing the 2^14
+    plaintext limit with fragmentation, a bounded wire codec (§3), a ClientHello
+    parser (§4.1.2), server handshake message builders, transcript / Finished /
+    CertificateVerify auth crypto, and the full server handshake state machine
+    (§4) including HelloRetryRequest (§4.1.4) and ALPN negotiation of `http/1.1`
+    (RFC 7301) (#110–#116, #123, #124).
+  - A sans-IO connection engine (`src/tls/tls_khannection.c`) plus a
+    blocking-socket adapter (`src/tls/tls_transport.c`) with a read deadline and
+    a bound on empty-record floods (#117, #118, #126).
+  - **Interop, verified in CI:** a real `openssl s_client` completes a TLS 1.3
+    handshake and an encrypted HTTP round-trip against the `tls_server` example,
+    including a response larger than 16 KiB fragmented across records and two
+    requests on one keep-alive connection (#120, #128). **Browser page load is
+    not achieved and is not claimed** — the Ed25519-only certificate profile has
+    limited and inconsistent browser support (#125).
+  - Seven new ctest suites — `TlsTests`, `TlsCryptoTests`, `TlsParseTests`,
+    `TlsTransportTests`, `TlsFuzzTests`, `TlsHttpTests`, `TlsInteropOpenssl` —
+    including a deterministic robustness fuzzer over the untrusted-input path:
+    ClientHello parsing, connection framing, record deprotection (#121).
+  - `WEBLIB_TLS_TEST_HOOKS` (default OFF) gates a deterministic-RNG seam used
+    only by `TlsHttpTests`. It must never be enabled in a production build.
+  - `examples/tls_server.c`, a runnable HTTPS server (#120), and
+    `src/tls/README.md`, which documents the security scope — what is and is not
+    provided — in detail (added in #96, expanded in #125 and #127).
+- **WebAssembly target via Emscripten** (#69) — a WASM-safe subset builds under
+  `emcmake cmake`: JSON, router, template engine, input validation, cookies, body
+  parsing, and compression. The WebSocket modules, the benchmarking module, the
+  shared library, and TLS are excluded there. New exports for a JavaScript host —
+  `wasm_weblib_version()`, `wasm_weblib_capabilities()`,
+  `wasm_weblib_has_capability()`, and thin wrappers over the JSON, router,
+  validation, and template APIs — plus `examples/wasm_example.c` and a `WasmTests`
+  suite that runs on both native and WASM builds.
+- **Cloudflare Workers runtime** (#70) — a fetch-event compatibility layer
+  (`src/worker_runtime.c`) that bridges a Worker's request/response model to the
+  library's router: `worker_request_*` / `worker_response_*` / `worker_env_*`
+  types, `worker_set_fetch_handler()`, `worker_set_router()`, and
+  `worker_handle_fetch()`, which is exported for a JavaScript host to drive.
+  `examples/worker_example.c` exercises the layer natively.
+  `examples/worker.js` sketches the JS side but is a **template, not a working
+  deployment** — it calls `worker_init()` / `worker_fetch()` glue you write
+  yourself, and no `wrangler.toml` ships alongside it.
+- **Cloudflare infrastructure bindings: KV, R2, D1, and Queues** (#71) — pure-C
+  APIs shaped like the corresponding Workers bindings
+  (`worker_kv_get/put/delete/list`, `worker_r2_get/head/put/delete/list`,
+  `worker_d1_prepare/batch/exec` with `worker_d1_stmt_bind/run/first/all`,
+  `worker_queue_send/send_text/send_json/send_batch/consume`,
+  `worker_queue_message_ack`). **In every build — native, test, and WASM — these
+  are backed by in-memory simulations**, not by Cloudflare's services: reaching
+  the real bindings needs a JS glue layer, and none ships in this repo
+  (`examples/worker.js` bridges the fetch handler only). The simulations have
+  fixed capacities (1024 KV entries, 1024 R2 objects, 1024 D1 rows, 4096 queued
+  messages) — see `docs/WORKER_API.md`. `worker_d1_batch()` is **not** atomic,
+  unlike Cloudflare's `env.DB.batch()`.
+- **Semantic-versioning enforcement** (#72) — `WEBLIB_VERSION_MAJOR/MINOR/PATCH`
+  and `WEBLIB_VERSION` macros, `WEBLIB_VERSION_ENCODE()` / `WEBLIB_VERSION_NUMBER`
+  for compile-time comparisons, the runtime accessors `weblib_version()` and
+  `weblib_version_components()`, and `_Static_assert`s that fail the build if the
+  version in `kamran.k` drifts from `project(VERSION ...)` in `CMakeLists.txt`.
+  A versioning policy was added to `CONTRIBUTING.md`.
+- **Environment configuration and secret handling** (#61) — `env_config_get()`,
+  `env_config_get_int/bool/port()`, `env_config_require()`, `env_config_is_set()`,
+  and a secure-value wrapper (`env_config_get_secure()`, `env_secure_value_get()`,
+  `env_secure_value_len()`, `env_secure_value_free()`) that wipes its buffer on
+  free, plus `env_config_redact()` for log-safe rendering.
+- **Security headers middleware** (#61) — `security_headers_middleware_create()`
+  with safe defaults: `Content-Security-Policy: default-src 'self'`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`,
+  a restrictive `Permissions-Policy`, and optional HSTS.
+- **Shared security primitives** (#61, #63) — `secure_zero()` (a wipe the
+  compiler may not optimise away), `secure_compare()` (constant-time), and
+  `secure_random_bytes()` (OS CSPRNG), now used by every caller instead of
+  per-module copies.
+- **`http_server_set_request_timeout()` / `http_server_get_request_timeout()`**
+  (#78) — a total wall-clock deadline for reading a complete request (default 60
+  seconds; 0 disables). See *Security*.
+- **`session_store_set_idle_timeout()`** (#87) — reclaims session-cookie
+  sessions (`max_age == 0`) after an idle period (default 1800 seconds; ≤ 0
+  disables reclamation).
+- **A `tls-check` CI job** (#129) — a RelWithDebInfo TLS build running all 13
+  suites, plus an ASan/UBSan build running the 7 TLS suites. Before this job,
+  `ci.yml` never passed `-DWEBLIB_ENABLE_TLS=ON`, so **no `src/tls/` code was
+  ever compiled or run in CI** — roughly 5,500 lines of unaudited crypto and the
+  handshake state machine had zero regression protection. It joins
+  `primary-checks` (Docker: gcc build, full ctest, Valgrind), `clang-check`,
+  `macos-check` (pull requests only), and `docker-image-check`.
+- **Test suites, as ctest reports them:** a default build runs 6 suites
+  (`WebLibTests`, `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`,
+  `WorkerTests`, `WasmTests`); a build configured with
+  `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` runs 13. Both configurations
+  pass.
+- **v2.0.0 roadmap and planning documents** (#54, #55) — a 10-phase plan
+  (Phases 11–20) in `NEXT_PHASE.md`, with `TODO.md` cross-references for all
+  planned features. Its version numbering has since diverged from what actually
+  happened: the TLS phases shipped here in 2.0.0 rather than in v1.1.0/v1.2.0,
+  and **Phases 13–20 are not implemented** — there is no HTTP/2, no storage
+  engine, no multi-process mode, no Windows IOCP port, no HTTP/3, and no
+  CLI/metrics-exporter tooling.
+  - Phase 11 (v1.1.0): TLS Foundation — crypto primitives (SHA-256, AES-GCM, ChaCha20, X25519, HKDF) — **shipped in 2.0.0, with one deliberate change: AES-GCM was dropped. The only cipher suite is `TLS_CHACHA20_POLY1305_SHA256`; Poly1305, SHA-512 and Ed25519 shipped in addition to the list above.**
+  - Phase 12 (v1.2.0): TLS 1.3 Handshake & HTTPS — record layer, handshake, certificates, ALPN — **shipped in 2.0.0, but EXPERIMENTAL and UNAUDITED: server-side only, one cipher suite / group / signature algorithm, native builds only, off by default behind the `WEBLIB_ENABLE_TLS` CMake option. Not for production use without an external cryptographic audit — see `src/tls/README.md`.**
   - Phase 13 (v1.3.0): HTTP/2 Protocol — binary framing, HPACK, stream multiplexing, server push
   - Phase 14 (v1.4.0): Persistent Storage Engine — B-tree, WAL, transactions, iterator API
   - Phase 15 (v1.5.0): Advanced Middleware — directory listing, SSE, content negotiation, route groups
@@ -21,6 +168,171 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Phase 20 (v2.0.0): Release Engineering — CLI tools, Prometheus, OpenTelemetry, fuzz testing
 - Updated `NEXT_PHASE.md` with complete v2.0.0 roadmap (first-principles design, adversarial review, atomic task breakdown, security threat model, QA pipeline)
 - Updated `TODO.md` with phase cross-references for all planned features
+- `BUGS.md` and a bug-pattern section in `CONTRIBUTING.md` (#62) — the defect
+  classes found in review, written down so they stop recurring.
+- A Mermaid architecture flowchart (#67) and a PNG banner (#60) in `README.md`;
+  a DOI badge and refreshed documentation (#58).
+
+### Changed
+
+- **BREAKING — the public header is now `kamran.k`** (#65). `include/weblib.h`
+  no longer exists and there is no compatibility shim: every translation unit
+  that did `#include "weblib.h"` must now `#include "kamran.k"`. This is the
+  change that makes this release 2.0.0. (`include/db_pool.h` is unaffected.)
+- **BREAKING — session data access is keyed on `(store, session_id)`** (#83).
+  `session_set_data()`, `session_get_data()` and `session_remove_data()` now take
+  `(session_store_t *store, const char *session_id, ...)` instead of a
+  `session_t *` handle, `session_set_data()` and `session_remove_data()` return
+  `int`, and `session_get_data()` returns a freshly allocated copy the caller must
+  `free()` rather than a borrowed `const char *`. This eliminates a
+  use-after-free class by construction — see *Security*.
+- **BREAKING — template `{{ var }}` interpolation now HTML-escapes by default**
+  (#77). Use `{{{ var }}}` where you genuinely intend raw HTML. Templates that
+  relied on `{{ }}` to emit markup will render it escaped after upgrading. See
+  *Security*.
+- Request paths are canonicalized at ingest (#88) — runs of `/` are collapsed and
+  a single trailing `/` is stripped (except for root `/`), once, right after the
+  request line is parsed. The router, every middleware, and every handler now see
+  one canonical `req->path`. Percent-encoded slashes are left alone (no path
+  decoding happens), and `..` is still handled by the static-file middleware's
+  `realpath()` check.
+- `Host`-header enforcement is keyed on the request's HTTP version rather than on
+  keep-alive state (#86), so an HTTP/1.1 request without a `Host` header is
+  rejected regardless of whether the connection is being reused.
+- Reads in threaded mode are bounded by a total request deadline as well as the
+  per-recv socket timeout (#78); an expired deadline produces a 408 response.
+- The README architecture flowchart was corrected to match the implemented
+  server, concurrency, and compression behaviour (#68).
+
+### Fixed
+
+- CMake `FetchContent` / `add_subdirectory` consumption (#59) — the build used
+  `CMAKE_SOURCE_DIR` for include paths, which only resolved correctly when this
+  project was the top-level one. Replaced with `target_include_directories`.
+- JSON numbers serialize losslessly (#79) — `%g` truncated values to six
+  significant digits. Output now uses the shortest representation that reparses
+  to the same double, prints exact integers up to 2^53 as integers, preserves
+  signed zero, and emits `null` for non-finite values instead of the invalid
+  `nan`/`inf` that `%g` produced.
+- JSON number parsing no longer depends on `LC_NUMERIC` (#93) — a locale whose
+  decimal separator is not `.` (including multi-byte separators) used to corrupt
+  parsed values.
+- `Accept-Encoding` q-values are parsed without `strtod` (#95), so content
+  negotiation is likewise locale-independent.
+- D1 SQL handling in the Workers layer (#81) — `DELETE`/`SELECT` with a `WHERE`
+  clause the in-memory engine did not recognise fell through to matching *every*
+  row; positional `INSERT` bound parameters to the wrong columns; a
+  parameter/column count mismatch is now rejected.
+- `/healthz` emitted two conflicting `Content-Type` headers (#91).
+- A failed `listen()` left the server half-started and unjoinable (#82); the
+  failure path now cleans up, and the accept-thread start flag is
+  `volatile sig_atomic_t` so it is safe to read from a signal handler.
+- Valgrind leaks in the D1 worker tests (#75) — discarded `CREATE TABLE` results
+  were never freed, which kept the memcheck gate red.
+- 36 assertions were being compiled out of existence in CI (#129) —
+  `test_kamran_header.c` (17) and `test_async_websocket.c` (19) used bare
+  `assert()`, which `NDEBUG` removes, and CMake defines `NDEBUG` for
+  `RelWithDebInfo`, the configuration CI builds. Both suites had been passing
+  unconditionally; they now use an always-evaluated `CHECK()` macro, verified by
+  a negative control.
+- Restored a zero-warning build (#74), including an off-by-one in an HTML buffer
+  size calculation in the WebSocket echo example (#66).
+
+### Security
+
+An internal bug audit produced 45 fixes in a single pass (#73), and the
+twenty-two pull requests after it (#74–#95) each closed one defect class, with a
+regression test. The security-relevant ones are listed here; the rest were
+correctness fixes and appear under *Fixed*.
+
+- **Cross-site scripting through the template engine** (#77) — `{{ }}`
+  interpolation emitted variable values verbatim, so any user-controlled value
+  rendered into a page was an XSS vector. `{{ }}` now HTML-escapes by default and
+  `{{{ }}}` is the explicit raw opt-out (`&`, `<`, `>`, `"`, `'` are replaced
+  with entities). That covers HTML text and quoted attribute values; it is *not*
+  sufficient for unquoted attributes, `javascript:`/`data:` URLs, or the bodies
+  of `<script>` and `<style>` elements. Breaking behaviour change — see
+  *Changed*.
+- **HTTP request smuggling** (#66, #85) — request framing is now parsed strictly
+  per RFC 7230: `Transfer-Encoding` is token-parsed instead of substring-matched,
+  a `Content-Length` + `Transfer-Encoding` conflict is detected regardless of
+  header order, duplicate `Content-Length` is rejected, control bytes and
+  whitespace before the colon in a header name are rejected, OWS handling is
+  RFC-exact, and chunk sizes and `Content-Length` values are parsed strictly as
+  numbers. The request target is validated for control bytes and whitespace.
+- **Response header injection** (#66) — header values containing CR or LF are
+  rejected at `header_list_add()`, so a value carrying `\r\n` can no longer
+  forge additional response headers or a response body.
+- **Slow loris: no total request deadline** (#78) — a client could hold a worker
+  thread indefinitely by dripping a request slowly enough to keep resetting the
+  per-recv socket timeout. Threaded mode now enforces a total wall-clock deadline
+  for reading a complete request (default 60s, monotonic clock,
+  `http_server_set_request_timeout()`) and answers 408 when it expires.
+- **Async connections with no idle reaper** (#89) — the async path tracked
+  connections but never closed idle or stalled ones, so the same drip pattern
+  exhausted the connection table. A self-re-arming reaper now sweeps every second
+  and closes connections past their deadline. A shutdown-path leak on the same
+  code was fixed alongside it.
+- **CSPRNG fallbacks with predictable entropy** (#76) — session ID generation
+  fell back to `rand_r()` seeded from time, clock, and an address when the CSPRNG
+  was unavailable, which made session IDs guessable at exactly the moment
+  entropy failed. That fallback is gone: `secure_random_bytes()` now draws from
+  `getrandom(2)`, `arc4random_buf()`, `BCryptGenRandom`, or `/dev/urandom` and
+  returns -1 if none is available, and `session_create()` refuses to issue a
+  session rather than hand out a weak one. `secure_zero()` was also fixed — its
+  `memset_s` branch was mis-guarded and silently absent on some toolchains.
+- **JWT verification weaknesses** (#92, #94) — the `alg` header is now matched
+  exactly rather than by prefix, `nbf` is enforced, the header/claim split
+  requires exactly one separator, `exp`/`nbf` are parsed strictly as integers
+  (rejecting a leading `+`) and as `long long` rather than `long`, and a new
+  `require_exp` option rejects tokens that carry no expiry at all.
+- **CORS wildcard origin combined with credentials** (#84, CWE-942) — a `*`
+  allowed-origin together with `Access-Control-Allow-Credentials: true` is a spec
+  violation, and reflecting the request origin instead would have made every site
+  a trusted origin. The middleware now fails closed.
+- **WebSocket memory exhaustion** (#80) — a frame's declared length was trusted
+  when allocating. Frame and reassembled-message sizes are now capped (16 MiB
+  default, overridable with `-DWS_MAX_MESSAGE_SIZE=...`); an oversized frame
+  closes the connection and frees any in-progress fragment buffer.
+- **Session use-after-free** (#83) — `session_get()` returned a `session_t *`
+  that expiry or another thread could free while the caller still held it. Data
+  access is now keyed on `(store, session_id)` and re-resolves the session under
+  the lock, returning a copy, so the borrowed-pointer lifetime bug cannot be
+  written. Breaking API change — see *Changed*.
+- **Route aliasing via un-normalized paths** (#88) — the router's two matchers
+  disagreed about non-canonical paths. `:param` routes tokenize on `/` and
+  silently drop empty segments, while literal routes use `strcmp`, so
+  `/users//123`, `/users/123/` and `//users//123//` all aliased onto
+  `/users/:id`, yet a literal `/users/list/` did *not* match `/users/list`. A
+  proxy, cache, or ACL keying on the raw path would therefore make a different
+  decision than the origin. Paths are now canonicalized at the trust boundary —
+  see *Changed*.
+- **Session-cookie slot exhaustion** (#87) — sessions created with
+  `max_age == 0` had no absolute expiry and were never reclaimed, so an attacker
+  could fill the store and lock out new sessions. Idle sessions are now reclaimed
+  after 1800 seconds by default, tunable via `session_store_set_idle_timeout()`,
+  with the subtraction guarded against clock skew.
+- **CRLF injection through `input_validate_email()`** (#90) — the validator
+  checked structure but not bytes, so `user@example.com\r\nBcc: evil@x.com`
+  passed as valid and became a header/log-injection primitive wherever the caller
+  put it. Bytes below 0x20, `0x7F`, and space are now rejected anywhere in the
+  address; high bytes are left alone so internationalized addresses still
+  validate.
+- **db_pool destroy-time use-after-free** (#74) — destroying a pool while a
+  connection was still checked out freed memory another thread was using. The
+  lifetime is now an atomic refcount, and double-release is rejected.
+- **45 bugs from the internal audit** (#73) — critical: WebSocket protocol
+  handling, SIGPIPE, and a use-after-free; JSON NUL injection and unpaired
+  surrogates; session thread safety. Medium and low: cache use-after-free,
+  session RNG, event loop, async connection limit, auth, parser, compression,
+  template, metrics, logging, body parser, router, and portability defects. The
+  review round on top of it added CSRF buffer safety, Basic-auth realm injection,
+  RNG failure handling, chunk parsing, and KV cursor bounds.
+- **Duplicated security primitives** (#62, #63) — several modules carried their
+  own wipe and comparison helpers, so a fix in one did not reach the others. They
+  now share `secure_zero()` and the constant-time `secure_compare()`, which also
+  closed a timing side-channel in CSRF token comparison. Security-headers config
+  strings are deep-copied rather than stored by pointer.
 
 ## [1.0.0] - 2026-02-22
 
@@ -248,7 +560,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Release Notes
 
-### v1.0.0 — Production Release (Current)
+### v2.0.0 — HTTPS, New Targets, and a Security Pass (Current)
+
+A major release built from 72 pull requests. The public header rename
+(`weblib.h` → `kamran.k`) is the source-level break behind the version number;
+the substance is HTTPS, two new runtime targets, and a long hardening run.
+
+**Highlights:**
+- Experimental pure-C TLS 1.3 server — 5,481 lines under `src/tls/`, zero
+  external crypto dependencies, off by default (`-DWEBLIB_ENABLE_TLS=ON`)
+- WebAssembly builds via Emscripten, and a Cloudflare Workers runtime with
+  KV / R2 / D1 / Queues bindings
+- Semantic versioning enforced in code: version macros, runtime accessors, and
+  a static assertion tying the header to `CMakeLists.txt`
+- A security pass covering XSS, request smuggling, slow loris, CSPRNG
+  fail-closed behaviour, JWT verification, CORS, WebSocket memory exhaustion,
+  and several use-after-free classes
+- 6 ctest suites in a default build, 13 with TLS and its test hooks enabled;
+  both configurations pass, and CI now actually compiles and runs the TLS code
+
+**Honest limits:**
+- The TLS layer is **EXPERIMENTAL and UNAUDITED**. It interoperates with
+  `openssl s_client`, but it has had no external cryptographic review — do not
+  use it to protect real secrets. Browser page load is not supported.
+- TLS is server-side only, threaded mode only, native builds only, and refuses
+  WebSocket upgrades.
+- The Cloudflare KV / R2 / D1 / Queues bindings are in-memory simulations in
+  every build. Nothing here talks to the real Cloudflare services — that would
+  need a JS glue layer, and none ships in this repo.
+- Roadmap Phases 13–20 (HTTP/2, storage engine, multi-process, HTTP/3, and the
+  release-engineering tooling) are **not** implemented.
+
+**Building with TLS:**
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWEBLIB_ENABLE_TLS=ON
+cmake --build build --parallel
+cd build && ctest --output-on-failure
+```
+
+Add `-DWEBLIB_TLS_TEST_HOOKS=ON` to the configure step to also build
+`TlsHttpTests`, which needs a deterministic-RNG seam — that is the 13-suite
+configuration, and it is the one CI runs. The hook is test-only; never enable it
+in a build you deploy.
+
+---
+
+### v1.0.0 — Production Release (superseded by v2.0.0)
 
 This release marks the first production-ready version of the Modern C Web Library.
 All planned phases (4-10) are complete with comprehensive documentation and tutorials.
@@ -267,10 +625,16 @@ All planned phases (4-10) are complete with comprehensive documentation and tuto
 - Async mode: Event loop with epoll/kqueue/poll backends
 - Both modes are production-ready for deployment
 
+> *Correction added in 2.0.0:* the "both modes are production-ready" line above
+> did not hold for async mode. #89 later found the async path tracked
+> connections but never closed idle or stalled ones, so a slow-drip client could
+> exhaust the connection table. Fixed in 2.0.0 — see *Security* above.
+
 ---
 
 ## Version History
 
+- **2.0.x**: HTTPS & new targets — experimental pure-C TLS 1.3, WASM, Cloudflare Workers, header renamed to `kamran.k`, broad security hardening
 - **1.0.x**: Production release — all phases complete, tutorials, full documentation
 - **0.9.x**: Performance & Observability — compression, caching, metrics, async WebSocket, benchmarking
 - **0.8.x**: Security & Observability — CSRF, logging, error handler, input validation, health check
@@ -282,7 +646,8 @@ All planned phases (4-10) are complete with comprehensive documentation and tuto
 - **0.2.x**: WebSocket support (RFC 6455 compliant)
 - **0.1.x**: Initial HTTP server implementation with event loop
 
-[Unreleased]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.7.0...v0.8.0

@@ -1,17 +1,53 @@
 # Complete HTTP Parser Implementation Plan
 
+> **Historical — this plan has been executed.** It was written in November 2025,
+> before the parser existed, and is kept for design rationale only. Where this
+> document and the code disagree, **the code is authoritative**.
+>
+> The parser now lives in `src/http_server.c` (`http_parser_t`,
+> `http_parser_execute`), not in the separate `src/http_parser.c` /
+> `src/http_headers.c` this plan proposed — Phase 1.2 explicitly allowed either.
+> `TODO.md` marks "Complete HTTP Parser" as done.
+>
+> Two items were superseded rather than implemented as written:
+>
+> - **Phase 4.4's interim 417.** The server sends a real `100 Continue`
+>   (`src/http_server.c:957` threaded, `:2909` async) instead of rejecting
+>   `Expect: 100-continue`.
+> - **Phase 4.3.** Message bodies on GET are not rejected.
+>
+> The "Out of Scope" section has also moved on; see the note there.
+
 ## Goals
 - Replace the placeholder `parse_request` with a robust HTTP/1.1 parser that supports headers, query strings, request bodies (Content-Length + chunked), and method validation.
 - Ensure both threaded and async I/O paths share the same parsing logic with incremental buffering and graceful error handling.
 - Populate request/response header maps and route parameters so middleware and handlers observe real data.
 - Maintain the pure C, dependency-free philosophy while keeping code understandable for future contributors.
 
-## Context & Constraints
-- Current request structs (`http_request`, `http_response`) expose `void *headers` and `void *params` but nothing is wired.
-- Both sync (`handle_connection`) and async (`async_read_handler`) assume the entire request fits in a single read; the new parser must operate incrementally.
-- Buffer size is fixed at 8192 bytes. Add safeguards for larger payloads (reject rather than overflow) and allow streaming bodies for handlers later.
-- Router currently expects `http_request_get_param` to return values; plan should unblock `TODO` items by the end.
-- Tests presently cover only basic object construction. New tests must exercise parsing behaviour end-to-end via sockets wherever possible.
+## Context & Constraints (pre-implementation, November 2025)
+
+This section describes the state of the code *before* the plan was carried out.
+None of it describes the code as it stands today; each bullet notes what
+replaced it.
+
+- At the time of writing, the request structs (`http_request`,
+  `http_response`) exposed `void *headers` and `void *params` with no backing
+  storage. *(Now implemented: `http_request_get_header`,
+  `http_request_get_param`, and `http_response_set_header` in
+  `src/http_server.c`. The struct fields in `include/kamran.k` remain `void *`
+  as deliberate opacity — the storage behind them is an implementation detail.)*
+- Both sync (`handle_connection`) and async (`async_read_handler`) assumed the
+  entire request fit in a single read; the new parser had to operate
+  incrementally. *(Now done: both paths loop on `http_parser_execute`.)*
+- Buffer size was fixed at 8192 bytes. *(Now a growable parser buffer bounded by
+  `MAX_HEADER_BYTES` 16384 and `MAX_BODY_BYTES` 1 MiB, `src/http_server.c`.)*
+- The router expected `http_request_get_param` to return values; the plan was
+  meant to unblock those `TODO` items. *(Done.)*
+- Tests at the time covered only basic object construction, so new tests had to
+  exercise parsing behaviour end-to-end via sockets wherever possible. *(Done:
+  a default build now runs six ctest suites, and `tests/test_stress.c` alone
+  carries socket-level HTTP integration tests covering request smuggling,
+  slowloris, Host-header enforcement, and path normalization.)*
 
 ## Deliverables Overview
 1. Request/response header storage utilities (simple hash table or linked list lookup).
@@ -92,9 +128,17 @@
 - Validate all allocations; on failure, send 500 and close connection to avoid undefined behaviour.
 - Keep parser self-contained to simplify future refactors or streaming body support.
 
-## Out of Scope (Future Work)
-- HTTP/2, TLS, upgraded protocols.
+## Out of Scope of This Parser Plan (Future Work)
+- HTTP/2. (TLS shipped separately as an opt-in, native-only layer in `src/tls/`
+  behind the `WEBLIB_ENABLE_TLS` CMake option — **experimental and unaudited**,
+  off by default, and not for production without an external cryptographic
+  audit. The WebSocket `101 Switching Protocols` upgrade shipped in
+  `src/http_server.c` for both threaded and async modes; WebSocket-over-TLS
+  (`wss`) is not supported.)
 - Full streaming body support with handler callbacks.
 - Request pipelining and connection pooling.
 
-Following this plan sequentially will provide a production-ready HTTP parsing layer while leaving clear extension hooks for advanced features.
+Following this plan sequentially was expected to provide a solid HTTP parsing
+layer while leaving clear extension hooks for advanced features. It largely did;
+see the status note at the top of this document for where the shipped code
+diverged.

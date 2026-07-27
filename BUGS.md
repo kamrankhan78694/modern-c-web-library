@@ -2,8 +2,19 @@
 
 **Modern C Web Library — Production Stress Test Findings**
 
-*Last Updated: 2026-03-03*
+*Last Updated: 2026-07-27*
 *Discovered during Phase 10 production-level stress testing and Phase 10.1 security code review*
+
+**Scope:** this file tracks the ten issues found by the Phase 10 stress-testing and security-review
+pass. All ten are fixed. Two things it deliberately does *not* cover:
+
+- **Later security-review findings.** The post-v1.0.0 audit stream (roughly PRs #74–#95 — request
+  smuggling, path aliasing, Host-header bypass, session use-after-free, the async idle reaper, and
+  others) is fixed in code and recorded in the commit history and PR discussions, not re-litigated
+  here. Read this file as a closed historical record, not as the complete list of everything ever
+  found.
+- **The experimental TLS layer** (`src/tls/`, off by default). Its known gaps live in
+  [`src/tls/README.md`](src/tls/README.md) — that code has not had an external audit.
 
 ---
 
@@ -36,7 +47,7 @@
 **Description:**
 The HTTP server calls `send()` with flags=0 on all socket writes. On POSIX systems, writing to a socket whose peer has disconnected generates a `SIGPIPE` signal. The default action for `SIGPIPE` is to terminate the process. This means a single misbehaving client disconnecting at the wrong time can crash the entire server.
 
-**Affected Lines:**
+**Affected Lines (as of the original report — all three now pass `SEND_FLAGS`):**
 - `src/http_server.c:895` — `send(fd, buf + sent_total, len - sent_total, 0)`
 - `src/http_server.c:2017` — async mode header send
 - `src/http_server.c:2045` — async mode body send
@@ -90,7 +101,7 @@ Add a `pthread_mutex_t` to `session_store_t` and lock/unlock around all session 
 **Component:** `src/session.c`, `src/middleware_csrf.c`
 **Severity:** Medium — affects security in edge cases
 **Discovered:** Code analysis during stress testing
-**Fixed:** Replaced `srand()`/`rand()` with `rand_r()` using static per-function seed state for thread safety in both `generate_session_id()` and `_fill_random()` fallback paths.
+**Fixed:** Initially addressed in commit `9a89c30` by swapping `srand()`/`rand()` for `rand_r()` with per-function seed state. That intermediate fix has since been superseded by PR #76 (`6895aab`, "Harden CSPRNG and remove predictable-entropy fallbacks"): the predictable-PRNG fallback was removed outright. `generate_session_id()` (`src/session.c`) and the CSRF token generator `_generate_token()` (`src/middleware_csrf.c`) now call the public `secure_random_bytes()` and **fail closed** — `session_create()` refuses to issue a session and `_generate_token()` returns `NULL` if the OS CSPRNG is unavailable. No `rand()`/`rand_r()` path remains anywhere in `src/`.
 
 **Description:**
 Both session ID generation and CSRF token generation use `/dev/urandom` as the primary randomness source, which is correct. However, the fallback path uses `srand()` and `rand()`, which:
@@ -99,15 +110,15 @@ Both session ID generation and CSRF token generation use `/dev/urandom` as the p
 2. Are seeded with predictable values (`time(NULL) ^ clock()`) making tokens guessable
 3. Could lead to session ID collisions in multi-threaded operation
 
-**Affected Files:**
-- `src/session.c:66-75` — `generate_session_id()` fallback
-- `src/middleware_csrf.c:66-82` — `_csrf_random_bytes()` fallback
+**Affected Files (as of the original report, pre-`6895aab`):**
+- `src/session.c` — `generate_session_id()` fallback
+- `src/middleware_csrf.c` — `_csrf_random_bytes()` fallback (function no longer exists)
 
-**Mitigation:**
-On Linux, `/dev/urandom` is always available, so this fallback rarely triggers. The risk is primarily on embedded or unusual systems without `/dev/urandom`.
+**Mitigation (historical):**
+On Linux, `/dev/urandom` is always available, so this fallback rarely triggered. The risk was primarily on embedded or unusual systems without `/dev/urandom`. It no longer applies: there is no fallback path to reach.
 
-**Recommended Fix:**
-Use `rand_r()` (thread-safe) or per-thread seed storage instead of global `rand()`.
+**Recommended Fix (superseded):**
+The original recommendation was `rand_r()` or per-thread seed storage. The fix actually adopted was stronger — remove the weak fallback entirely and fail closed on CSPRNG failure, so a host without usable entropy gets no token rather than a guessable one.
 
 ---
 
@@ -210,7 +221,7 @@ The secure value API was developed before or alongside `secure_zero()`, and the 
 **Fixed:** Removed all private reimplementations and replaced with calls to the public APIs: `_fill_random()` → `secure_random_bytes()`, `generate_session_id()` → `secure_random_bytes()`, `_ct_strcmp()` → `secure_compare()`, `_auth_secure_compare()` → `secure_compare()`.
 
 **Description:**
-Three security-critical operations have public APIs in `security_utils.c`, but multiple modules reimplement them privately:
+Three security-critical operations have public APIs in `security_utils.c`, but multiple modules reimplemented them privately. The file:line references below are as of the original report; none of these private functions exists in `src/` today.
 
 **1. Random byte generation (`secure_random_bytes` duplicated):**
 - `src/middleware_csrf.c:53-84` — `_fill_random()` reimplements `/dev/urandom` reading + fallback
@@ -244,7 +255,7 @@ Refactor all private implementations to call the public API:
 **Description:**
 Several locations use `memset(ptr, 0, len)` to wipe sensitive data before freeing. The C standard permits compilers to optimize away `memset()` calls on memory that is not subsequently read ("dead store elimination"). The public `secure_zero()` function exists specifically to prevent this optimization using `volatile` pointers.
 
-**Affected Locations:**
+**Affected Locations (as of the original report — all three now call `secure_zero()`):**
 - `src/middleware_auth.c:527` — `memset(decoded, 0, sizeof(decoded))` — wipes Base64-decoded credentials
 - `src/middleware_auth.c:935` — `memset((void *)g_jwt_auth_config->secret, 0, ...)` — wipes JWT secret before free
 - `src/middleware_csrf.c:221` — `memset(&g_csrf_state, 0, sizeof(g_csrf_state))` — wipes CSRF state
@@ -263,14 +274,15 @@ secure_zero(decoded, sizeof(decoded));
 
 ## Stress Test Results Summary
 
-All 28 stress tests pass with zero failures and zero memory leaks (verified under Valgrind):
+All 37 stress tests pass with zero failures and zero memory leaks. The leak check runs on every push
+in the `Build, Test & Memcheck (Docker)` CI job, which executes the suite under Valgrind on Ubuntu:
 
 ```
-Tests run: 28
-Tests passed: 28
+Tests run: 37
+Tests passed: 37
 Tests failed: 0
 
-Valgrind: 0 errors, 0 leaks (393,359 allocs, 393,359 frees)
+Valgrind: 0 errors, 0 leaks
 ```
 
 ### What Passed Cleanly
@@ -300,6 +312,15 @@ Valgrind: 0 errors, 0 leaks (393,359 allocs, 393,359 frees)
 | HTTP | >1MB body rejection | ✓ Rejected with 413/400 |
 | HTTP | 90 headers | ✓ All accepted |
 | HTTP | Slow client (1s delay) | ✓ Completed within timeout |
+| HTTP | Slow-loris drip that never completes a request | ✓ Cut off by the total request deadline, not just the per-`recv()` timeout |
+| HTTP | Partial request then silence, per-`recv()` timeout disabled | ✓ Still bounded — the effective read timeout is capped at the deadline |
+| HTTP | `listen()` failing after startup | ✓ Server state reset; `destroy()` stays safe (test skips if the failure can't be forced) |
+| HTTP | Transfer-Encoding smuggling matrix | ✓ Token-parsed per RFC 7230 §3.3.1: body de-chunked, smuggling vectors → 400, unsupported coding → 501 |
+| HTTP | Control bytes in the request-target (CR, LF, HTAB, C0, DEL) | ✓ Rejected with 400 — no CRLF injection into `req->path` |
+| HTTP | Host header enforcement | ✓ Keyed on the HTTP version, not the `Connection` header |
+| HTTP | Path canonicalization before routing | ✓ `//` collapsed, trailing `/` stripped; literal and `:param` routes agree |
+| HTTP (async) | Idle / slow-loris connection on the event loop | ✓ Reaped once the request deadline passes; shutdown latency stays bounded |
+| HTTP (async) | Re-listen after stop | ✓ Event loop torn down cleanly; the second `listen()` succeeds |
 | Validation | 100KB string validation | ✓ Correct results |
 | Validation | 1000 script tag sanitization | ✓ All escaped |
 | Compression | 1MB CRC32 | ✓ No issues |
