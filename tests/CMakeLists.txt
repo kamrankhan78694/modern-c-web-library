@@ -72,6 +72,16 @@ if(NOT EMSCRIPTEN)
         target_link_libraries(test_tls_transport weblib ${PLATFORM_LIBS})
         add_test(NAME TlsTransportTests COMMAND test_tls_transport)
 
+        # Deterministic robustness fuzzer over the untrusted-input path (ClientHello
+        # parser, connection-engine framing, record deprotection).
+        add_executable(test_tls_fuzz test_tls_fuzz.c)
+        target_include_directories(test_tls_fuzz PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/tls
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+        target_compile_definitions(test_tls_fuzz PRIVATE WEBLIB_TLS)
+        target_link_libraries(test_tls_fuzz weblib ${PLATFORM_LIBS})
+        add_test(NAME TlsFuzzTests COMMAND test_tls_fuzz)
+
         # End-to-end http_server_enable_tls: a real TLS server + a KAT client doing a
         # full HTTPS request/response over a loopback socket. Needs the deterministic
         # RNG test hook, so it is built only when WEBLIB_TLS_TEST_HOOKS is enabled.
