@@ -110,7 +110,7 @@ This policy emphasizes **C craftsmanship** over convenience through other ecosys
 - **Benchmarking Suite**: Throughput/latency measurement with percentile statistics
 - **Security Headers**: HSTS, CSP, X-Frame-Options and friends as a middleware
 - **Environment Config**: Configuration from environment variables with typed accessors (string, int, bool, port) and defaults
-- **WASM & Cloudflare Workers**: Emscripten build target plus a Workers runtime with KV, R2, D1, and Queues bindings
+- **WASM & Cloudflare Workers**: Emscripten build target plus a Workers runtime with KV, R2, D1, and Queues binding APIs — the bindings are **in-memory simulations in every build (native, test, and WASM)**, not the real Cloudflare services; `examples/worker.js` bridges the fetch handler only, and no `wrangler.toml` ships
 - **TLS 1.3 (experimental)**: Hand-written, zero-dependency pure-C TLS 1.3 server termination via `http_server_enable_tls()` — `TLS_CHACHA20_POLY1305_SHA256` + X25519 + Ed25519 only, server-side, threaded mode only. Off by default — build with `-DWEBLIB_ENABLE_TLS=ON`. Native-only (not WASM/Workers). Interoperates with `openssl s_client`; browsers are **not** supported (Ed25519-only certificates). **UNAUDITED — not for production use without an external cryptographic audit.** See [`src/tls/README.md`](src/tls/README.md) and [`examples/tls_server.c`](examples/tls_server.c).
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **Modern C Patterns**: Clean, modular API design with zero external dependencies

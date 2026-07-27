@@ -4,8 +4,9 @@
 *Originally written against v0.9.0 on 2026-02-20 · test counts and per-test descriptions below
 re-checked against the v2.0.0 tree on 2026-07-27*
 
-> **What changed since the original report.** The six issues this report first raised are all fixed
-> (see [BUGS.md](BUGS.md), which now tracks ten issues, all closed). The suite itself has grown from
+> **What changed since the original report.** Five of the six issues this report first raised are
+> fixed; the sixth (middleware singleton state) is only partially fixed — see the Bugs Discovered
+> table below and [BUGS.md](BUGS.md). The suite itself has grown from
 > 28 tests to 37 — nine of them HTTP security regressions added in PRs #78–#89. Counts, category
 > tables and the readiness checklist below reflect the current suite, not the February snapshot.
 
@@ -17,7 +18,8 @@ A production-level stress test suite was developed and is run on every push agai
 Library. The library demonstrates **stable behaviour and clean memory handling** across all tested
 components, with zero memory leaks confirmed under Valgrind in CI. Six issues were identified by the
 original run, documented in [BUGS.md](BUGS.md), ranging from Critical (SIGPIPE handling) to
-Informational; all six were fixed before v1.0.0 shipped on 2026-02-22.
+Informational; five were fixed before v1.0.0 shipped on 2026-02-22, and the sixth is partially
+addressed.
 
 **Overall Assessment: suitable for production HTTP workloads on Linux** — the critical SIGPIPE bug
 and the session thread-safety bug that gated the original assessment are both fixed. Note that this
@@ -209,16 +211,16 @@ errors and zero definite or indirect leaks, on every `tests/test_*` binary, on e
 
 ## Bugs Discovered
 
-Six issues were identified during the original stress testing run. **All six are fixed.** Full
-details, plus four more found in later security review, are in [BUGS.md](BUGS.md) — ten issues, all
-closed.
+Six issues were identified during the original stress testing run. **Five are fully fixed; BUG-4 is
+only partially fixed (see below).** Full details, plus four more found in later security review, are
+in [BUGS.md](BUGS.md).
 
 | # | Severity | Issue | Status |
 |---|----------|-------|--------|
 | 1 | **Critical** | No SIGPIPE handling — `send()` without `MSG_NOSIGNAL` can crash process | ✅ Fixed (`signal(SIGPIPE, SIG_IGN)` + `MSG_NOSIGNAL`) |
 | 2 | **High** | Session store lacks thread safety — no mutex in `session.c` | ✅ Fixed (`pthread_mutex_t` in `session_store_t`) |
 | 3 | **Medium** | `rand()` fallback in session/CSRF not thread-safe | ✅ Fixed — the fallback was removed entirely; both paths now use `secure_random_bytes()` and fail closed |
-| 4 | **Low** | Middleware singleton pattern limits to one instance per type | ✅ Fixed (`user_data` on `middleware_fn_t`) |
+| 4 | **Low** | Middleware singleton pattern limits to one instance per type | ⚠️ Partially fixed — `middleware_fn_t` gained `void *user_data` and `router_use_middleware_with_data()` was added; CORS, rate-limit, auth and logging honour it, but static files, CSRF, error handler, metrics and security headers still ignore it and remain one instance per type (see [docs/TECHNICAL_DEBT.md](docs/TECHNICAL_DEBT.md) §3) |
 | 5 | **Low** | Hard-coded MAX_TIMERS=64 with no query API | ✅ Fixed (`event_loop_get_timer_count()` / `_get_max_timers()`) |
 | 6 | **Info** | No keep-alive connection count limit | ✅ Fixed (`http_server_set_max_connections()`) |
 
@@ -247,7 +249,8 @@ closed.
 
 **Status:** BUG-1 (SIGPIPE) and BUG-2 (session thread safety), the two blockers this report raised
 for the v1.0.0 release, were both fixed in commit `9a89c30` on 2026-02-20 — ahead of v1.0.0 shipping
-on 2026-02-22. All ten issues tracked in [BUGS.md](BUGS.md) are now resolved. For plain-HTTP
+on 2026-02-22. Nine of the ten issues tracked in [BUGS.md](BUGS.md) are fully resolved; BUG-4
+(middleware singleton state) is partially fixed — see that file. For plain-HTTP
 workloads on Linux the library is in good shape; if you enable TLS you are running experimental,
 unaudited cryptographic code and should not deploy it without an external audit.
 

@@ -160,7 +160,7 @@ Everything is implemented from scratch:
 - ✅ Compression (gzip/DEFLATE)
 - ✅ JWT implementation (HMAC-SHA256)
 - ✅ All middleware and features
-- ⚗️ TLS 1.3 — including SHA-256/512, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519 and X.509/DER/PEM parsing (opt-in, EXPERIMENTAL and UNAUDITED)
+- ⚗️ TLS 1.3 — including SHA-256/512, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519 and DER/PEM plus Ed25519 key (PKCS#8/SPKI) parsing (opt-in, EXPERIMENTAL and UNAUDITED)
 
 **Why?** Maximum portability, transparency, and educational value.
 

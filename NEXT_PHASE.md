@@ -36,7 +36,7 @@
 | Phase 9 | v0.9.0 | ✅ Complete | Response compression, caching layer, metrics middleware, async WebSocket, benchmarking |
 | Phase 10 | v1.0.0 | ✅ Complete | REST API example, tutorials, documentation, release engineering |
 | Phase 11 | v2.0.0 | ✅ Delivered (narrowed) | TLS crypto primitives — SHA-256, SHA-512, HMAC, HKDF, ChaCha20, Poly1305, ChaCha20-Poly1305 AEAD, X25519, Ed25519, each with RFC known-answer tests. **EXPERIMENTAL · UNAUDITED.** AES-GCM and SHA-384 were dropped, not built |
-| Phase 12 | v2.0.0 | ✅ Delivered (narrowed) | TLS 1.3 **server** — record layer (2^14 plaintext limit, fragmentation), handshake state machine incl. HelloRetryRequest, DER/PEM/X.509 parsing, ALPN `http/1.1`, `http_server_enable_tls()`. **EXPERIMENTAL · UNAUDITED.** No client mode, no RSA/ECDSA, no session resumption |
+| Phase 12 | v2.0.0 | ✅ Delivered (narrowed) | TLS 1.3 **server** — record layer (2^14 plaintext limit, fragmentation), handshake state machine incl. HelloRetryRequest, DER/PEM and Ed25519 key parsing (the certificate is sent opaquely, not parsed as X.509), ALPN `http/1.1`, `http_server_enable_tls()`. **EXPERIMENTAL · UNAUDITED.** No client mode, no RSA/ECDSA, no session resumption |
 
 **v1.0.0 baseline** (2026-02-22): 129/129 unit tests · zero compiler warnings · 25 source modules · 5 example servers
 
@@ -290,7 +290,7 @@ Phase 21 (unscheduled): Security Residuals & TLS Hardening
 | **W3** | ChaCha20-Poly1305 | RFC 8439 stream cipher + AEAD construction; IETF test vectors | ✅ `src/tls/chacha20.c`, `poly1305.c`, `chacha20poly1305.c` — RFC 8439 known-answer tests in `TlsCryptoTests` |
 | **W4** | X25519 Key Exchange | RFC 7748; pure C field arithmetic (mod 2^255-19); scalar multiplication | ✅ `src/tls/x25519.c` on `src/tls/field25519.c` (constant-time limb arithmetic). Ed25519 (`src/tls/ed25519.c`) was added on top — not in the original plan, but required once RSA/ECDSA were ruled out |
 | **W5** | HKDF + Key Derivation | RFC 5869 Extract + Expand over HMAC-SHA256/384; TLS 1.3 key schedule helpers | ✅ `src/tls/hkdf.c` (SHA-256 only) + `hkdf_expand_label()` per RFC 8446 §7.1; TLS 1.3 key schedule in `src/tls/key_schedule.c`; RFC 5869 and RFC 8448 vectors |
-| **W6** | Integration & Hardening | Constant-time comparison; key material zeroed; Valgrind clean; unified crypto header | ✅ Primitives chosen to be constant-time by construction; key material scrubbed; Valgrind gate in the `primary-checks` CI job; ASan/UBSan TLS build in `tls-check`. Headers stayed per-module (`src/tls/*.h`) rather than one `crypto.h` |
+| **W6** | Integration & Hardening | Constant-time comparison; key material zeroed; Valgrind clean; unified crypto header | 🟡 Partial: primitives chosen to be constant-time by construction; key material scrubbed via `secure_zero()`; ASan/UBSan over the TLS suites in `tls-check`. ❌ No Valgrind coverage of TLS code — the `primary-checks` Valgrind gate builds from `Dockerfile.dev` with TLS OFF, so no `src/tls` object or `test_tls*` binary exists in that image. ❌ No unified crypto header — headers stayed per-module (`src/tls/*.h`) rather than one `crypto.h` |
 
 **Still open from Phase 11** → carried into Phase 21: AES-256-GCM, and an external audit of everything above.
 
@@ -304,7 +304,7 @@ Phase 21 (unscheduled): Security Residuals & TLS Hardening
 | **W7** | TLS Record Layer | Record framing; content-type encryption; padding; size limits | ✅ `src/tls/record.c` — 2^14 plaintext limit and fragmentation, per RFC 8446 |
 | **W8** | TLS Handshake Part 1 | ClientHello parsing; ServerHello; supported_versions; key_share (X25519) | ✅ `src/tls/handshake.c`, `wire.c`, `server_handshake.c` — plus HelloRetryRequest with the RFC 8446 §4.4.1 synthetic `message_hash` transcript rewrite, which the plan did not anticipate |
 | **W9** | TLS Handshake Part 2 | EncryptedExtensions; Certificate; CertificateVerify; Finished; transcript hash | ✅ `src/tls/server_handshake.c`, `handshake_auth.c` |
-| **W10** | Certificate Handling | `src/tls/x509.c` — X.509 DER/PEM parser; chain building; RSA/ECDSA verification | 🟡 Partial: `src/tls/der.c`, `pem.c`, `ed25519_key.c` *parse* one self-supplied Ed25519 certificate and its PKCS#8 key, malformed-input hardened. ❌ No chain building, no RSA/ECDSA verification — Phase 21 |
+| **W10** | Certificate Handling | `src/tls/x509.c` — X.509 DER/PEM parser; chain building; RSA/ECDSA verification | 🟡 Partial: `src/tls/der.c`, `pem.c`, `ed25519_key.c` *parse* the PKCS#8 Ed25519 private key, malformed-input hardened; the certificate is only PEM-decoded to DER and sent opaquely. ❌ No X.509 structure parsing, no chain building, no RSA/ECDSA verification — Phase 21 |
 | **W11** | HTTPS Server Integration | `http_server_enable_tls()`; ALPN; HTTPS example; SNI callback | ✅ `http_server_enable_tls()` (`include/kamran.k:620`) taking **PEM buffers plus explicit lengths**, not file paths; ALPN negotiating `http/1.1`; `examples/tls_server.c` (which reads the files itself). ❌ No SNI callback — Phase 21 |
 | **W12** | TLS Testing & Security Audit | curl/browser validation; session resumption; TLS unit tests; timing analysis | 🟡 Partial: 7 ctest suites (`TlsTests`, `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`, `TlsHttpTests`, `TlsInteropOpenssl`), a deterministic fuzzer, and a real `openssl s_client` TLS 1.3 handshake + HTTPS round-trip in CI. ❌ No session resumption / 0-RTT. ❌ No browser page-load (Ed25519-only certs). ❌ **No external audit** |
 
@@ -434,7 +434,7 @@ external audit.
 | # | Task | File(s) | Status |
 |---|------|---------|--------|
 | 11.4.1 | Field arithmetic (mod 2^255-19) | `src/tls/field25519.c` (planned inside `x25519.c`) | ✅ Constant-time limb arithmetic, factored into its own module |
-| 11.4.2 | Montgomery ladder scalar multiplication | `src/tls/x25519.c` | ✅ RFC 7748 §5.2 Alice/Bob vectors pass |
+| 11.4.2 | Montgomery ladder scalar multiplication | `src/tls/x25519.c` | ✅ RFC 7748 §5.2 scalar-mult vectors and the §6.1 Alice/Bob key-exchange vectors pass |
 | 11.4.3 | Key generation (clamp + multiply) | `src/tls/x25519.c` | ✅ Shared secret matches the RFC output |
 | 11.4.4 | Timing-safe implementation review | `src/tls/x25519.c`, `field25519.c` | 🟡 No secret-dependent branches or indexing by construction — but this is a self-review, **not** an external audit. Audit is Phase 21 |
 | 11.4.5 | Ed25519 signatures (RFC 8032) | `src/tls/ed25519.c` | ✅ **Added, not planned.** Needed for CertificateVerify once RSA/ECDSA were ruled out |
@@ -444,7 +444,7 @@ external audit.
 |---|------|---------|--------|
 | 11.5.1 | HKDF-Extract | `src/tls/hkdf.c` | ✅ RFC 5869 vectors (SHA-256) pass |
 | 11.5.2 | HKDF-Expand | `src/tls/hkdf.c` | ✅ RFC 5869 vectors pass |
-| 11.5.3 | TLS 1.3 key schedule helpers | `src/tls/hkdf.c`, `src/tls/key_schedule.c` | ✅ `hkdf_expand_label()` per RFC 8446 §7.1; full key schedule checked against RFC 8448 |
+| 11.5.3 | TLS 1.3 key schedule helpers | `src/tls/hkdf.c`, `src/tls/key_schedule.c` | ✅ `hkdf_expand_label()` per RFC 8446 §7.1; `early_secret` and `derived` anchored on the RFC 8448 trace, the rest of the chain derived over a fixed ECDHE (the RFC 7748 §6.1 shared secret) and synthetic transcript hashes, cross-checked against an independent out-of-tree HKDF-SHA256 reference — not against the RFC 8448 trace |
 
 ---
 
@@ -650,7 +650,7 @@ None of it is started. Nothing here has been quietly dropped.
 |------|-----------|-------------|---------|
 | **W18** | Crypto Primitives (Foundation) | `src/crypto/sha256.c` (NIST FIPS 180-4 test vectors); `src/crypto/hmac_sha256.c` (RFC 2104); `src/crypto/aes_gcm.c` (NIST SP 800-38D, 128+256-bit keys) | 🟡 SHA-256 shipped as `src/crypto/sha256.c`; HMAC-SHA256 shipped as `hmac_sha256()` in `src/crypto/sha256.c`; **AES-GCM never built** → Phase 21 W53 |
 | **W19** | Key Derivation & Password Hashing | `src/crypto/pbkdf2.c` (RFC 2898, HMAC-SHA256, configurable iterations); `src/crypto/hkdf.c` (RFC 5869 extract+expand); `password_hash_create()` / `password_hash_verify()` API; automatic salt via `secure_random_bytes()` | 🟡 HKDF shipped as `src/tls/hkdf.c` (TLS-internal, RFC 5869 + RFC 8446 §7.1); **PBKDF2 and password hashing never built** → Phase 21 W58 |
-| **W20** | TLS Record Layer & Server Handshake — superseded by the delivered TLS 1.3 work | Delivered instead as: `src/tls/record.c` (TLS **1.3** record layer, 2^14 plaintext limit, fragmentation); `src/tls/handshake.c` + `src/tls/server_handshake.c` (TLS 1.3 server state machine, HelloRetryRequest, ALPN `http/1.1`); `src/tls/pem.c` + `src/tls/der.c` + `src/tls/ed25519_key.c` (PEM/DER X.509 certificate + Ed25519 private-key loading). EXPERIMENTAL · UNAUDITED | ✅ Delivered in v2.0.0 as TLS 1.3, not TLS 1.2. `mlock()` on key pages was **not** implemented → Phase 21 W58 |
+| **W20** | TLS Record Layer & Server Handshake — superseded by the delivered TLS 1.3 work | Delivered instead as: `src/tls/record.c` (TLS **1.3** record layer, 2^14 plaintext limit, fragmentation); `src/tls/handshake.c` + `src/tls/server_handshake.c` (TLS 1.3 server state machine, HelloRetryRequest, ALPN `http/1.1`); `src/tls/pem.c` + `src/tls/der.c` + `src/tls/ed25519_key.c` (PEM/DER certificate loading + Ed25519 private-key parsing; the certificate is not parsed as X.509). EXPERIMENTAL · UNAUDITED | ✅ Delivered in v2.0.0 as TLS 1.3, not TLS 1.2. `mlock()` on key pages was **not** implemented → Phase 21 W58 |
 | **W21** | TLS Handshake (Part 2) & Server Integration | Delivered instead as `http_server_enable_tls(server, cert_pem, cert_len, key_pem, key_len)` — PEM **buffers with lengths**, not file paths; `examples/tls_server.c`; validated by `openssl s_client -tls1_3` (`TlsInteropOpenssl`), **not** `curl --tlsv1.2`, which the server rejects by design | ✅ Delivered in v2.0.0. Key material is scrubbed on server destroy |
 | **W22** | Request ID & IP Access Control Middleware | `src/middleware_request_id.c` (UUID v4 / hex, `X-Request-Id` header, logging integration); `src/middleware_ip_access.c` (allowlist/denylist with CIDR support) | ❌ Never built → Phase 21 W58 |
 | **W23** | Security Audit Tooling & Hardening | Fuzz testing harness (`tests/fuzz/`); ASan/MSan CI integration; per-route body size limits; `Content-Length` enforcement before buffering; full regression pass | 🟡 A deterministic TLS fuzzer shipped (`TlsFuzzTests`) and the `tls-check` CI job runs an ASan/UBSan TLS build; **an HTTP-parser fuzz harness, per-route body limits and pre-buffer `Content-Length` enforcement were not built** → Phase 21 W58 |
@@ -700,7 +700,7 @@ None of it is started. Nothing here has been quietly dropped.
 
 | Module | Validation | Met? |
 |--------|-----------|------|
-| SHA-256 | NIST FIPS 180-4 test vectors pass (short msg, long msg, Monte Carlo) | ✅ |
+| SHA-256 | NIST FIPS 180-4 test vectors pass (short msg, long msg, Monte Carlo) | 🟡 Short-message vectors + streaming equivalence only (`tests/test_weblib.c`, `test_sha256_kat`); no long-message and no Monte Carlo vectors were run |
 | HMAC-SHA256 | RFC 4231 test vectors pass | ✅ |
 | AES-GCM | NIST SP 800-38D test vectors pass (128+256-bit keys) | ❌ not built → Phase 21 W53 |
 | PBKDF2 | RFC 6070 test vectors pass; 600K iterations in < 1s | ❌ not built → Phase 21 W58 |
@@ -774,8 +774,8 @@ SEQUENTIAL (W42–W46, Phase 19):
 | SHA-256 / SHA-512 | RFC / FIPS 180-4 known-answer vectors | No timing side-channels in the compression function | ✅ `TlsCryptoTests` |
 | AES-256-GCM | NIST SP 800-38D test cases 1–18 | Constant-time tag verification | ❌ Not built → Phase 21 W53 |
 | ChaCha20-Poly1305 | RFC 8439 §A test vectors | No secret-dependent branches | ✅ `TlsCryptoTests` |
-| X25519 / Ed25519 | RFC 7748 §5.2 Alice/Bob vectors; RFC 8032 vectors | Constant-time ladder and field arithmetic | ✅ `TlsCryptoTests` |
-| HKDF | RFC 5869 vectors + RFC 8448 key schedule | Key material zeroed after use | ✅ `TlsCryptoTests` |
+| X25519 / Ed25519 | RFC 7748 §5.2 scalar-mult and §6.1 Alice/Bob key-exchange vectors; RFC 8032 vectors | Constant-time ladder and field arithmetic | ✅ `TlsCryptoTests` |
+| HKDF | RFC 5869 vectors; RFC 8448 anchors for `early_secret`/`derived`, rest cross-checked against an independent HKDF reference | Key material zeroed after use | ✅ `TlsCryptoTests` |
 
 > Throughput gates from the original plan (≥ 200/300 MB/s etc.) were never measured and are not
 > claimed. Correctness and constant-time construction were the gates that actually ran.

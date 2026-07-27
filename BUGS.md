@@ -25,7 +25,7 @@ pass. All ten are fixed. Two things it deliberately does *not* cover:
 | 1 | **Critical** | HTTP Server | **Fixed** | No SIGPIPE handling — server process can crash on client disconnect |
 | 2 | **High** | Session Store | **Fixed** | Session store is not thread-safe — data races in multi-threaded mode |
 | 3 | **Medium** | Session / CSRF | **Fixed** | `rand()` fallback is not thread-safe and cryptographically weak |
-| 4 | **Low** | Middleware | **Fixed** | All middleware types use global singletons — only one instance per type |
+| 4 | **Low** | Middleware | **Partially fixed** | Global singletons — one instance per type. `user_data` plumbing landed; 4 of 9 modules honour it, 5 still ignore it |
 | 5 | **Low** | Event Loop | **Fixed** | Timer limit of 64 is hard-coded with no runtime feedback beyond -1 return |
 | 6 | **Info** | HTTP Server | **Fixed** | No HTTP keep-alive connection limit — could exhaust file descriptors |
 | 7 | **Medium** | env_config / security_utils | **Fixed** | Duplicate `_secure_wipe()` — private copy of public `secure_zero()` |
@@ -122,12 +122,12 @@ The original recommendation was `rand_r()` or per-thread seed storage. The fix a
 
 ---
 
-### BUG-4: Middleware Singleton Pattern Limitation (Low) — ✅ FIXED
+### BUG-4: Middleware Singleton Pattern Limitation (Low) — ⚠️ PARTIALLY FIXED
 
 **Component:** All middleware implementations
 **Severity:** Low — design limitation, not a crash bug
 **Discovered:** Architecture analysis during stress testing
-**Fixed:** Added `void *user_data` parameter to `middleware_fn_t` signature and router infrastructure. All middleware handlers now accept per-instance context via user_data, while maintaining backward compatibility through global fallback when user_data is NULL. Added `router_use_middleware_with_data()` API for registering middleware with per-instance state.
+**Partially fixed:** Added `void *user_data` parameter to `middleware_fn_t` signature and router infrastructure, plus a `router_use_middleware_with_data()` API for registering middleware with per-instance state. Four modules honour it — CORS (`src/middleware_cors.c`), rate-limit (`src/middleware_ratelimit.c`), auth (`src/middleware_auth.c`) and logging (`src/middleware_log.c`) — using the `user_data ? user_data : g_global` pattern, so they keep backward compatibility when `user_data` is NULL. **Five modules still discard it** (each begins `(void)user_data;` and reads only its module global): static files (`src/middleware_static.c`), CSRF (`src/middleware_csrf.c`), error handler (`src/middleware_error.c`), metrics (`src/middleware_metrics.c`) and security headers (`src/middleware_security_headers.c`). Those five remain strictly one instance per type — registering two silently gives both the last-configured global. See [docs/TECHNICAL_DEBT.md](docs/TECHNICAL_DEBT.md) §3 for the per-route workaround.
 
 **Description:**
 All middleware types (CORS, rate limiting, static files, auth, logging, error handler, CSRF, metrics) use global static variables to store their configuration. This means only one instance of each middleware type can exist at a time. Calling `*_middleware_create()` a second time overwrites the first configuration.

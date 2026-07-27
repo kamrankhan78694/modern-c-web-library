@@ -271,8 +271,12 @@ point called by the JavaScript glue layer.
 
 - If a custom fetch handler is set via `worker_set_fetch_handler()`,
   delegates to it.
-- Otherwise uses the router set via `worker_set_router()` for automatic
-  route matching.
+- Otherwise, if a router is set via `worker_set_router()`, returns a 200
+  placeholder (header `X-Worker-Routed: configured`, body `Router configured;
+  native worker simulation does not perform route matching`) **without matching
+  any route** — the native simulation does not inspect the URL path or consult
+  the router's route table.
+- With neither a handler nor a router set, returns 503.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

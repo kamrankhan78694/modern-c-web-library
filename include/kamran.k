@@ -323,7 +323,9 @@ int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware
  * @param router Router instance
  * @param req Request object
  * @param res Response object
- * @return 0 if route found and handled, -1 if not found
+ * @return 0 if a route matched and ran, or a middleware stopped the chain;
+ *         1 if no route matched (a 404 "Not Found" body is filled in for you);
+ *        -1 if router, req or res was NULL (nothing was written)
  */
 int router_route(router_t *router, http_request_t *req, http_response_t *res);
 
@@ -1082,8 +1084,12 @@ void http_response_delete_cookie(http_response_t *res, const char *name);
 
 /**
  * Create a CORS middleware function with the given configuration
- * @param options CORS configuration (NULL for default permissive CORS)
- * @return Middleware function for use with router_use_middleware()
+ * @param options CORS configuration.  Must be non-NULL: passing NULL returns NULL
+ *                rather than building a default config.  Leaving allowed_origins
+ *                NULL *inside* the struct is what selects the wildcard "*" origin.
+ * @return Middleware function for use with router_use_middleware(), or NULL if
+ *         options is NULL, or if allow_credentials is set with a wildcard origin
+ *         (refused outright — CWE-942)
  */
 middleware_fn_t cors_middleware_create(const cors_options_t *options);
 
@@ -1620,10 +1626,11 @@ int cache_set(cache_t *cache, const char *key, const char *value, int ttl_second
 /**
  * Get value by key
  * Returns NULL if not found or expired. Expired entries are automatically removed.
- * The returned pointer is internal; caller should copy if needed beyond immediate use.
+ * The returned string is a NEWLY ALLOCATED copy: the CALLER OWNS it and must
+ * free() it.  It stays valid after the entry is evicted or the cache is cleared.
  * @param cache Cache instance
  * @param key Entry key
- * @return Entry value or NULL
+ * @return Heap-allocated copy of the entry value (caller frees), or NULL
  */
 const char *cache_get(cache_t *cache, const char *key);
 
@@ -1906,18 +1913,18 @@ void env_secure_value_free(env_secure_value_t *sv);
 
 /**
  * Return a heap-allocated redacted version of a value, safe for logging.
- * Short values (≤4 chars) become "***"; longer values show the first and
+ * Short values (≤4 chars) become "****"; longer values show the first and
  * last character with asterisks in between (e.g. "s**********z").
  * Caller must free() the returned string.
- * @param value Raw secret string (NULL → returns NULL)
+ * @param value Raw secret string (NULL or empty → returns NULL)
  * @return Redacted string, or NULL on error
  */
 char *env_config_redact(const char *value);
 
 /**
  * Convenience: apply standard WEBLIB_* environment variables to a server.
- * Reads WEBLIB_READ_TIMEOUT, WEBLIB_WRITE_TIMEOUT, WEBLIB_THREAD_COUNT,
- * WEBLIB_MAX_CONNECTIONS, and WEBLIB_ASYNC_MODE.  Unset variables are
+ * Reads WEBLIB_READ_TIMEOUT, WEBLIB_WRITE_TIMEOUT, WEBLIB_REQUEST_TIMEOUT,
+ * WEBLIB_THREAD_COUNT, WEBLIB_MAX_CONNECTIONS, and WEBLIB_ASYNC_MODE.  Unset variables are
  * silently skipped, so existing programmatic configuration is preserved.
  * @param server Server instance
  * @return 0 on success, -1 if server is NULL
@@ -2135,8 +2142,10 @@ void worker_set_router(router_t *router);
 
 /**
  * Handle an incoming Worker fetch event.  WASM-exported entry point.
- * If a custom handler is set, delegates to it; otherwise uses the
- * library router for route matching.
+ * If a custom handler is set, delegates to it.  Otherwise, if a router is set,
+ * returns a 200 placeholder ("X-Worker-Routed: configured") WITHOUT matching any
+ * route — the native simulation does not inspect the URL path or consult the
+ * router's route table.  With neither handler nor router set, returns 503.
  */
 WASM_EXPORT
 worker_response_t *worker_handle_fetch(worker_request_t *req,

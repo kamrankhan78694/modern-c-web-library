@@ -6,8 +6,8 @@ This is the API reference for the Modern C Web Library: the public surface decla
 in `include/kamran.k`, plus the pooled-database API in `include/db_pool.h`. Every
 signature below is copied from those headers — if a signature here and the header
 disagree, the header wins and this page is a bug. Behaviour notes are checked against
-the implementation in `src/`; where a header comment and the code disagree, this page
-follows the code and notes the drift inline.
+the implementation in `src/` — where a header comment and the code disagreed, the
+header comment was corrected in 2.0.0 rather than propagated here.
 
 Some subsystems have a dedicated document of their own. Where that is the case you
 get the signatures here and a link out for the design detail, rather than two copies
@@ -398,10 +398,10 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res);
 The HTTP server calls this for you. You need it directly only when you are driving
 the router yourself — in a Cloudflare Worker, or in a test.
 
-> The one-line `@return` comment on this function in `include/kamran.k` predates the
-> built-in 404 fallback and still reads "-1 if not found". The three values above are
-> what `src/router.c` returns today; the safe reading is "non-zero means no route
-> handler ran".
+> The `@return` comment on this function in `include/kamran.k` used to read "-1 if not
+> found", which predates the built-in 404 fallback; it was corrected in 2.0.0 to match
+> the three values above. If you are reading an older header, the safe reading is
+> "non-zero means no route handler ran".
 
 ---
 

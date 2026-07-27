@@ -22,11 +22,11 @@ This document explicitly records architectural decisions, trade-offs, and known 
 
 ### 3. Global / Static Middleware State
 
-**Decision**: Several middleware modules (CORS, rate-limit, static files, auth, CSRF, logging, error handler) use module-level static variables for their configuration.  Only one instance of each middleware type can exist at a time.
+**Decision**: `middleware_fn_t` carries a `void *user_data` argument and `router_use_middleware_with_data()` registers middleware with per-instance state.  Four modules honour it — CORS, rate-limit, auth and logging — falling back to their module global when `user_data` is NULL.  **Five do not**: static files, CSRF, error handler, metrics and security headers each discard the argument and read only a module-level static, so only one instance of those types can exist at a time.
 
-**Trade-off**: This simplifies the API (`cors_middleware_create` returns a function pointer) but prevents multiple independent middleware instances (e.g. different rate limits for different route groups).
+**Trade-off**: This simplifies the API (`cors_middleware_create` returns a function pointer) but, for the five unconverted modules, prevents multiple independent middleware instances (e.g. different static-file roots for different route groups).  Registering a second one silently reconfigures the first.
 
-**Mitigation**: Refactoring to per-instance state carried via `void *user_data` closures is planned.  For now, use route-specific middleware by checking the path inside the middleware callback.
+**Mitigation**: Converting the remaining five to the `user_data ? user_data : g_global` pattern the other four already use is planned.  For now, use route-specific middleware by checking the path inside the middleware callback.
 
 ### 4. Compile-Time Static Limits
 
