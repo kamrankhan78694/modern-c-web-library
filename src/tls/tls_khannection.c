@@ -103,8 +103,12 @@ static tls_khannection_rc_t process_record(tls_khannection_t *c, const uint8_t *
     if (c->state == TLS_KHANNECTION_HANDSHAKE) {
         switch (type) {
         case TLS_CONTENT_HANDSHAKE: {
-            /* Plaintext handshake record — the ClientHello. read_client_hello
-             * writes the ServerHello + protected flight straight into `out`. */
+            /* Plaintext handshake record — a ClientHello. read_client_hello is
+             * re-entrant across a HelloRetryRequest: on the first it writes either
+             * the ServerHello + protected flight or an HRR record straight into
+             * `out`; on a second (post-HRR) ClientHello it writes the flight. The
+             * handshake state machine tracks which via its own phase, so dispatch
+             * here stays purely by record type. */
             size_t produced = 0;
             size_t room = (out_cap >= *out_len) ? out_cap - *out_len : 0;
             if (!tls_server_hs_read_client_hello(&c->hs, c->cfg, content, content_len,
@@ -112,7 +116,7 @@ static tls_khannection_rc_t process_record(tls_khannection_t *c, const uint8_t *
                 return conn_fail(c, out, out_cap, out_len, tls_server_hs_alert(&c->hs));
             }
             *out_len += produced;
-            return TLS_KHANNECTION_RC_OK;   /* now awaiting the client Finished */
+            return TLS_KHANNECTION_RC_OK;   /* awaiting the client Finished, or CH2 after an HRR */
         }
         case TLS_CONTENT_CHANGE_CIPHER_SPEC:
             /* RFC 8446 §5 / §D.4: a legitimate middlebox-compat CCS is exactly the

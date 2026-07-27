@@ -37,6 +37,21 @@ void tls_transcript_update(tls_transcript_t *t, const uint8_t *msg, size_t len);
 void tls_transcript_current(const tls_transcript_t *t, uint8_t out[32]);
 
 /*
+ * Re-initialize a transcript for the HelloRetryRequest case (RFC 8446 §4.4.1).
+ * When the server sends a HelloRetryRequest, the first ClientHello is *replaced*
+ * in the transcript by a synthetic "message_hash" handshake message:
+ *
+ *     Hash(message_hash(254) || uint24(Hash.length) || Hash(ClientHello1) || ...)
+ *
+ * This resets `t` and absorbs exactly that synthetic message from `ch1_hash` =
+ * Hash(ClientHello1). The caller then absorbs the HelloRetryRequest, the second
+ * ClientHello, and the rest of the flight as usual. Getting this rewrite wrong is
+ * a classic TLS-1.3 pitfall, so it is isolated here and pinned by a known-answer
+ * test against an independent oracle.
+ */
+void tls_transcript_reinit_after_hrr(tls_transcript_t *t, const uint8_t ch1_hash[32]);
+
+/*
  * Finished.verify_data (RFC 8446 §4.4.4) = HMAC-SHA256(finished_key,
  * transcript_hash), where finished_key is derived from a Base traffic secret via
  * the key schedule. Writes 32 bytes.

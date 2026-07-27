@@ -293,6 +293,60 @@ int tls_build_server_hello(tls_writer_t *w, const uint8_t random[32],
     return tls_writer_ok(w);
 }
 
+/* RFC 8446 §4.1.3: the fixed Random a ServerHello carries when it is in fact a
+ * HelloRetryRequest — SHA-256("HelloRetryRequest"). A client detects HRR by this
+ * exact value, so it must be reproduced byte-for-byte. */
+static const uint8_t HELLO_RETRY_REQUEST_RANDOM[32] = {
+    0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02,
+    0x1E, 0x65, 0xB8, 0x91, 0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E,
+    0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
+};
+
+int tls_build_hello_retry_request(tls_writer_t *w,
+                                  const uint8_t *session_id, size_t session_id_len) {
+    size_t hdr, sid, exts, sv_ext, ks_ext;
+
+    if (w == NULL) {
+        return 0;
+    }
+    if (session_id == NULL && session_id_len != 0) {
+        return 0;
+    }
+    if (session_id_len > 32) {
+        return 0;   /* legacy_session_id_echo<0..32> */
+    }
+
+    tls_write_u8(w, TLS_HS_SERVER_HELLO);        /* HRR shares the ServerHello type */
+    hdr = tls_writer_open_vector(w, 3);
+
+    tls_write_u16(w, 0x0303);                    /* legacy_version */
+    tls_write_bytes(w, HELLO_RETRY_REQUEST_RANDOM, 32);
+    sid = tls_writer_open_vector(w, 1);          /* legacy_session_id_echo */
+    tls_write_bytes(w, session_id, session_id_len);
+    tls_writer_close_vector(w, sid, 1);
+    tls_write_u16(w, SUITE_CHACHA20_SHA256);     /* cipher_suite */
+    tls_write_u8(w, 0x00);                       /* legacy_compression_method */
+
+    exts = tls_writer_open_vector(w, 2);
+
+    /* supported_versions: the single selected_version, as in ServerHello. */
+    tls_write_u16(w, EXT_SUPPORTED_VERSIONS);
+    sv_ext = tls_writer_open_vector(w, 2);
+    tls_write_u16(w, VERSION_TLS13);
+    tls_writer_close_vector(w, sv_ext, 2);
+
+    /* key_share HRR form (RFC 8446 §4.2.8): KeyShareHelloRetryRequest is just the
+     * selected NamedGroup — no key_exchange. */
+    tls_write_u16(w, EXT_KEY_SHARE);
+    ks_ext = tls_writer_open_vector(w, 2);
+    tls_write_u16(w, GROUP_X25519);
+    tls_writer_close_vector(w, ks_ext, 2);
+
+    tls_writer_close_vector(w, exts, 2);
+    tls_writer_close_vector(w, hdr, 3);
+    return tls_writer_ok(w);
+}
+
 int tls_build_encrypted_extensions(tls_writer_t *w) {
     size_t hdr, exts;
     if (w == NULL) {

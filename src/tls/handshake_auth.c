@@ -41,6 +41,21 @@ void tls_transcript_current(const tls_transcript_t *t, uint8_t out[32]) {
     sha256_final(&snapshot, out);
 }
 
+void tls_transcript_reinit_after_hrr(tls_transcript_t *t, const uint8_t ch1_hash[32]) {
+    /* message_hash(254) || 00 00 20 (uint24 length = SHA-256 size) || Hash(CH1). */
+    uint8_t synthetic[4 + SHA256_DIGEST_SIZE];
+    if (t == NULL || ch1_hash == NULL) {
+        return;
+    }
+    synthetic[0] = 254;                    /* HandshakeType message_hash */
+    synthetic[1] = 0x00;
+    synthetic[2] = 0x00;
+    synthetic[3] = (uint8_t)SHA256_DIGEST_SIZE;   /* 32 */
+    memcpy(synthetic + 4, ch1_hash, SHA256_DIGEST_SIZE);
+    tls_transcript_init(t);
+    tls_transcript_update(t, synthetic, sizeof synthetic);
+}
+
 void tls_finished_verify_data(const uint8_t finished_key[32],
                               const uint8_t transcript_hash[32],
                               uint8_t out[32]) {
