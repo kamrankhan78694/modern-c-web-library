@@ -24,8 +24,10 @@
  *
  * SCOPE / LIMITATIONS (documented, none silent):
  *   - Server side only, one profile (TLS_CHACHA20_POLY1305_SHA256 + X25519 +
- *     Ed25519), full 1-RTT handshake (inherits server_handshake.h's limits: no HRR,
- *     no client auth).
+ *     Ed25519), 1-RTT handshake plus a single HelloRetryRequest when the client
+ *     offers X25519 without a key_share — the engine routes the second ClientHello
+ *     back through the handshake and drops an interleaved middlebox CCS. Inherits
+ *     server_handshake.h's remaining limits (no client auth).
  *   - The ClientHello must arrive within a single record (handshake-message
  *     reassembly across records is not implemented); real curl/OpenSSL clients do
  *     this. Other handshake messages the engine consumes (the client Finished) are
