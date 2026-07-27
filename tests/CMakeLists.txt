@@ -61,6 +61,16 @@ if(NOT EMSCRIPTEN)
         target_compile_definitions(test_tls_parse PRIVATE WEBLIB_TLS)
         target_link_libraries(test_tls_parse weblib ${PLATFORM_LIBS})
         add_test(NAME TlsParseTests COMMAND test_tls_parse)
+
+        # Blocking-socket TLS adapter: a real handshake + encrypted exchange over a
+        # socketpair (a KAT client thread vs the tls_transport server).
+        add_executable(test_tls_transport test_tls_transport.c)
+        target_include_directories(test_tls_transport PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/tls
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+        target_compile_definitions(test_tls_transport PRIVATE WEBLIB_TLS)
+        target_link_libraries(test_tls_transport weblib ${PLATFORM_LIBS})
+        add_test(NAME TlsTransportTests COMMAND test_tls_transport)
     endif()
 endif()
 
