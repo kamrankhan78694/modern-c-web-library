@@ -2,7 +2,7 @@
 
 **Modern C Web Library** - A Pure C Web Framework
 
-*Last Updated: July 2026 (v2.0.0)*
+*Last Updated: July 2026 (v2.0.1)*
 
 ---
 
@@ -429,7 +429,7 @@ The Modern C Web Library has successfully achieved its core mission: **proving t
 
 With a 100% test pass rate, zero security warnings, comprehensive tooling, and a clear roadmap, the project is positioned for growth as both an educational resource and — for plain-HTTP workloads — a production-ready framework.
 
-**Status**: v2.0.0 released — the plain-HTTP core is production-ready for deployment, with comprehensive tutorials and documentation. The new TLS 1.3 layer is experimental and unaudited, ships off by default, and should not be deployed until it has had an external cryptographic audit.
+**Status**: v2.0.1 released — the plain-HTTP core is production-ready for deployment, with comprehensive tutorials and documentation. The new TLS 1.3 layer is experimental and unaudited, ships off by default, and should not be deployed until it has had an external cryptographic audit.
 
 ---
 
@@ -442,4 +442,4 @@ With a 100% test pass rate, zero security warnings, comprehensive tooling, and a
 - **Contributing**: See CONTRIBUTING.md for development guidelines
 - **Author**: Kamran Khan
 
-*This document represents the technical achievements and business value of the Modern C Web Library project as of the v2.0.0 release (July 2026).*
+*This document represents the technical achievements and business value of the Modern C Web Library project as of the v2.0.1 release (July 2026).*

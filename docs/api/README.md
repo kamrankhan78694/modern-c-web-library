@@ -67,8 +67,9 @@ Compile-time macros and their runtime accessors. Use the encoded number for
 #define WEBLIB_VERSION_PATCH 1
 #define WEBLIB_VERSION       "2.0.1"
 
-/* "weblib/2.0.1 (author:kamran)" — sent as the Server header on every response */
-#define WEBLIB_VERSION_STRING
+/* Sent as the Server header on every response, e.g. "weblib/2.0.1 (author:kamran)" */
+#define WEBLIB_VERSION_STRING \
+    "weblib/" WEBLIB_VERSION " (author:" WEBLIB_AUTHOR_KAMRAN ")"
 
 /* Encode a triplet for comparison: WEBLIB_VERSION_ENCODE(1, 2, 3) → 10203 */
 #define WEBLIB_VERSION_ENCODE(major, minor, patch)
