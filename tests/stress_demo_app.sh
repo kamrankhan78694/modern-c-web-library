@@ -282,7 +282,13 @@ echo
 echo "[7] keep-alive concurrency above the worker count (#138)"
 if command -v ab >/dev/null 2>&1; then
     KA_C="${STRESS_KEEPALIVE_CONC:-32}"        # comfortably above the 16 workers
-    ab -n 4000 -c "$KA_C" -k -q "$B/api/info" >"$TMP/ka.out" 2>&1 &
+    # Deliberately /api/greet, not /api/info. ab's "Failed requests" counts
+    # LENGTH mismatches as failures, and /api/info embeds uptime_seconds, whose
+    # width grows during the run — CI reported 1344 "failures" for nothing but
+    # the clock ticking past a digit boundary. The greet payload is byte-stable,
+    # which keeps a length mismatch meaningful: it then means a truncated or
+    # corrupted body, exactly what this check should catch.
+    ab -n 4000 -c "$KA_C" -k -q "$B/api/greet/loadtest" >"$TMP/ka.out" 2>&1 &
     AB_PID=$!
     sleep 2
     # The decisive check: is the server still answering ANYONE mid-load?
@@ -297,6 +303,11 @@ if command -v ab >/dev/null 2>&1; then
         completed="$(awk '/^Complete requests:/{print $3}' "$TMP/ka.out")"
         failed="$(awk '/^Failed requests:/{print $3}'   "$TMP/ka.out")"
         non2xx="$(awk '/^Non-2xx responses:/{print $3}' "$TMP/ka.out")"
+        # Defaults are chosen so a missing or malformed line FAILS rather than
+        # passing vacuously: absent "Complete requests" reads as 0 (≠ 4000) and
+        # absent "Failed requests" reads as the literal 'none' (≠ 0). Only
+        # Non-2xx defaults to 0, because ab omits that line entirely when there
+        # were none — its absence is the success case.
         is "keep-alive c=$KA_C completed all 4000 requests" "${completed:-0}" "4000"
         is "keep-alive c=$KA_C had zero failed requests"    "${failed:-none}"  "0"
         is "keep-alive c=$KA_C had zero non-2xx responses"  "${non2xx:-0}"     "0"
