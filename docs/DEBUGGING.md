@@ -102,13 +102,14 @@ ctest -R WebLibTests --output-on-failure
 # directly or under a debugger (see above)
 ```
 
-A default build registers **6 suites**: `WebLibTests` (which by itself runs 166 unit
-tests), `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests` and
-`WasmTests`.
+A default build registers **7 suites**: `WebLibTests` (which by itself runs 168 unit
+tests), `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`,
+`StressDemoApp` and `WasmTests`.
 
-Configuring with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` adds 7 more —
-`TlsTests`, `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`,
-`TlsHttpTests` and `TlsInteropOpenssl` — for **13 total**. (`TlsHttpTests` needs the
+Configuring with `-DWEBLIB_ENABLE_TLS=ON` adds 6 more — `TlsTests`, `TlsCryptoTests`,
+`TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests` and `TlsInteropOpenssl` — for
+**13 total**. Adding `-DWEBLIB_TLS_TEST_HOOKS=ON` registers `TlsHttpTests` as well,
+for **14**. (`TlsHttpTests` needs the
 test hooks; `TlsInteropOpenssl` is registered only when `bash` and the `tls_server`
 target are both available, and self-skips if `openssl` is missing or too old to speak
 TLS 1.3.) The TLS layer is EXPERIMENTAL and UNAUDITED and is off by default — see

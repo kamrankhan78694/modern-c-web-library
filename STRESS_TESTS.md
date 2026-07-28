@@ -59,10 +59,12 @@ valgrind --leak-check=full ./build/tests/test_stress
 SKIP_SERVER_TESTS=1 ./build/tests/test_stress
 ```
 
-`StressTests` is one of the **6 ctest suites** in a default build (`WebLibTests`,
-`KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`). Building with
-the experimental TLS layer adds seven more — `TlsTests`, `TlsCryptoTests`, `TlsParseTests`,
-`TlsTransportTests`, `TlsFuzzTests`, `TlsHttpTests`, `TlsInteropOpenssl` — for **13 suites** total:
+`StressTests` is one of the **7 ctest suites** in a default build (`WebLibTests`,
+`KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `StressDemoApp`,
+`WasmTests`). Building with the experimental TLS layer adds six more — `TlsTests`,
+`TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`, `TlsInteropOpenssl` —
+for **13 suites** total.
+Adding the test hooks registers `TlsHttpTests` as well, for **14 suites**:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \

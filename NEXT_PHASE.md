@@ -42,7 +42,7 @@
 
 **v2.0.0 baseline** (2026-07-27): default build — 6 ctest suites green (`WebLibTests`, `KamranHeaderTests`,
 `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`) · 36 source modules · 5 example servers.
-With `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` — 13 ctest suites green (adds `TlsTests`,
+At that same baseline, with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` — 13 ctest suites green (adds `TlsTests`,
 `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`, `TlsHttpTests`,
 `TlsInteropOpenssl`) · 56 source modules · 6 example servers (adds `tls_server`).
 Zero compiler warnings under `-Wall -Wextra -pedantic`.

@@ -157,14 +157,40 @@ pass "registered: $DEFAULT_N default, $WITH_TLS with TLS, $WITH_HOOKS with TLS+h
 # NOTE: this list started as the three repo totals and immediately produced a
 # false positive on a correct "7 ctest suites" (the TLS subtotal). A checker
 # that flags correct text gets switched off, so the subtotals are valid here.
+#
+# But accepting ANY of those numbers for EVERY claim is too weak, and it let a
+# real regression through: adding StressDemoApp took the default build from 6
+# suites to 7, and "6 ctest suites in a default build" stayed green because 6
+# was still valid as the TLS subtotal. The number was checked; the sentence it
+# appeared in was not. So when the claim names its configuration, hold it to
+# that configuration's count, and stay permissive only when it names none.
+#
+# Version-scoped history is exempt. A changelog entry or a "v2.0.0 baseline"
+# line is a record of what was true at a point in time; it is SUPPOSED to keep
+# saying 6 after the seventh suite lands. Rewriting those to match today would
+# falsify the history, and flagging them would train everyone to ignore this
+# check. Only present-tense claims about the current tree are held to account.
 bad=0
 while IFS= read -r hit; do
     [ -z "$hit" ] && continue
-    n="$(printf '%s' "$hit" | sed 's/.*[^0-9]\([0-9][0-9]*\)[^0-9]*suites.*/\1/')"
-    case "$n" in
-        "$DEFAULT_N"|"$WITH_TLS"|"$WITH_HOOKS"|"$TLS_N"|"$TLS_ONLY") ;;
-        *) bad=$((bad + 1)); printf '          %s\n' "$hit" ;;
+    case "$hit" in
+        CHANGELOG.md:*)      continue ;;   # release-scoped by definition
+        *baseline*|*20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) continue ;;
     esac
+    n="$(printf '%s' "$hit" | sed 's/.*[^0-9]\([0-9][0-9]*\)[^0-9]*suites.*/\1/')"
+    case "$hit" in
+        *default*)                   expected="$DEFAULT_N"; label="a default build" ;;
+        *hooks*|*TLS_TEST_HOOKS*)    expected="$WITH_HOOKS $HOOKS_N"; label="a TLS+hooks build" ;;
+        *TLS*|*tls*)                 expected="$WITH_TLS $TLS_N $TLS_ONLY"; label="a TLS build" ;;
+        *)                           expected="$DEFAULT_N $WITH_TLS $WITH_HOOKS $TLS_N $TLS_ONLY"; label="any configuration" ;;
+    esac
+    hit_ok=0
+    for e in $expected; do [ "$n" = "$e" ] && hit_ok=1; done
+    if [ "$hit_ok" -eq 0 ]; then
+        bad=$((bad + 1))
+        printf '          %s\n' "$hit"
+        printf '            ^ says %s suites; %s has: %s\n' "$n" "$label" "$expected"
+    fi
 done <<EOF
 $(git ls-files '*.md' | tr '\n' '\0' | xargs -0 grep -nE '\*\*[0-9]+ (ctest )?suites\*\*|[0-9]+ ctest suites' 2>/dev/null || true)
 EOF

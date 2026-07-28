@@ -609,7 +609,7 @@ modern-c-web-library/
 │   ├── worker.js          # Cloudflare Workers JavaScript glue
 │   └── wasm_example.c     # WebAssembly demo
 ├── tests/
-│   ├── test_weblib.c      # Core unit tests (166 tests)
+│   ├── test_weblib.c      # Core unit tests (168 tests)
 │   ├── test_kamran_header.c, test_async_websocket.c, test_stress.c
 │   ├── test_worker.c, test_wasm.c
 │   ├── test_tls*.c        # 6 TLS suites (need -DWEBLIB_ENABLE_TLS=ON;
@@ -1190,7 +1190,7 @@ For a list of planned features and enhancements, check out [TODO.md](TODO.md).
 passes; the TLS 1.3 layer added in 2.0.0 is experimental and unaudited.
 
 - **Tests**: 100% pass rate — 7/7 ctest suites in the default build, 14/14 with
-  `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON`. `WebLibTests` alone reports 166 unit tests.
+  `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON`. `WebLibTests` alone reports 168 unit tests.
 - **Code Quality**: Zero compiler warnings under `-Wall -Wextra -pedantic`
 - **Security**: All buffer operations bounds-checked, HMAC-SHA256 with constant-time comparison
 - **Debugging**: Full IDE integration with LLDB/GDB
