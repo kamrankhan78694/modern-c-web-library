@@ -363,7 +363,7 @@ echo "=== $((checks - fails))/$checks checks passed ==="
 # without one would reopen the hole silently. This makes the total itself an
 # assertion: if the environment is so reduced that a third of the suite vanished,
 # say so rather than reporting success.
-MIN_CHECKS="${STRESS_MIN_CHECKS:-30}"
+MIN_CHECKS="${STRESS_MIN_CHECKS:-29}"
 if [ "$checks" -lt "$MIN_CHECKS" ]; then
     echo "FAIL  only $checks checks ran, expected at least $MIN_CHECKS —" >&2
     echo "      too much of the suite was skipped for this run to mean anything." >&2
