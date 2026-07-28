@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`tools/check-consistency.sh`, run in CI as the `consistency` job.** Three
+  times in one release cycle a fix corrected the instance a reviewer named and
+  left the same claim wrong elsewhere — and twice the defect was introduced *by
+  the change that was fixing an earlier instance of it*. The checks derive truth
+  from the build files rather than from prose, so the class cannot recur
+  silently: version declarations must agree across `CMakeLists.txt`,
+  `include/kamran.k`, `Dockerfile.release` and `publish-package.sh` (every
+  macro and every LABEL, not just the first of each), `src/` and `examples/`
+  must contain no hardcoded `x.y.z` literal
+  (`examples/simple_server.c` reported "1.0.0" for two major versions, and it is
+  the release image's entrypoint), documented ctest suite counts must match
+  `tests/CMakeLists.txt`, and the Valgrind step must still accumulate per-binary
+  status and refuse to pass having checked nothing.
+
+  Each check was verified by reintroducing the real bug and confirming it fails.
+  The suite-count check produced a false positive on its first run — a correct
+  "7 ctest suites" referring to the TLS subtotal — which is recorded in the
+  script, because a checker that flags correct text gets disabled and then
+  protects nothing.
+
+  `.github/copilot-instructions.md` gains a section naming both failure modes
+  (fixing the instance instead of the class; writing a gate that passes without
+  testing anything) with the concrete cases, so the lesson reaches the next
+  agent rather than living in one session's memory.
 
 ## [2.0.1] - 2026-07-28
 
