@@ -171,7 +171,7 @@ enforces: zero errors and zero definite or indirect leaks, on every `tests/test_
 | `host_header_enforcement` | Host requirement keyed on HTTP version, not the `Connection` header | ✅ Pass |
 | `path_normalization` | `//` collapsed and trailing `/` stripped before routing | ✅ Pass (literal and `:param` routes agree) |
 | `async_idle_reaper` | Idle / slow-loris connection in async mode | ✅ Pass (reaped at the deadline; shutdown latency bounded) |
-| `async_server_restart` | Stop an async server, then listen again on the same port | ✅ Pass (event loop torn down cleanly) |
+| `async_server_restart` | Stop an async server, then listen again (fresh ephemeral port each cycle since BUG-14) | ✅ Pass (event loop torn down cleanly) |
 
 **Findings:** Server handles high-throughput scenarios well. The thread pool (16 workers) efficiently processes concurrent requests. Oversized requests are properly rejected with appropriate HTTP error codes. The nine tests below `slow_client` were added after the original report (PRs #78–#89) and are regression guards for specific security findings: request-smuggling via Transfer-Encoding, CRLF injection through the request-target, route aliasing via un-normalized paths, Host-header bypass, and connection exhaustion from clients that never finish a request.
 
