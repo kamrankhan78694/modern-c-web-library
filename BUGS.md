@@ -2,12 +2,14 @@
 
 **Modern C Web Library — Production Stress Test Findings**
 
-*Last Updated: 2026-07-27*
-*Discovered during Phase 10 production-level stress testing and Phase 10.1 security code review*
+*Last Updated: 2026-07-29*
+*BUG-1..10 discovered during Phase 10 production-level stress testing and Phase 10.1 security code
+review; BUG-11..14 during the demo-app / response-hook work (PR #137)*
 
 **Scope:** this file tracks the ten issues found by the Phase 10 stress-testing and security-review
-pass. Nine are fully resolved; BUG-4 (middleware singleton state) is only partially
-fixed — see the summary table below. Two things it deliberately does *not* cover:
+pass, plus the four found while building the dev server and end-to-end suite. Thirteen are fully
+resolved; BUG-4 (middleware singleton state) is only partially fixed — see the summary table below.
+Two things it deliberately does *not* cover:
 
 - **Later security-review findings.** The post-v1.0.0 audit stream (roughly PRs #74–#95 — request
   smuggling, path aliasing, Host-header bypass, session use-after-free, the async idle reaper, and
@@ -33,10 +35,10 @@ fixed — see the summary table below. Two things it deliberately does *not* cov
 | 8 | **Medium** | Security Headers Middleware | **Fixed** | Shallow `memcpy` of config struct containing string pointers (dangling pointer risk) |
 | 9 | **Medium** | CSRF / Session / Auth | **Fixed** | Private functions duplicate public security APIs (`secure_random_bytes`, `secure_compare`) |
 | 10 | **Low** | Auth / CSRF Middleware | **Fixed** | `memset()` used instead of `secure_zero()` to wipe sensitive data — compiler may optimize away |
-| 11 | **Low** | HTTP Response | **Open** | `http_response_send_text()` *appends* `Content-Type` instead of replacing it, so a handler that then sets its own emits two — invalid per RFC 9110 |
-| 12 | **Low** | Router / Request | **Open** | Route parameters allocated by `router_route()` have no public free: `http_request_destroy()` is internal, so code driving the router directly leaks one node + key + value per parameter |
-| 13 | **Low** | HTTP Server (shutdown) | **Open** | `http_server_stop()` closes and clears `server->socket_fd` while the accept thread may be reading it — a close-while-in-use race confined to shutdown |
-| 14 | **Low** | Test infrastructure | **Open** | `tests/test_stress.c` binds 15 hardcoded ports with no retry, so back-to-back runs fail on `http_server_listen()` — flaky under rapid reruns |
+| 11 | **Low** | HTTP Response | **Fixed** | `http_response_send_text()` *appended* `Content-Type` instead of replacing it — now replaces, and `http_response_send_html()` exists |
+| 12 | **Low** | Router / Request | **Fixed** | Route parameters allocated by `router_route()` had no public free — `http_request_clear_params()` is now exported |
+| 13 | **Low** | HTTP Server (shutdown) | **Fixed** | `http_server_stop()` closed `server->socket_fd` while the accept thread might still pass it to `accept()` — replaced by a wake pipe + join-before-close |
+| 14 | **Low** | Test infrastructure | **Fixed** | `tests/test_stress.c` bound 15 hardcoded ports — now binds port 0 and reads back via `http_server_port()` |
 
 ---
 
@@ -277,77 +279,62 @@ secure_zero(decoded, sizeof(decoded));
 
 ---
 
-### BUG-11: `http_response_send_text()` appends `Content-Type` (Low) — ⚠️ OPEN
+### BUG-11: `http_response_send_text()` appends `Content-Type` (Low) — ✅ FIXED
 
-`http_response_send_text()` adds its `Content-Type` with `replace_existing = false`
-([`src/http_server.c:1767`](src/http_server.c#L1767)), so it appends rather than replaces. A handler
-that sends text and then sets a different content type emits **two** `Content-Type` headers, which is
-invalid per RFC 9110 and which browsers resolve by rendering as plain text.
+`http_response_send_text()` added its `Content-Type` with `replace_existing = false`, so it appended
+rather than replaced. A handler that sent text and then set a different content type emitted **two**
+`Content-Type` headers, which is invalid per RFC 9110 and which browsers resolve by rendering as
+plain text.
 
-There is also no `http_response_send_html()` helper, so serving HTML means sending text and then
-correcting the header — which is exactly the sequence that triggers this.
-
-**Workaround (used by `examples/demo_app.c`):** call `http_response_set_header()` *after* the send,
-never before. `set_header` replaces, so the ordering wins.
-
-```c
-http_response_send_text(res, HTTP_OK, PAGE);
-http_response_set_header(res, "Content-Type", "text/html; charset=utf-8");  /* must come after */
-```
-
-**Fix direction:** either make `send_text` replace, or add `send_html`. Both are source-compatible;
-making `send_text` replace changes observable behaviour for anyone currently relying on the append,
-which is unlikely to be deliberate. Covered by the end-to-end suite, which asserts exactly one
+**Fixed:** `send_text` now replaces, and `http_response_send_html()` exists so serving HTML no
+longer means sending text and correcting the header afterwards — which was exactly the sequence that
+triggered this. `http_response_send_template()` now sends `text/html` (rendered templates are HTML;
+callers previously had to correct that header too). `examples/demo_app.c` dropped its
+set-header-after-send workaround. Regression tests assert exactly one `Content-Type` and were
+verified to fail against the appending behaviour; the end-to-end suite independently asserts one
 `Content-Type` on `GET /`.
 
-### BUG-12: no public way to free route parameters (Low) — ⚠️ OPEN
+### BUG-12: no public way to free route parameters (Low) — ✅ FIXED
 
 `router_route()` stores route parameters on the request via `http_request_set_param()`, which
-allocates a node, a key and a value. They are released by `param_list_free()` from
-`http_request_destroy()` — and **neither is exported**. The HTTP server owns the request lifecycle,
-so a normal server is unaffected.
+allocates a node, a key and a value. They were released only by `param_list_free()` from
+`http_request_destroy()` — and neither was exported. The HTTP server owns the request lifecycle, so
+a normal server was unaffected; code driving the router directly (a Cloudflare Worker handler, an
+embedder, a test) leaked three allocations per parameterised request.
 
-Code that drives the router directly leaks: a Cloudflare Worker handler, an embedder using the
-library as a routing core, or a test. Measured at three allocations (80 bytes) per parameterised
-request; `tests/test_weblib.c` works around it with a test-local `_test_free_param_list()` that
-mirrors the node layout, which is exactly the sort of copy that rots when the struct changes.
+**Fixed:** `http_request_clear_params()` is public. `tests/test_weblib.c` deleted its
+`_test_free_param_list()` mirror of the internal node layout — the copy that would have rotted when
+the struct changed — and calls the real API.
 
-**Fix direction:** export `http_request_destroy()`, or add a narrow
-`http_request_clear_params()`. Either is additive.
+### BUG-13: `socket_fd` closed from another thread during shutdown (Low) — ✅ FIXED
 
-### BUG-13: `socket_fd` closed from another thread during shutdown (Low) — ⚠️ OPEN
+In threaded mode `http_server_stop()` called `shutdown()`, `close()`, then set
+`server->socket_fd = -1` from the caller's thread, while the accept thread might be inside — or
+about to enter — `accept(server->socket_fd)`. Closing the descriptor was what unblocked `accept()`,
+so the close was deliberate; the hazard was fd reuse: between `close()` and the next `accept()`,
+another thread's `open()` could be handed the same descriptor number, and `accept()` would run on an
+unrelated file.
 
-In threaded mode `http_server_stop()` calls `shutdown()`, `close()`, then sets
-`server->socket_fd = -1` from the caller's thread, while the accept thread may be inside — or about
-to enter — `accept(server->socket_fd)`. Closing the descriptor is what unblocks `accept()`, so the
-close is deliberate; the race is the unsynchronised read of the field.
+**Fixed** with the self-pipe pattern already used by the keep-alive dispatcher: the accept thread
+polls on the listen socket and a wake pipe, the stopper writes a byte and **joins before anything is
+closed**, so no descriptor is ever invalidated while another thread could still use it. The listen
+socket is non-blocking so a connection reset between `poll()` and `accept()` returns `EAGAIN`
+instead of blocking where the pipe cannot reach (accepted sockets are restored to blocking —
+BSD-family kernels inherit the flag, Linux does not). `http_server_shutdown()` had the same race
+and got the same reordering.
 
-Benign outcome: the accept thread reads `-1` and `accept()` fails with `EBADF`, which the loop
-handles. Not benign: between `close()` and the next `accept()`, another thread opens anything and is
-handed the same descriptor number, so `accept()` runs on an unrelated file.
+### BUG-14: `test_stress.c` uses hardcoded ports with no bind retry (Low) — ✅ FIXED
 
-Confined to shutdown, and it predates the response-hook work (surrounding code dates to
-2025-11 / 2026-02), so it is recorded rather than fixed alongside unrelated changes.
+`tests/test_stress.c` bound fifteen fixed ports (19000–19016), each with a bare
+`ASSERT(http_server_listen(server, port) == 0)`. `SO_REUSEADDR` was set, but running the suite
+repeatedly in quick succession left enough sockets in `TIME_WAIT` that a bind occasionally failed —
+observed at roughly 1 run in 3 re-running `ctest` back to back — and the test then reported a
+product failure for an environment condition.
 
-**Fix direction:** guard the field with the server mutex, or wake the accept thread through a
-self-pipe and let it close its own descriptor.
-
-### BUG-14: `test_stress.c` uses hardcoded ports with no bind retry (Low) — ⚠️ OPEN
-
-`tests/test_stress.c` binds fifteen fixed ports (19000–19016), each with a bare
-`ASSERT(http_server_listen(server, port) == 0)`. `SO_REUSEADDR` is set, but running the suite
-repeatedly in quick succession still leaves enough sockets in `TIME_WAIT` that a bind occasionally
-fails — and the test then reports a product failure for an environment condition.
-
-Observed at roughly 1 run in 3 while re-running `ctest` back to back, failing at
-`test_stress.c:631` (port 19000) and `test_stress.c:1567` (port 19007). Both belong to pre-existing
-tests; the response-hook work added only 19016. A single CI run does not rerun the suite, which is
-why CI stays green; it bites whoever iterates locally.
-
-`tests/stress_demo_app.sh` already derives its port from its pid and retries five times.
-
-**Fix direction:** bind port 0 and read back the assigned port. That removes the shared namespace
-rather than making collisions rarer.
+**Fixed:** every site binds port 0 and reads the kernel-assigned port back through the new
+`http_server_port()` accessor, removing the shared port namespace outright rather than making
+collisions rarer. Verified with three consecutive full-suite runs. (The restart test re-reads the
+port each cycle, since every re-listen gets a fresh ephemeral port.)
 
 ---
 

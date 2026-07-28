@@ -259,10 +259,18 @@ http_server_t *http_server_create(void);
 /**
  * Start the HTTP server on specified port
  * @param server Server instance
- * @param port Port number to listen on
+ * @param port Port number to listen on; 0 asks the kernel for an ephemeral
+ *             port — read it back with http_server_port()
  * @return 0 on success, -1 on failure
  */
 int http_server_listen(http_server_t *server, uint16_t port);
+
+/**
+ * The port the server is actually bound to.
+ * With http_server_listen(server, 0) the kernel picks the port; this returns
+ * the assigned one. Returns 0 when the server is not listening.
+ */
+uint16_t http_server_port(const http_server_t *server);
 
 /**
  * Stop the HTTP server
@@ -406,6 +414,13 @@ const char *http_request_get_param(http_request_t *req, const char *key);
 int http_request_set_param(http_request_t *req, const char *key, const char *value);
 
 /**
+ * Free all route parameters on a request.
+ * The HTTP server does this automatically; this is for code that drives the
+ * router directly (Workers, embedders, tests) and would otherwise leak.
+ */
+void http_request_clear_params(http_request_t *req);
+
+/**
  * Set response header
  * @param res Response object
  * @param key Header key
@@ -420,6 +435,14 @@ void http_response_set_header(http_response_t *res, const char *key, const char 
  * @param text Response text
  */
 void http_response_send_text(http_response_t *res, http_status_t status, const char *text);
+
+/**
+ * Send HTML response (Content-Type: text/html; charset=utf-8)
+ * @param res Response object
+ * @param status HTTP status code
+ * @param html HTML string to send
+ */
+void http_response_send_html(http_response_t *res, http_status_t status, const char *html);
 
 /**
  * Send JSON response
@@ -1386,7 +1409,7 @@ char *template_render(const char *template_str, template_context_t *ctx);
 char *template_load_file(const char *filename);
 
 /**
- * Send a rendered template as HTTP response
+ * Send a rendered template as HTTP response (Content-Type: text/html)
  * @param res Response object
  * @param status HTTP status code
  * @param template_str Template string
@@ -1821,14 +1844,17 @@ bool compression_should_compress(const char *content_type, size_t content_length
  *
  * If the accept_encoding header indicates gzip support and the content_type
  * is compressible, the body is gzip-compressed before being set on the
- * response.  Otherwise, the body is sent uncompressed via
- * http_response_send_text().
+ * response.  Otherwise the body is sent uncompressed. Either way the response
+ * carries the given content_type (when non-NULL) — the uncompressed path used
+ * to send text/plain regardless, so the label depended on whether the body
+ * happened to compress.
  *
  * @param res             HTTP response object
  * @param status          HTTP status code
  * @param body            Response body text
  * @param body_len        Response body length (0 = use strlen)
- * @param content_type    Content-Type for compressibility check (e.g. "text/html")
+ * @param content_type    Content-Type for the response and the compressibility
+ *                        check (e.g. "text/html")
  * @param accept_encoding Value of the Accept-Encoding request header (may be NULL)
  */
 void http_response_send_compressed(http_response_t *res, http_status_t status,

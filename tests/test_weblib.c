@@ -29,30 +29,6 @@ typedef struct _test_hdr_node {
     struct _test_hdr_node *next;
 } _test_hdr_node_t;
 
-/*
- * Test-local helper mirroring the library's param node layout, for the same
- * reason as _test_free_header_list below: a stack-allocated http_request_t is
- * never passed to http_request_destroy(), so the route parameters it accumulates
- * have no public owner. There is no exported way to free them — worth knowing if
- * you drive router_route() directly (a Worker, or a test) with a parameterised
- * route. Mirrors src/http_server.c's http_param_node_t.
- */
-typedef struct _test_param_node {
-    char *key;
-    char *value;
-    struct _test_param_node *next;
-} _test_param_node_t;
-
-static void _test_free_param_list(void *params) {
-    _test_param_node_t *p = (_test_param_node_t *)params;
-    while (p) {
-        _test_param_node_t *next = p->next;
-        free(p->key);
-        free(p->value);
-        free(p);
-        p = next;
-    }
-}
 
 static void _test_free_header_list(void *headers) {
     _test_hdr_node_t *h = (_test_hdr_node_t *)headers;
@@ -75,6 +51,17 @@ static const char *_test_find_header(void *headers, const char *name_lower) {
         if (strcmp(h->name, name_lower) == 0) return h->value;
     }
     return NULL;
+}
+
+/* How many headers with this name? Exists because BUG-11 was precisely a
+ * DUPLICATE header: find-by-name returns the first match and cannot see a
+ * second one, so an assertion built on it passed against the very bug. */
+static int _test_count_header(void *headers, const char *name_lower) {
+    int count = 0;
+    for (_test_hdr_node_t *h = (_test_hdr_node_t *)headers; h; h = h->next) {
+        if (strcmp(h->name, name_lower) == 0) count++;
+    }
+    return count;
 }
 
 /*
@@ -4005,6 +3992,28 @@ void test_gzip_compress_valid(void) {
     PASS();
 }
 
+void test_send_compressed_fallback_keeps_content_type(void) {
+    TEST("send_compressed (uncompressed path keeps caller's Content-Type)");
+
+    /* No Accept-Encoding → the uncompressed path. It used to send text/plain
+     * regardless of the content_type argument, so whether a response was
+     * labelled text/html depended on whether it happened to compress. */
+    const char *body = "<h1>short html body</h1>";
+    http_response_t res = {0};
+    http_response_send_compressed(&res, HTTP_OK, body, 0, "text/html", NULL);
+
+    ASSERT(res.body != NULL);
+    ASSERT(res.body_length == strlen(body));
+    const char *ct = _test_find_header(res.headers, "content-type");
+    ASSERT(ct != NULL);
+    ASSERT(strcmp(ct, "text/html") == 0);
+    ASSERT(_test_count_header(res.headers, "content-type") == 1);
+
+    free(res.body);
+    _test_free_header_list(res.headers);
+    PASS();
+}
+
 /* ===== Phase 9: Benchmark tests ===== */
 
 void test_benchmark_timestamp(void) {
@@ -4573,7 +4582,7 @@ void test_undecodable_path_param_refuses_request(void) {
 
     _test_free_header_list(res2.headers);
     free(res2.body);
-    _test_free_param_list(req2.params);   /* stack request: no destroy to do it */
+    http_request_clear_params(&req2);
     router_destroy(router);
     PASS();
 }
@@ -5439,6 +5448,89 @@ void test_websocket_oversized_frame(void) {
     PASS();
 }
 
+static void _html_handler(http_request_t *req, http_response_t *res) {
+    (void)req;
+    http_response_send_html(res, HTTP_OK, "<h1>Hello</h1>");
+}
+
+static void _text_after_header_handler(http_request_t *req, http_response_t *res) {
+    (void)req;
+    http_response_set_header(res, "Content-Type", "application/json");
+    http_response_send_text(res, HTTP_OK, "hello");
+}
+
+void test_send_text_replaces_content_type(void) {
+    TEST("send_text replaces Content-Type (BUG-11)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/test", _text_after_header_handler);
+
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/test";
+    http_response_t res = {0};
+    ASSERT(router_route(router, &req, &res) == 0);
+    ASSERT(res.status == HTTP_OK);
+    ASSERT(strcmp(res.body, "hello") == 0);
+    ASSERT(_test_count_header(res.headers, "content-type") == 1);
+
+    const char *ct = _test_find_header(res.headers, "content-type");
+    ASSERT(ct != NULL);
+    ASSERT(strcmp(ct, "text/plain; charset=utf-8") == 0);
+
+    _test_free_header_list(res.headers);
+    free(res.body);
+    router_destroy(router);
+    PASS();
+}
+
+void test_send_html_sets_html_content_type(void) {
+    TEST("send_html sets text/html content type");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/page", _html_handler);
+
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/page";
+    http_response_t res = {0};
+    ASSERT(router_route(router, &req, &res) == 0);
+    ASSERT(res.status == HTTP_OK);
+    ASSERT(strcmp(res.body, "<h1>Hello</h1>") == 0);
+    ASSERT(res.body_length == 14);
+    ASSERT(_test_count_header(res.headers, "content-type") == 1);
+
+    const char *ct = _test_find_header(res.headers, "content-type");
+    ASSERT(ct != NULL);
+    ASSERT(strcmp(ct, "text/html; charset=utf-8") == 0);
+
+    _test_free_header_list(res.headers);
+    free(res.body);
+    router_destroy(router);
+    PASS();
+}
+
+void test_request_clear_params(void) {
+    TEST("http_request_clear_params frees and nulls (BUG-12)");
+
+    http_request_t req = {0};
+    ASSERT(http_request_set_param(&req, "id", "42") == 0);
+    ASSERT(http_request_set_param(&req, "name", "kamran") == 0);
+    ASSERT(req.params != NULL);
+    ASSERT(strcmp(http_request_get_param(&req, "id"), "42") == 0);
+
+    http_request_clear_params(&req);
+    ASSERT(req.params == NULL);
+    ASSERT(http_request_get_param(&req, "id") == NULL);
+
+    /* Idempotent, and NULL-safe. */
+    http_request_clear_params(&req);
+    http_request_clear_params(NULL);
+    PASS();
+}
+
 /* Run all tests */
 int main(void) {
     printf("Running Modern C Web Library Tests\n");
@@ -5643,6 +5735,7 @@ int main(void) {
     test_compression_negotiate_locale();
     test_compression_should_compress();
     test_gzip_compress_valid();
+    test_send_compressed_fallback_keeps_content_type();
 
     /* Phase 9: Benchmark tests */
     test_benchmark_timestamp();
@@ -5696,6 +5789,13 @@ int main(void) {
     test_header_injection_rejected();
     test_websocket_fragment_oom();
     test_websocket_oversized_frame();
+
+    /* BUG-11: send_text Content-Type replacement */
+    test_send_text_replaces_content_type();
+    test_send_html_sets_html_content_type();
+
+    /* BUG-12: public route-parameter free */
+    test_request_clear_params();
 
     printf("\n===================================\n");
     printf("Tests run: %d\n", tests_run);

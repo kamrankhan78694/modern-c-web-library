@@ -100,15 +100,7 @@ static const char *PAGE =
 
 static void handle_index(http_request_t *req, http_response_t *res) {
     (void)req;
-    http_response_send_text(res, HTTP_OK, PAGE);
-    /* ORDER MATTERS. http_response_send_text() sets Content-Type: text/plain,
-     * and it adds the header with replace_existing=false — so setting the
-     * header *before* the send does not win, it appends a SECOND Content-Type
-     * and the response goes out with both (invalid per RFC 9110 and rendered as
-     * plain text by the browser). http_response_set_header() replaces, so it has
-     * to come after. Tracked as BUG-11 in BUGS.md: send_text should replace, not
-     * append, and there is no send_html() helper. */
-    http_response_set_header(res, "Content-Type", "text/html; charset=utf-8");
+    http_response_send_html(res, HTTP_OK, PAGE);
 }
 
 static void handle_info(http_request_t *req, http_response_t *res) {

@@ -105,6 +105,16 @@ Start the server listening on a port.
 int http_server_listen(http_server_t *server, uint16_t port);
 // Returns: 0 on success, -1 on failure
 ```
+Passing port 0 asks the kernel for an ephemeral port; read the assigned one back
+with `http_server_port()`. Tests bind port 0 so parallel and back-to-back runs
+never collide on a fixed port number (BUG-14).
+
+### `http_server_port()`
+The port the server is actually bound to.
+```c
+uint16_t http_server_port(const http_server_t *server);
+// Returns: the bound port, or 0 when the server is not listening
+```
 
 ### `http_server_stop()`
 Stop the running server.
@@ -459,15 +469,27 @@ const char *http_request_get_header(http_request_t *req, const char *key);
 const char *http_request_get_param(http_request_t *req, const char *key);
 int http_request_set_param(http_request_t *req, const char *key, const char *value);
 // set_param returns 0 on success, -1 on failure; the router calls it during matching
+void http_request_clear_params(http_request_t *req);
+// Frees all route parameters and nulls the list. The HTTP server does this as
+// part of the request lifecycle; call it yourself only when driving
+// router_route() directly (a Worker, an embedder, a test), where a
+// stack-allocated request would otherwise leak one node + key + value per
+// parameter (BUG-12). Idempotent and NULL-safe.
 ```
 
 ### Response
 ```c
 void http_response_set_header(http_response_t *res, const char *key, const char *value);
 void http_response_send_text(http_response_t *res, http_status_t status, const char *text);
+// Content-Type: text/plain; charset=utf-8 — REPLACES any Content-Type already
+// set (it appended before BUG-11 was fixed, producing two headers)
+void http_response_send_html(http_response_t *res, http_status_t status, const char *html);
+// Content-Type: text/html; charset=utf-8 — no more send_text-then-fix-the-header
 void http_response_send_json(http_response_t *res, http_status_t status, json_value_t *json);
 void http_response_send_template(http_response_t *res, http_status_t status,
                                   const char *template_str, template_context_t *ctx);
+// Renders and sends as text/html (templates are HTML; it sent text/plain
+// before BUG-11 was fixed)
 ```
 
 ---

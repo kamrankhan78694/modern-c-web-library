@@ -66,11 +66,10 @@ void health_check_handler(http_request_t *req, http_response_t *res) {
         return;
     }
 
-    /* Send the body first (http_response_send_text appends a text/plain
-     * Content-Type with replace_existing=false), THEN set the JSON Content-Type:
-     * http_response_set_header replaces the existing node, yielding a single
-     * `Content-Type: application/json`. Doing it the other way round emitted two
-     * conflicting Content-Type headers (audit #34). */
+    /* set_header AFTER send_text: send_text sets text/plain (replacing, since
+     * BUG-11), and this replaces it again with the JSON type. Before BUG-11 was
+     * fixed this ordering was load-bearing — send_text APPENDED, so the reverse
+     * order emitted two conflicting Content-Type headers (audit #34). */
     http_response_send_text(res, HTTP_OK, body);
     http_response_set_header(res, "Content-Type", "application/json");
     free(body);

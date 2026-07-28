@@ -674,8 +674,15 @@ void http_response_send_compressed(http_response_t *res, http_status_t status,
                               body_len);
 
     if (!should_compress) {
-        /* Send uncompressed */
+        /* Send uncompressed — but keep the caller's Content-Type. This path
+         * previously sent everything as text/plain, silently ignoring the
+         * content_type argument that the compressed path honours; whether a
+         * response was labelled text/html then depended on whether it happened
+         * to compress. set_header AFTER send_text, which replaces. */
         http_response_send_text(res, status, body);
+        if (content_type) {
+            http_response_set_header(res, "Content-Type", content_type);
+        }
         return;
     }
 
@@ -684,9 +691,13 @@ void http_response_send_compressed(http_response_t *res, http_status_t status,
                                                  body_len, COMPRESS_FAST);
 
     if (!compressed.data || compressed.size >= (size_t)(body_len * COMPRESSION_MIN_RATIO / 100)) {
-        /* Compression failed or not beneficial — send uncompressed */
+        /* Compression failed or not beneficial — send uncompressed (same
+         * Content-Type contract as the path above) */
         free(compressed.data);
         http_response_send_text(res, status, body);
+        if (content_type) {
+            http_response_set_header(res, "Content-Type", content_type);
+        }
         return;
     }
 

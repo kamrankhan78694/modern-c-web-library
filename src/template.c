@@ -382,7 +382,7 @@ void http_response_send_template(http_response_t *res, http_status_t status,
     
     char *rendered = template_render(template_str, ctx);
     if (rendered) {
-        http_response_send_text(res, status, rendered);
+        http_response_send_html(res, status, rendered);
         free(rendered);
     } else {
         http_response_send_text(res, HTTP_INTERNAL_ERROR, "Template rendering failed");

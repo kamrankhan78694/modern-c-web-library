@@ -528,11 +528,16 @@ static void *server_thread_read_timeout(void *arg) {
     cfg.server_eph_sk = KAT_SERVER_EPH;
     cfg.server_random = KAT_SERVER_RND;
     /* Per-recv timeout well above the drip interval so recv returns between drips
-     * (each drip counts as progress); the 1-second AGGREGATE read deadline must fire. */
-    tv.tv_sec = 3;
+     * (each drip counts as progress); the 3-second AGGREGATE read deadline must fire.
+     * The budget was 1s, and under ASan+UBSan in a Debug build on a loaded CI
+     * runner the pure-C Ed25519/X25519 HANDSHAKE alone can exceed one wall-clock
+     * second — the test then failed "handshake still completed" with the product
+     * working correctly. 3s keeps the deadline property under test (it still
+     * fires well before the client's 6s dribble ceiling) with sanitizer headroom. */
+    tv.tv_sec = 5;
     tv.tv_usec = 0;
     setsockopt(r->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-    r->accept_rc = tls_transport_accept(&t, r->fd, &cfg, 1);   /* handshake+read budget = 1s */
+    r->accept_rc = tls_transport_accept(&t, r->fd, &cfg, 3);   /* handshake+read budget = 3s */
     r->read_rc = 1;   /* sentinel: read not reached / returned >0 */
     if (r->accept_rc == 0) {
         r->read_rc = (long)tls_transport_read(&t, buf, sizeof buf);
@@ -576,9 +581,11 @@ static void test_tls_transport_read_timeout(void) {
         close(sv[0]);
         return;
     }
-    /* Now dribble an application record that never completes. */
+    /* Now dribble an application record that never completes. 40 drips x 150ms
+     * is a ~6s ceiling; in practice the loop exits within one drip of the
+     * server's 3s deadline firing, because the write after teardown fails. */
     write_all_c(cfd, apphdr, sizeof apphdr);
-    for (i = 0; i < 20; i++) {
+    for (i = 0; i < 40; i++) {
         uint8_t b = (uint8_t)i;
         if (write_all_c(cfd, &b, 1) != 0) {
             break;   /* server tore the connection down when its read deadline fired */
@@ -590,8 +597,8 @@ static void test_tls_transport_read_timeout(void) {
     check_true("readloris: handshake still completed", res.accept_rc == 0);
     /* Strictly -1 (deadline/fail-closed), not 0: a 0 would mean a clean EOF, which
      * here could only come from the client's post-loop close and would NOT prove the
-     * deadline fired. The 1s read budget expires (~1s) well before the client stops
-     * dribbling (~3s), so the read must return -1. */
+     * deadline fired. The 3s read budget expires well before the client stops
+     * dribbling (~6s ceiling), so the read must return -1. */
     check_true("readloris: dribbled post-handshake read aborted by the wall-clock deadline",
                res.read_rc < 0);
     close(sv[0]);

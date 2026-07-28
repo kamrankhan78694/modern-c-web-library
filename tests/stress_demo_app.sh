@@ -13,8 +13,9 @@
 #     throughout because it called the function directly.
 #   * /healthz reported time since the FIRST PROBE, not uptime, because its
 #     start time is initialised by pthread_once on first request.
-#   * http_response_send_text() appends Content-Type instead of replacing it,
-#     so a handler setting text/html emits two Content-Type headers.
+#   * http_response_send_text() appended Content-Type instead of replacing it,
+#     so a handler setting text/html emitted two Content-Type headers (BUG-11,
+#     since fixed — send_text now replaces, and send_html exists).
 #
 # All three are wiring defects: the unit works, the assembly does not, and no
 # test spanned the gap. This one does — it starts the real binary, talks HTTP to
