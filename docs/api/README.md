@@ -388,14 +388,49 @@ registered by their `*_create()` call when it is `NULL`. Rate limiting is the
 exception — its state type is not part of the public header, so it cannot be handed a
 per-instance pointer.
 
+### `router_add_response_hook()`
+Install a hook that runs **after** the handler, when the outcome of the request is
+known. Middleware runs *before* the handler and so can never see `res->status`;
+anything that needs the result — status metrics, access logs carrying the status,
+timing, tracing — belongs here.
+```c
+typedef void (*response_hook_fn_t)(http_request_t *req, http_response_t *res,
+                                   void *user_data);
+
+int router_add_response_hook(router_t *router, response_hook_fn_t hook,
+                             void *user_data);
+// Returns: 0 on success (including when this exact hook is already installed),
+//         -1 if router or hook was NULL, or the per-router limit of 8 is reached
+```
+Hooks run at every exit that produces a response: after a handler, after the built-in
+404, and when a middleware short-circuits. They do not run when `router_route()`
+rejects its arguments, because no response exists to describe.
+
+Registering the same `(hook, user_data)` pair twice is absorbed rather than obeyed —
+hooks have side effects, so a duplicate would double whatever the hook records.
+
+`metrics_register()` uses this internally; you do not need to install anything for
+`/metrics` to work.
+
+```c
+static void access_log(http_request_t *req, http_response_t *res, void *ud) {
+    (void)ud;
+    printf("%s %s -> %d\n", http_method_to_string(req->method), req->path, res->status);
+}
+router_add_response_hook(router, access_log, NULL);
+```
+
 ### `router_route()`
 Dispatch a request through the middleware chain and into the matching handler.
 ```c
 int router_route(router_t *router, http_request_t *req, http_response_t *res);
-// Returns:  0  a route matched and ran, or a middleware stopped the chain
+// Returns:  0  a route matched and ran, or a middleware stopped the chain, or a
+//              path parameter could not be decoded (a 400 body is filled in and
+//              the handler is NOT run)
 //           1  no route matched — a 404 "Not Found" body is filled in for you
 //          -1  router, req, res, or req->path was NULL; nothing was written
 ```
+Response hooks run on all three of the `0` outcomes.
 The HTTP server calls this for you. You need it directly only when you are driving
 the router yourself — in a Cloudflare Worker, or in a test.
 

@@ -32,11 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   duplicate-`Content-Type` bug — the suite reports `got '2', expected '1'` and
   fails.
 
-  Known defects it finds are printed as `KNOWN` lines rather than failing the
-  build, so the suite stays green on bugs already filed while making them
-  impossible to forget. The `/healthz` check spins up a throwaway server to
-  observe the bug deterministically, because probing the main server early would
-  mask it and wrongly report it as fixed.
+  The `/healthz` check spins up a throwaway server rather than probing the main
+  one, because that endpoint's bug was precisely that its clock started at the
+  first probe: any earlier check in the suite would have started it, and the
+  later assertion would then have reported the bug as fixed. A dedicated server
+  left untouched for three seconds is the only way to observe it.
 
 - **`examples/demo_app` + `tools/dev-server.sh` + `.claude/launch.json`** — a
   minimal dev server whose page drives its own API from the browser, so opening
@@ -161,8 +161,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completed count, zero failed requests and zero non-2xx, and reports
   throughput without asserting on it.
 
+- **An undecodable path parameter now fails the request.** `%00` was refused by
+  the decoder, but the caller then simply did not set the parameter and ran the
+  handler anyway — so an attacker could make a declared `:param` vanish, and a
+  handler that assumed it was present would dereference NULL or fall back to a
+  default. Both the header and this changelog already called that "refused",
+  which it was not. `router_route()` now returns a 400 and does not run the
+  handler. The end-to-end suite could not have caught this: `demo_app` validates
+  the parameter itself, so its check passed while the library did nothing.
+- **Registering the same response hook twice double-counted everything.** Hooks
+  run once per response and exist to have side effects, so a duplicate entry
+  doubles whatever the hook records — `metrics_register()` called twice on one
+  router reported 6 requests for 3, with both calls returning success.
+  `router_add_response_hook()` now absorbs an exact `(hook, user_data)` duplicate.
+- **Three more end-to-end checks that could not fail.** The path-traversal check
+  never sent a traversal, because curl removes dot-segments client-side and the
+  server only ever saw `GET /etc/passwd` (it now also sends the raw form with
+  `--path-as-is`). The CRLF-injection check was a tautology: nothing in the demo
+  routed a path parameter into a header, so the grep could not have found an
+  injected one whatever the guard did — `demo_app` now echoes the decoded `:name`
+  into `X-Greeted-Name` deliberately, giving the check a real path to defeat. And
+  the FD-leak and RSS checks were wrapped in guards that silently contributed
+  zero checks when `lsof`/`ps` were missing; they now announce a skip.
+
 ### Changed
 
+- **`examples/demo_app` states its real exposure.** It printed a `localhost` URL
+  while `http_server_listen()` binds `INADDR_ANY`, so the demo — unauthenticated,
+  with `Access-Control-Allow-Origin: *` — was reachable from the network.
+  Verified: it answered on the machine's LAN address. The banner now says so.
+- **`tools/check-consistency.sh` reads more phrasings, and reads whole
+  sentences.** It only matched "N ctest suites" and `**N suites**`, so the same
+  stale claim written "N test suites" or "N/N suites" drifted undetected — one
+  such claim was stale in `CONTRIBUTING.md`. It also now takes every count on a
+  line and accepts the union of the configurations that line names, because
+  sentences legitimately state two ("13 suites rather than 14"), and flagging
+  those correct lines is how a checker gets switched off. Widening it immediately
+  found four genuinely stale counts.
 - **`tools/dev-server.sh` builds into `build-devserver/`, not `build/`.** It
   configures with its own build type and flags, so sharing the conventional
   directory meant either adopting a contributor's cache and silently ignoring

@@ -177,22 +177,43 @@ while IFS= read -r hit; do
         CHANGELOG.md:*)      continue ;;   # release-scoped by definition
         *baseline*|*20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) continue ;;
     esac
-    n="$(printf '%s' "$hit" | sed 's/.*[^0-9]\([0-9][0-9]*\)[^0-9]*suites.*/\1/')"
-    case "$hit" in
-        *default*)                   expected="$DEFAULT_N"; label="a default build" ;;
-        *hooks*|*TLS_TEST_HOOKS*)    expected="$WITH_HOOKS $HOOKS_N"; label="a TLS+hooks build" ;;
-        *TLS*|*tls*)                 expected="$WITH_TLS $TLS_N $TLS_ONLY"; label="a TLS build" ;;
-        *)                           expected="$DEFAULT_N $WITH_TLS $WITH_HOOKS $TLS_N $TLS_ONLY"; label="any configuration" ;;
-    esac
-    hit_ok=0
-    for e in $expected; do [ "$n" = "$e" ] && hit_ok=1; done
-    if [ "$hit_ok" -eq 0 ]; then
-        bad=$((bad + 1))
-        printf '          %s\n' "$hit"
-        printf '            ^ says %s suites; %s has: %s\n' "$n" "$label" "$expected"
+    # One sentence often, and legitimately, states counts for MORE THAN ONE
+    # configuration: "13 suites rather than 14", "all 14 suites, plus the 7 TLS
+    # suites". Reading only the first number and holding it to only one
+    # configuration flagged several such correct lines. A checker that flags
+    # correct text gets switched off, so: take EVERY count on the line, and
+    # accept the union of the configurations the line actually names. That still
+    # closes the original hole — "6 ctest suites in a default build" names one
+    # configuration, so its 6 is measured against 7 and fails.
+    expected=""; label=""
+    case "$hit" in *default*)
+        expected="$expected $DEFAULT_N"; label="$label a default build," ;; esac
+    case "$hit" in *hooks*|*TLS_TEST_HOOKS*)
+        expected="$expected $WITH_HOOKS $HOOKS_N"; label="$label a TLS+hooks build," ;; esac
+    # "a TLS build" covers BOTH TLS configurations in prose: most lines saying
+    # "build with TLS on and run all N suites" refer to a configure that also
+    # passed -DWEBLIB_TLS_TEST_HOOKS=ON, without saying the word "hooks". The
+    # checker cannot know which configure a sentence means, so it accepts either
+    # total here. The precision that matters is not lost: a line naming the
+    # DEFAULT build is still held to exactly one number, which is the case that
+    # actually went stale.
+    case "$hit" in *TLS*|*tls*)
+        expected="$expected $WITH_TLS $WITH_HOOKS $TLS_N $TLS_ONLY $HOOKS_N"; label="$label a TLS build," ;; esac
+    if [ -z "$expected" ]; then
+        expected="$DEFAULT_N $WITH_TLS $WITH_HOOKS $TLS_N $TLS_ONLY"; label=" any configuration,"
     fi
+
+    for n in $(printf '%s' "$hit" | grep -oE '[0-9]+ (ctest |test )?suites' | grep -oE '^[0-9]+'); do
+        hit_ok=0
+        for e in $expected; do [ "$n" = "$e" ] && hit_ok=1; done
+        if [ "$hit_ok" -eq 0 ]; then
+            bad=$((bad + 1))
+            printf '          %s\n' "$hit"
+            printf '            ^ says %s suites;%s has:%s\n' "$n" "${label% }" "$expected"
+        fi
+    done
 done <<EOF
-$(git ls-files '*.md' | tr '\n' '\0' | xargs -0 grep -nE '\*\*[0-9]+ (ctest )?suites\*\*|[0-9]+ ctest suites' 2>/dev/null || true)
+$(git ls-files '*.md' | tr '\n' '\0' | xargs -0 grep -nE '[0-9]+ (ctest |test )?suites|\*\*[0-9]+ (ctest |test )?suites\*\*' 2>/dev/null || true)
 EOF
 if [ "$bad" -eq 0 ]; then
     pass "every documented suite count matches a real configuration ($DEFAULT_N/$WITH_TLS/$WITH_HOOKS total, $TLS_N/$TLS_ONLY TLS)"

@@ -184,7 +184,7 @@ Tests failed: 0
 
 The pure-C TLS 1.3 layer is **EXPERIMENTAL and UNAUDITED** — it has had no external cryptographic audit, and it is not for production use. See [`src/tls/README.md`](src/tls/README.md).
 
-It is also off by default, which means `./docker-run.sh test` never compiles or exercises it. To build it and run all 14 suites:
+It is also off by default, which means `./docker-run.sh test` never compiles or exercises it. To build it with TLS and its test hooks and run all 14 suites:
 
 ```bash
 docker build -f Dockerfile.dev -t modern-c-weblib:dev .

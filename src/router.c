@@ -71,7 +71,7 @@ static bool percent_decode_inplace(char *s) {
     return true;
 }
 
-static void extract_params(http_request_t *req, const char *pattern, const char *path);
+static bool extract_params(http_request_t *req, const char *pattern, const char *path);
 
 /* Create router */
 router_t *router_create(void) {
@@ -135,12 +135,29 @@ int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware
     return 0;
 }
 
-/* Route request.
- * Returns: 0 = routed, 1 = no route found (404 already sent), -1 = invalid input */
+/*
+ * Install a post-response hook. Idempotent: registering the same (hook,
+ * user_data) pair again succeeds without adding a second entry.
+ *
+ * That guard is not defensive tidiness. Every hook here runs once per response
+ * and is expected to have side effects — counting, logging, tracing — so a
+ * duplicate entry does not merely waste a call, it doubles whatever the hook
+ * records. Calling metrics_register() twice on one router silently reported 6
+ * requests for 3, with no error anywhere to notice. Registering the identical
+ * hook twice is a mistake in every case, so it is absorbed rather than obeyed.
+ * Two different routers each still get their own hook, which is what a global
+ * metrics singleton fed by several routers needs.
+ */
 int router_add_response_hook(router_t *router, response_hook_fn_t hook,
                              void *user_data) {
     if (!router || !hook) {
         return -1;
+    }
+    for (size_t i = 0; i < router->response_hook_count; i++) {
+        if (router->response_hooks[i] == hook &&
+            router->response_hook_data[i] == user_data) {
+            return 0;   /* already installed */
+        }
     }
     if (router->response_hook_count >= MAX_RESPONSE_HOOKS) {
         return -1;
@@ -217,7 +234,11 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res) {
         /* Check path */
         if (route->has_params) {
             if (match_route(route->path, req->path)) {
-                extract_params(req, route->path, req->path);
+                if (!extract_params(req, route->path, req->path)) {
+                    http_response_send_text(res, HTTP_BAD_REQUEST, "Bad Request");
+                    run_response_hooks(router, req, res);
+                    return 0;
+                }
                 route->handler(req, res);
                 run_response_hooks(router, req, res);
                 return 0;
@@ -307,9 +328,18 @@ static bool match_route(const char *pattern, const char *path) {
 }
 
 /* Extract route parameters */
-static void extract_params(http_request_t *req, const char *pattern, const char *path) {
+/*
+ * Extract route parameters.
+ *
+ * Returns false when a parameter cannot be decoded, so the caller can fail the
+ * request instead of running the handler with that parameter missing. Bad input
+ * (NULL arguments) and allocation failure return true: neither is the client's
+ * doing, and turning an out-of-memory condition into a 400 would blame the
+ * request for the server's problem.
+ */
+static bool extract_params(http_request_t *req, const char *pattern, const char *path) {
     if (!req || !pattern || !path) {
-        return;
+        return true;
     }
 
     char *pattern_copy = strdup(pattern);
@@ -317,7 +347,7 @@ static void extract_params(http_request_t *req, const char *pattern, const char 
     if (!pattern_copy || !path_copy) {
         free(pattern_copy);
         free(path_copy);
-        return;
+        return true;
     }
 
     char *pattern_save = NULL;
@@ -330,9 +360,18 @@ static void extract_params(http_request_t *req, const char *pattern, const char 
             const char *key = p_tok + 1;
             /* Decode the segment before handing it to the handler. s_tok points
              * into path_copy, which we own, so decoding in place is safe. */
-            if (percent_decode_inplace(s_tok)) {
-                http_request_set_param(req, key, s_tok);
+            if (!percent_decode_inplace(s_tok)) {
+                /* Undecodable — today only an encoded NUL. Previously the
+                 * parameter was simply not set and the handler ran anyway, so
+                 * an attacker could make a declared :param vanish and a handler
+                 * that assumed it was present would dereference NULL or fall
+                 * back to a default. "Refused", which is what the header and
+                 * CHANGELOG both claim, has to mean the request fails. */
+                free(pattern_copy);
+                free(path_copy);
+                return false;
             }
+            http_request_set_param(req, key, s_tok);
         }
         p_tok = strtok_r(NULL, "/", &pattern_save);
         s_tok = strtok_r(NULL, "/", &path_save);
@@ -340,4 +379,5 @@ static void extract_params(http_request_t *req, const char *pattern, const char 
 
     free(pattern_copy);
     free(path_copy);
+    return true;
 }

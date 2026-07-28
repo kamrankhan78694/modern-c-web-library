@@ -33,6 +33,8 @@ fixed — see the summary table below. Two things it deliberately does *not* cov
 | 8 | **Medium** | Security Headers Middleware | **Fixed** | Shallow `memcpy` of config struct containing string pointers (dangling pointer risk) |
 | 9 | **Medium** | CSRF / Session / Auth | **Fixed** | Private functions duplicate public security APIs (`secure_random_bytes`, `secure_compare`) |
 | 10 | **Low** | Auth / CSRF Middleware | **Fixed** | `memset()` used instead of `secure_zero()` to wipe sensitive data — compiler may optimize away |
+| 11 | **Low** | HTTP Response | **Open** | `http_response_send_text()` *appends* `Content-Type` instead of replacing it, so a handler that then sets its own emits two — invalid per RFC 9110 |
+| 12 | **Low** | Router / Request | **Open** | Route parameters allocated by `router_route()` have no public free: `http_request_destroy()` is internal, so code driving the router directly leaks one node + key + value per parameter |
 
 ---
 
@@ -273,9 +275,49 @@ secure_zero(decoded, sizeof(decoded));
 
 ---
 
+### BUG-11: `http_response_send_text()` appends `Content-Type` (Low) — ⚠️ OPEN
+
+`http_response_send_text()` adds its `Content-Type` with `replace_existing = false`
+([`src/http_server.c:1767`](src/http_server.c#L1767)), so it appends rather than replaces. A handler
+that sends text and then sets a different content type emits **two** `Content-Type` headers, which is
+invalid per RFC 9110 and which browsers resolve by rendering as plain text.
+
+There is also no `http_response_send_html()` helper, so serving HTML means sending text and then
+correcting the header — which is exactly the sequence that triggers this.
+
+**Workaround (used by `examples/demo_app.c`):** call `http_response_set_header()` *after* the send,
+never before. `set_header` replaces, so the ordering wins.
+
+```c
+http_response_send_text(res, HTTP_OK, PAGE);
+http_response_set_header(res, "Content-Type", "text/html; charset=utf-8");  /* must come after */
+```
+
+**Fix direction:** either make `send_text` replace, or add `send_html`. Both are source-compatible;
+making `send_text` replace changes observable behaviour for anyone currently relying on the append,
+which is unlikely to be deliberate. Covered by the end-to-end suite, which asserts exactly one
+`Content-Type` on `GET /`.
+
+### BUG-12: no public way to free route parameters (Low) — ⚠️ OPEN
+
+`router_route()` stores route parameters on the request via `http_request_set_param()`, which
+allocates a node, a key and a value. They are released by `param_list_free()` from
+`http_request_destroy()` — and **neither is exported**. The HTTP server owns the request lifecycle,
+so a normal server is unaffected.
+
+Code that drives the router directly leaks: a Cloudflare Worker handler, an embedder using the
+library as a routing core, or a test. Measured at three allocations (80 bytes) per parameterised
+request; `tests/test_weblib.c` works around it with a test-local `_test_free_param_list()` that
+mirrors the node layout, which is exactly the sort of copy that rots when the struct changes.
+
+**Fix direction:** export `http_request_destroy()`, or add a narrow
+`http_request_clear_params()`. Either is additive.
+
+---
+
 ## Stress Test Results Summary
 
-All 37 stress tests pass with zero failures and zero **definite or indirect** memory leaks. The leak
+All 38 stress tests pass with zero failures and zero **definite or indirect** memory leaks. The leak
 check runs on every push in the `Build, Test & Memcheck (Docker)` CI job, which executes every test
 binary under Valgrind on Ubuntu with
 `--errors-for-leak-kinds=definite,indirect` and fails the job if any of them reports one. *Possible*

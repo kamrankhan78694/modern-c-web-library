@@ -134,10 +134,19 @@ echo
 echo "[3] adversarial input"
 # The response must not carry a header the attacker put in the URL. This is the
 # header-injection guard in header_list_add(); if it ever regresses, an attacker
-# controls response headers.
+# controls response headers. demo_app deliberately routes the decoded :name
+# parameter into X-Greeted-Name so this check has a real path to defeat —
+# without such an echo the grep could never find an injected header no matter
+# what the guard did, and the check would pass by construction.
 is "CRLF in path injects no header" \
    "$(curl -s -m5 -D- -o /dev/null "$B/api/greet/x%0d%0aX-Injected:%20evil" | grep -ci 'x-injected' | tr -d ' ')" "0"
-is "path traversal          -> 404"  "$(code "$B/../../etc/passwd")" "404"
+# --path-as-is: without it curl removes the dot-segments itself, so the server
+# only ever saw "GET /etc/passwd" and this asserted nothing about traversal
+# handling. Both forms are worth sending — the normalised one is what a browser
+# produces, the raw one is what an attacker sends.
+is "path traversal (normalised) -> 404" "$(code "$B/../../etc/passwd")" "404"
+is "path traversal (raw dot-segments) -> 404" \
+   "$(curl -s -m5 --path-as-is -o /dev/null -w '%{http_code}' "$B/../../etc/passwd")" "404"
 is "8KB URL                 -> 414"  "$(code "$B/api/greet/$(printf 'a%.0s' $(seq 1 8000))")" "414"
 is "body over MAX_BODY_BYTES-> 413" \
    "$(python3 -c 'import sys;sys.stdout.write("{\"m\":\""+"x"*1200000+"\"}")' 2>/dev/null | code -X POST --data-binary @- "$B/api/echo")" "413"
@@ -223,6 +232,8 @@ if [ -n "$fd_before" ] && [ -n "$fd_after" ] && [ "$fd_before" -gt 0 ] 2>/dev/nu
     else
         bad "FD leak: ${fd_before} -> ${fd_after} after $((CONC*ROUNDS)) more requests"
     fi
+else
+    echo "  skip  lsof unavailable — FD-leak check not run"
 fi
 if [ -n "$rss_before" ] && [ -n "$rss_after" ] && [ "$rss_before" -gt 0 ] 2>/dev/null; then
     if [ "$rss_after" -le $(( rss_before * 2 + 4096 )) ]; then
@@ -230,6 +241,8 @@ if [ -n "$rss_before" ] && [ -n "$rss_after" ] && [ "$rss_before" -gt 0 ] 2>/dev
     else
         bad "RSS grew ${rss_before}K -> ${rss_after}K after $((CONC*ROUNDS)) more requests"
     fi
+else
+    echo "  skip  ps -o rss= unavailable — RSS check not run"
 fi
 echo
 

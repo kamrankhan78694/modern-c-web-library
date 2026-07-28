@@ -106,7 +106,7 @@ static void handle_index(http_request_t *req, http_response_t *res) {
      * header *before* the send does not win, it appends a SECOND Content-Type
      * and the response goes out with both (invalid per RFC 9110 and rendered as
      * plain text by the browser). http_response_set_header() replaces, so it has
-     * to come after. Filed against the library: send_text should replace, not
+     * to come after. Tracked as BUG-11 in BUGS.md: send_text should replace, not
      * append, and there is no send_html() helper. */
     http_response_set_header(res, "Content-Type", "text/html; charset=utf-8");
 }
@@ -150,6 +150,17 @@ static void handle_greet(http_request_t *req, http_response_t *res) {
     json_object_set(o, "name", json_string_create(name));
     http_response_send_json(res, HTTP_OK, o);
     json_value_free(o);
+
+    /* Route the decoded path parameter into a response header — deliberately.
+     * This is the shape that produces header injection in real applications:
+     * attacker-controlled bytes reaching a header value. Doing it here means the
+     * end-to-end suite's CRLF check actually exercises the library's guard in
+     * header_list_add() rather than passing because nothing in the app ever put
+     * a parameter in a header. If that guard regresses, a request for
+     * /api/greet/x%0d%0aX-Injected:%20evil starts returning an X-Injected
+     * header and the suite fails. The value is validated above (1-64 chars),
+     * and the guard is the backstop. */
+    http_response_set_header(res, "X-Greeted-Name", name);
 }
 
 static void handle_echo(http_request_t *req, http_response_t *res) {
@@ -252,6 +263,14 @@ int main(int argc, char **argv) {
     printf("    POST /api/echo          JSON in, JSON out\n");
     printf("    GET  /healthz           built-in health check\n");
     printf("    GET  /metrics           built-in request metrics\n\n");
+    /* Say what the bind actually is. http_server_listen() binds INADDR_ANY, so
+     * this is reachable from the network, not just from this machine — the
+     * "localhost" URL above is where YOU open it, not the limit of who can. On
+     * an untrusted network that exposes an unauthenticated demo that also sends
+     * Access-Control-Allow-Origin: *. Worth knowing before running it in a cafe. */
+    printf("  Listening on ALL interfaces (0.0.0.0:%u), not only loopback.\n"
+           "  This demo has no authentication and permissive CORS — do not run it\n"
+           "  on an untrusted network.\n\n", (unsigned)port);
     fflush(stdout);
 
     /* listen() returns immediately in threaded mode; keep main alive. */

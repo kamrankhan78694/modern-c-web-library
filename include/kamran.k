@@ -353,9 +353,14 @@ int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware
  * @param router Router instance
  * @param req Request object
  * @param res Response object
- * @return 0 if a route matched and ran, or a middleware stopped the chain;
+ * @return 0 if a route matched and ran, or a middleware stopped the chain, or a
+ *           path parameter could not be percent-decoded (a 400 "Bad Request" body
+ *           is filled in and the handler is NOT run);
  *         1 if no route matched (a 404 "Not Found" body is filled in for you);
  *        -1 if router, req or res was NULL, or req->path was NULL (nothing written)
+ *
+ * Response hooks run on every outcome that produced a response, i.e. all three
+ * of the 0 cases and the 404, but not on -1.
  */
 int router_route(router_t *router, http_request_t *req, http_response_t *res);
 

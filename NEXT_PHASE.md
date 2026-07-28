@@ -87,7 +87,7 @@ Zero compiler warnings under `-Wall -Wextra -pedantic`.
 
 **Current state** (main, v2.0.1+): default build — 7 ctest suites green · 36 source modules · 7 example servers.
 With `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` — 14 ctest suites green · 56 source modules ·
-6 example servers. Zero compiler warnings under `-Wall -Wextra -pedantic`.
+8 example servers (adds `tls_server`). Zero compiler warnings under `-Wall -Wextra -pedantic`.
 
 > The `src/tls/` pure-C TLS 1.3 server (5,481 lines) is **EXPERIMENTAL and UNAUDITED** — see
 > [`src/tls/README.md`](src/tls/README.md). It is OFF by default and native-only. `openssl s_client`
@@ -885,7 +885,7 @@ cmake --build build --parallel
 cd build && ctest --output-on-failure
 ```
 
-That gives you 12 suites. The thirteenth, `TlsHttpTests`, needs the deterministic-RNG
+That gives you 13 suites. The fourteenth, `TlsHttpTests`, needs the deterministic-RNG
 test seam, so add `-DWEBLIB_TLS_TEST_HOOKS=ON` to the configure line to match the
 `tls-check` job exactly. Never enable that option in a build you intend to deploy —
 a production server with a pinned RNG would have predictable handshake randomness.

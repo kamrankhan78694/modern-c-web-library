@@ -29,6 +29,31 @@ typedef struct _test_hdr_node {
     struct _test_hdr_node *next;
 } _test_hdr_node_t;
 
+/*
+ * Test-local helper mirroring the library's param node layout, for the same
+ * reason as _test_free_header_list below: a stack-allocated http_request_t is
+ * never passed to http_request_destroy(), so the route parameters it accumulates
+ * have no public owner. There is no exported way to free them — worth knowing if
+ * you drive router_route() directly (a Worker, or a test) with a parameterised
+ * route. Mirrors src/http_server.c's http_param_node_t.
+ */
+typedef struct _test_param_node {
+    char *key;
+    char *value;
+    struct _test_param_node *next;
+} _test_param_node_t;
+
+static void _test_free_param_list(void *params) {
+    _test_param_node_t *p = (_test_param_node_t *)params;
+    while (p) {
+        _test_param_node_t *next = p->next;
+        free(p->key);
+        free(p->value);
+        free(p);
+        p = next;
+    }
+}
+
 static void _test_free_header_list(void *headers) {
     _test_hdr_node_t *h = (_test_hdr_node_t *)headers;
     while (h) {
@@ -4439,6 +4464,103 @@ void test_metrics_identity_holds_for_1xx(void) {
  * the header still promised existing wiring kept working. The middleware now
  * counts request entry whenever no hook is installed.
  */
+/*
+ * Registering the same hook twice must not double-count.
+ *
+ * Response hooks run once per response and exist to have side effects, so a
+ * duplicate entry doubles whatever the hook records. metrics_register() called
+ * twice on one router reported 6 requests for 3 — silently, with both calls
+ * returning success. router_add_response_hook() now absorbs an exact duplicate.
+ */
+static int _naive_param_handler_ran = 0;
+static void _naive_param_handler(http_request_t *req, http_response_t *res) {
+    /* Deliberately does NOT check for a missing parameter — the point is that a
+     * handler written this way must never be reached with one absent. */
+    _naive_param_handler_ran = 1;
+    const char *v = http_request_get_param(req, "name");
+    http_response_send_text(res, HTTP_OK, v ? v : "(absent)");
+}
+
+/*
+ * An undecodable path parameter must fail the request, not vanish.
+ *
+ * percent_decode_inplace() refuses an encoded NUL, but the caller then simply
+ * did not set the parameter and ran the handler anyway. So an attacker could
+ * make a declared :param disappear: a handler that assumed it was present would
+ * dereference NULL, and one with a fallback would silently take it. Both the
+ * header and the CHANGELOG called this "refused", which it was not.
+ *
+ * The end-to-end suite could not catch this because demo_app validates the
+ * parameter itself and returns its own 400 — the check passed while the library
+ * was doing nothing.
+ */
+void test_undecodable_path_param_refuses_request(void) {
+    TEST("router (encoded NUL in a path param → 400, handler not run)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/greet/:name", _naive_param_handler);
+
+    _naive_param_handler_ran = 0;
+    http_request_t req = {0};
+    http_response_t res = {0};
+    req.method = HTTP_GET;
+    req.path = "/greet/a%00b";
+    ASSERT(router_route(router, &req, &res) == 0);
+
+    ASSERT(res.status == HTTP_BAD_REQUEST);      /* was 200 with the param absent */
+    ASSERT(_naive_param_handler_ran == 0);       /* handler must not have run */
+
+    _test_free_header_list(res.headers);
+    free(res.body);
+
+    /* A normal encoded value still decodes and reaches the handler. */
+    _naive_param_handler_ran = 0;
+    http_request_t req2 = {0};
+    http_response_t res2 = {0};
+    req2.method = HTTP_GET;
+    req2.path = "/greet/hello%20world";
+    ASSERT(router_route(router, &req2, &res2) == 0);
+    ASSERT(res2.status == HTTP_OK);
+    ASSERT(_naive_param_handler_ran == 1);
+    ASSERT(res2.body && strcmp(res2.body, "hello world") == 0);
+
+    _test_free_header_list(res2.headers);
+    free(res2.body);
+    _test_free_param_list(req2.params);   /* stack request: no destroy to do it */
+    router_destroy(router);
+    PASS();
+}
+
+void test_response_hook_registration_is_idempotent(void) {
+    TEST("router (duplicate response hook is not installed twice)");
+
+    metrics_middleware_destroy();
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    ASSERT(metrics_register(router) == 0);
+    ASSERT(metrics_register(router) == 0);   /* second call must be absorbed */
+    router_add_route(router, HTTP_GET, "/ok", _ok_handler);
+
+    for (int i = 0; i < 3; i++) {
+        http_request_t req = {0};
+        http_response_t res = {0};
+        req.method = HTTP_GET;
+        req.path = "/ok";
+        router_route(router, &req, &res);
+        _test_free_header_list(res.headers);
+        free(res.body);
+    }
+
+    ASSERT(_metrics_top_number("total_requests") == 3);   /* was 6 */
+    ASSERT(_metrics_status_count("2xx") == 3);
+
+    router_destroy(router);
+    metrics_middleware_destroy();
+    PASS();
+}
+
 void test_metrics_middleware_only_still_counts(void) {
     TEST("metrics (middleware without metrics_register still counts)");
 
@@ -5464,6 +5586,8 @@ int main(void) {
     test_metrics_totals_match_status_classes();
     test_metrics_identity_holds_for_1xx();
     test_metrics_middleware_only_still_counts();
+    test_response_hook_registration_is_idempotent();
+    test_undecodable_path_param_refuses_request();
     test_metrics_endpoint();
 
     /* Phase 9: Compression tests */
