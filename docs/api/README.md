@@ -1,6 +1,6 @@
 # Modern C Web Library - API Reference
 
-**Version 2.0.0**
+**Version 2.0.1**
 
 This is the API reference for the Modern C Web Library: the public surface declared
 in `include/kamran.k`, plus the pooled-database API in `include/db_pool.h`. Every
@@ -64,17 +64,17 @@ Compile-time macros and their runtime accessors. Use the encoded number for
 ```c
 #define WEBLIB_VERSION_MAJOR 2
 #define WEBLIB_VERSION_MINOR 0
-#define WEBLIB_VERSION_PATCH 0
-#define WEBLIB_VERSION       "2.0.0"
+#define WEBLIB_VERSION_PATCH 1
+#define WEBLIB_VERSION       "2.0.1"
 
-/* "weblib/2.0.0 (author:kamran)" — sent as the Server header on every response */
+/* "weblib/2.0.1 (author:kamran)" — sent as the Server header on every response */
 #define WEBLIB_VERSION_STRING
 
 /* Encode a triplet for comparison: WEBLIB_VERSION_ENCODE(1, 2, 3) → 10203 */
 #define WEBLIB_VERSION_ENCODE(major, minor, patch)
 #define WEBLIB_VERSION_NUMBER   /* the current version, encoded */
 
-const char *weblib_version(void);            // "2.0.0"
+const char *weblib_version(void);            // "2.0.1"
 const char *weblib_kamran_signature(void);   // Server header string
 void weblib_version_components(int *major, int *minor, int *patch);
 ```

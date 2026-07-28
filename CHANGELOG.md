@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [2.0.1] - 2026-07-28
+
+A maintenance release. No library API change — the fixes are in CI, the test
+suite and the examples. Notably, this is the first release in which the Valgrind
+leak gate actually gates.
+
 ### Fixed
 
 - **`examples/worker_example.c` now defines the Worker lifecycle exports**

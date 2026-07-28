@@ -1,6 +1,6 @@
 # Modern C Web Library Documentation
 
-**Version 2.0.0**  
+**Version 2.0.1**  
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18793559.svg)](https://doi.org/10.5281/zenodo.18793559)
 
 Welcome to the documentation for Modern C Web Library, a pure C web framework with zero external dependencies.
