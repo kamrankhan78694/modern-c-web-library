@@ -39,16 +39,16 @@ docker run -d -p 8080:8080 --name weblib ghcr.io/kamrankhan78694/modern-c-web-li
 
 ## Available Images
 
-- `latest` - Latest stable release (currently 2.0.0)
-- `2.0.0` - Exact release version
+- `latest` - Latest stable release (currently 2.0.1)
+- `2.0.1` - Exact release version
 - `2.0` - Major.minor version
 - `2` - Major version only
 
-The tags CI publishes carry **no `v` prefix**: `.github/workflows/docker-publish.yml` uses `docker/metadata-action` with `type=semver,pattern={{version}}`, which strips the `v` from the git tag. Pull `...:2.0.0`, not `...:v2.0.0` — the latter is not a tag CI creates, and will normally come back as `manifest unknown`. (The older `publish-package.sh` helper does push a `v`-prefixed tag, so a stale `v`-prefixed tag may still linger in the registry; see [PUBLISH_GUIDE.md](PUBLISH_GUIDE.md).)
+The tags CI publishes carry **no `v` prefix**: `.github/workflows/docker-publish.yml` uses `docker/metadata-action` with `type=semver,pattern={{version}}`, which strips the `v` from the git tag. Pull `...:2.0.1`, not `...:v2.0.1` — the latter is not a tag CI creates, and will normally come back as `manifest unknown`. (The older `publish-package.sh` helper does push a `v`-prefixed tag, so a stale `v`-prefixed tag may still linger in the registry; see [PUBLISH_GUIDE.md](PUBLISH_GUIDE.md).)
 
 ## Features
 
-### What's in the Image (2.0.0)
+### What's in the Image (2.0.1)
 
 ✅ **WebSocket Support** (RFC 6455)
 - Automatic ping/pong handling
@@ -184,7 +184,8 @@ The repository has no published throughput or latency benchmarks. If numbers mat
 
 ## Version History
 
-- **v2.0.0** (2026-07-27) - Current release
+- **v2.0.1** (2026-07-28) - Current release
+- **v2.0.0** (2026-07-27) - Pure-C TLS 1.3, WASM & Workers, security hardening
 - **v1.0.0** (2026-02-22) - First stable release
 - **v0.9.0** (2026-02-20) - Performance and observability (cache, metrics, gzip, async WebSocket)
 - **v0.3.0** (2025-11-14) - WebSocket frame processing (threaded mode)

@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/kamrankhan78694/modern-c-web-library)](https://github.com/kamrankhan78694/modern-c-web-library/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **Version 2.0.0** — pure C web framework with zero external dependencies. The HTTP,
+> **Version 2.0.1** — pure C web framework with zero external dependencies. The HTTP,
 > WebSocket, and middleware stack is stable; the new pure-C TLS 1.3
 > server that ships in 2.0.0 is **experimental and unaudited** — see
 > [TLS 1.3 / HTTPS](#experimental-tls-13--https-off-by-default).
