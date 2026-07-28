@@ -10,7 +10,7 @@ TLS suites (`TlsTests`, `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, 
 `TlsHttpTests`, `TlsInteropOpenssl`).
 
 The audit itself was performed against the **129 tests** present at the time (commits `839b244` /
-`cc665d9`). `tests/test_weblib.c` now runs **172 tests**. The 37 added between that audit and test
+`cc665d9`). `tests/test_weblib.c` now runs **173 tests**. The 37 added between that audit and test
 166 are listed in their own table below with the position they occupy in `main()`; they have **not**
 been reviewed for false greens. Six more were added after that table was written and are named at
 the end of it — 37 + 6 accounts for the gap between 129 and 172.

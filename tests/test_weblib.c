@@ -4494,6 +4494,52 @@ static void _naive_param_handler(http_request_t *req, http_response_t *res) {
  * parameter itself and returns its own 400 — the check passed while the library
  * was doing nothing.
  */
+/*
+ * A second router must not silence the first.
+ *
+ * The "has the other half already counted this request?" decision was a single
+ * process-global flag, but middleware and hooks are per-router. So a router
+ * carrying only the metrics middleware stopped counting the moment ANY other
+ * router in the process called metrics_register() — its traffic was counted
+ * nowhere, silently, and the header still promised middleware-only wiring
+ * worked. Measured before the fix: six requests, total_requests 0.
+ */
+void test_metrics_second_router_does_not_silence_first(void) {
+    TEST("metrics (middleware-only router keeps counting when another registers)");
+
+    metrics_middleware_destroy();
+
+    /* Public router: metrics middleware, no endpoint. */
+    router_t *pub = router_create();
+    ASSERT(pub != NULL);
+    middleware_fn_t mw = metrics_middleware_create();
+    ASSERT(mw != NULL);
+    ASSERT(router_use_middleware(pub, mw) == 0);
+    router_add_route(pub, HTTP_GET, "/ok", _ok_handler);
+
+    /* Admin router elsewhere in the same process mounts the endpoint. */
+    router_t *adm = router_create();
+    ASSERT(adm != NULL);
+    ASSERT(metrics_register(adm) == 0);
+
+    for (int i = 0; i < 6; i++) {
+        http_request_t req = {0};
+        http_response_t res = {0};
+        req.method = HTTP_GET;
+        req.path = "/ok";
+        router_route(pub, &req, &res);
+        _test_free_header_list(res.headers);
+        free(res.body);
+    }
+
+    ASSERT(_metrics_top_number("total_requests") == 6);   /* was 0 */
+
+    router_destroy(pub);
+    router_destroy(adm);
+    metrics_middleware_destroy();
+    PASS();
+}
+
 void test_undecodable_path_param_refuses_request(void) {
     TEST("router (encoded NUL in a path param → 400, handler not run)");
 
@@ -5588,6 +5634,7 @@ int main(void) {
     test_metrics_middleware_only_still_counts();
     test_response_hook_registration_is_idempotent();
     test_undecodable_path_param_refuses_request();
+    test_metrics_second_router_does_not_silence_first();
     test_metrics_endpoint();
 
     /* Phase 9: Compression tests */

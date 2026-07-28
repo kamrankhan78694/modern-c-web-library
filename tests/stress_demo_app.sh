@@ -91,6 +91,15 @@ done
 B="http://127.0.0.1:$PORT"
 code() { curl -s -m 5 -o /dev/null -w '%{http_code}' "$@"; }
 
+# `timeout` is GNU coreutils and is absent from a stock macOS runner, so a bare
+# `timeout N nc` there is "command not found" — the pipeline yields nothing and
+# every probe reports the server said nothing. nc's own -w carries the deadline
+# (BSD and GNU both support it); this is only an extra upper bound when present.
+NC_TIMEOUT=""
+for _t in timeout gtimeout; do
+    command -v "$_t" >/dev/null 2>&1 && { NC_TIMEOUT="$_t 5"; break; }
+done
+
 echo "=== end-to-end stress: real server on port $PORT ==="
 echo
 
@@ -120,7 +129,19 @@ is "unknown path             -> 404"     "$(code "$B/no-such-route")" "404"
 # RFC 9110 §9.3.2: HEAD behaves as GET without a body. Was 404 before the router
 # learned to fall back to the GET route.
 is "HEAD /                  -> 200"     "$(curl -s -m5 -I -o /dev/null -w '%{http_code}' "$B/")" "200"
-is "HEAD / sends no body"                "$(curl -s -m5 -I "$B/" | awk 'f{c+=length($0)} /^\r?$/{f=1} END{print c+0}')" "0"
+# Read the wire, not curl's stdout. `curl -I` discards a HEAD response's body
+# and never prints it, so counting bytes in its output returned 0 no matter what
+# the server actually sent — measured: 0 for a resource whose body is 3232 bytes.
+# The check could not fail, which is precisely the defect it was meant to guard
+# (the async writer shipped a body on HEAD). nc shows exactly what arrived.
+if command -v nc >/dev/null 2>&1; then
+    head_wire="$(printf 'HEAD / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n' \
+                 | $NC_TIMEOUT nc -w 3 127.0.0.1 "$PORT" 2>/dev/null \
+                 | awk 'f{c+=length($0)+1} /^\r?$/{f=1} END{print c+0}')"
+    is "HEAD / sends no body (read off the socket)" "${head_wire:-unread}" "0"
+else
+    echo "  skip  nc not installed — cannot read the HEAD response off the socket"
+fi
 is "HEAD / keeps Content-Length"         "$(curl -s -m5 -I "$B/" | grep -ci '^content-length:' | tr -d ' ')" "1"
 is "HEAD /nope stays        -> 404"     "$(curl -s -m5 -I -o /dev/null -w '%{http_code}' "$B/nope")" "404"
 # Path params are percent-decoded before the handler sees them.
@@ -150,6 +171,7 @@ is "path traversal (raw dot-segments) -> 404" \
 is "8KB URL                 -> 414"  "$(code "$B/api/greet/$(printf 'a%.0s' $(seq 1 8000))")" "414"
 is "body over MAX_BODY_BYTES-> 413" \
    "$(python3 -c 'import sys;sys.stdout.write("{\"m\":\""+"x"*1200000+"\"}")' 2>/dev/null | code -X POST --data-binary @- "$B/api/echo")" "413"
+# (NC_TIMEOUT is defined above, before its first use in phase [2].)
 # `timeout` is GNU coreutils and is NOT installed on a stock macOS runner, so a
 # bare `timeout 3 nc` there is a "command not found" — the pipeline yields an
 # empty reply and every probe reports the server said nothing. That is exactly
@@ -157,10 +179,6 @@ is "body over MAX_BODY_BYTES-> 413" \
 # in fact answering 400 correctly. nc's own -w carries the deadline (BSD and
 # GNU nc both support it); the external timeout is only an extra upper bound
 # when the platform happens to have one.
-NC_TIMEOUT=""
-for _t in timeout gtimeout; do
-    command -v "$_t" >/dev/null 2>&1 && { NC_TIMEOUT="$_t 5"; break; }
-done
 if command -v nc >/dev/null 2>&1; then
     for junk in 'GARBAGE\r\n\r\n' 'GET\r\n\r\n' 'GET / HTTP/9.9\r\n\r\n'; do
         line="$(printf "$junk" | $NC_TIMEOUT nc -w 3 127.0.0.1 "$PORT" 2>/dev/null | head -1 | tr -d '\r')"
@@ -335,6 +353,24 @@ fi
 echo
 
 echo "=== $((checks - fails))/$checks checks passed ==="
+
+# A floor on the number of checks, not just on their results.
+#
+# Several checks are wrapped in "if the tool exists" guards, and each one that
+# quietly evaluates false subtracts an assertion while the suite still prints a
+# green total — a 36/36 pass and a 38/38 pass look equally healthy. Individual
+# guards now announce a skip, but that is a convention, and the next guard added
+# without one would reopen the hole silently. This makes the total itself an
+# assertion: if the environment is so reduced that a third of the suite vanished,
+# say so rather than reporting success.
+MIN_CHECKS="${STRESS_MIN_CHECKS:-30}"
+if [ "$checks" -lt "$MIN_CHECKS" ]; then
+    echo "FAIL  only $checks checks ran, expected at least $MIN_CHECKS —" >&2
+    echo "      too much of the suite was skipped for this run to mean anything." >&2
+    echo "      (raise STRESS_MIN_CHECKS deliberately if the floor is wrong)" >&2
+    fails=$((fails + 1))
+fi
+
 if [ "$fails" -gt 0 ]; then
     echo "--- server log ---" >&2
     cat "$TMP/srv.log" >&2

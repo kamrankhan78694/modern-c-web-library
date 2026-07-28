@@ -247,6 +247,56 @@ else
 fi
 echo
 
+# ---------------------------------------------------------------------------
+# 5. Documented unit-test counts agree WITH EACH OTHER.
+#    The suite-count check above says nothing about the number of tests inside
+#    WebLibTests, so that figure drifted freely: it sat at 166 in four files
+#    while the binary reported 172, and every check here still passed. The true
+#    value needs a build, which this script deliberately does not do — but
+#    disagreement between documents needs no build to detect, and every drift so
+#    far has shown up as exactly that.
+# ---------------------------------------------------------------------------
+echo "[5] documented unit-test counts agree with each other"
+
+TC_SEEN=""
+while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    case "$hit" in
+        CHANGELOG.md:*) continue ;;                       # release-scoped history
+        *baseline*|*20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) continue ;;
+        *stress_demo_app.sh*) continue ;;                 # narrative in a file header
+    esac
+    # Only claims ABOUT WebLibTests. A bare "N tests" matches unrelated prose —
+    # "the 37 added since", "129 tests present at the time" — and a checker that
+    # reports those as disagreement is noise, which is how checkers get disabled.
+    case "$hit" in
+        *WebLibTests*|*test_weblib*) ;;
+        *) continue ;;
+    esac
+    n="$(printf '%s' "$hit" | grep -oE '[0-9]+ (unit )?tests?' | grep -oE '^[0-9]+' | head -1)"
+    [ -z "$n" ] && continue
+    TC_SEEN="$TC_SEEN$n
+"
+done <<EOF
+$(git ls-files '*.md' | tr '\n' '\0' | xargs -0 grep -nE '[0-9]+ unit tests|\([0-9]+ tests\)|runs \*\*[0-9]+ tests\*\*' 2>/dev/null || true)
+EOF
+
+TC_UNIQ="$(printf '%s\n' "$TC_SEEN" | sed '/^$/d' | sort -u)"
+# printf '%s' (no \n) leaves no trailing newline, so `wc -l` reported 0 for a
+# single value and this check announced success having compared nothing — the
+# very failure mode it exists to catch. Count with a terminated line.
+TC_N="$(printf '%s\n' "$TC_UNIQ" | sed '/^$/d' | wc -l | tr -d ' ')"
+if [ "$TC_N" -eq 0 ]; then
+    pass "no documented unit-test counts to cross-check"
+elif [ "$TC_N" -eq 1 ]; then
+    pass "all documented unit-test counts agree ($TC_UNIQ)"
+else
+    fail "documented unit-test counts disagree: $(printf '%s' "$TC_UNIQ" | tr '\n' ' ')"
+    git ls-files '*.md' | tr '\n' '\0' | xargs -0 grep -nE '[0-9]+ unit tests|\([0-9]+ tests\)|runs \*\*[0-9]+ tests\*\*' 2>/dev/null \
+        | grep -v '^CHANGELOG.md:' | sed 's/^/          /'
+fi
+echo
+
 echo "=== $((checks - fails))/$checks checks passed ==="
 if [ "$fails" -gt 0 ]; then
     echo "FAILED: $fails check(s). These are mechanical facts, not style opinions —" >&2

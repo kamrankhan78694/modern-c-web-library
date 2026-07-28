@@ -136,6 +136,28 @@ int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware
 }
 
 /*
+ * Is this middleware function installed on this router?
+ *
+ * Exists because the metrics module has one process-global counter set but the
+ * router owns middleware and hooks per-router. Deciding "has the other half of
+ * metrics already counted this request?" from a global flag was wrong the moment
+ * a second router existed: a router carrying only the middleware stopped
+ * counting because a DIFFERENT router had registered the hook, and its traffic
+ * was counted nowhere. The question is per-router, so it is answered per-router.
+ */
+bool router_has_middleware(router_t *router, middleware_fn_t middleware) {
+    if (!router || !middleware) {
+        return false;
+    }
+    for (size_t i = 0; i < router->middleware_count; i++) {
+        if (router->middlewares[i] == middleware) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
  * Install a post-response hook. Idempotent: registering the same (hook,
  * user_data) pair again succeeds without adding a second entry.
  *

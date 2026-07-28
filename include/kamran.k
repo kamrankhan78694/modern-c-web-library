@@ -338,6 +338,14 @@ int router_add_response_hook(router_t *router, response_hook_fn_t hook,
                              void *user_data);
 
 /**
+ * Report whether a middleware function is installed on this router.
+ * @param router Router instance
+ * @param middleware Middleware function to look for
+ * @return true if installed on this router, false otherwise (or on NULL input)
+ */
+bool router_has_middleware(router_t *router, middleware_fn_t middleware);
+
+/**
  * Add middleware with per-instance user data to the router.
  * This enables multiple instances of the same middleware type with
  * different configurations (e.g., different rate limits per route group).
@@ -1712,11 +1720,18 @@ size_t cache_count(cache_t *cache);
  * Installing this middleware is therefore optional — metrics_register() alone is
  * enough to both serve GET /metrics and populate it.
  *
- * When NO response hook is installed, this middleware falls back to counting
- * request entry (total_requests and the per-method counts) exactly as it always
- * did, so middleware-only wiring keeps working. Status classes do not move in
- * that mode — they never did, which is issue #136 and the reason the hook
+ * This middleware counts request entry (total_requests and the per-method
+ * counts) on every router it is installed on, exactly as it always did, so
+ * middleware-only wiring keeps working. Status classes do not move without a
+ * response hook — they never did, which is issue #136 and the reason the hook
  * exists. Use metrics_register() to get status counts.
+ *
+ * Installing BOTH on the same router does not double-count: the hook sees that
+ * this router carries the middleware and records only the status class. But the
+ * total is then counted on the way IN, so a GET /metrics includes itself in
+ * total_requests while its own status lands after the JSON is rendered — the
+ * document is one ahead of its classes. metrics_register() ALONE avoids that,
+ * counts everything once at completion, and is what the examples use.
  *
  * Not thread-safe with respect to metrics_middleware_destroy(); call both during
  * setup and teardown, not while requests are in flight.

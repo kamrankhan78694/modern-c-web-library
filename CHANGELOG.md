@@ -128,10 +128,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`HEAD` sent a body in async mode.** The RFC 9110 §9.3.2 fix landed only in
   the threaded `send_response()`; the event-loop writer has its own send loop and
   kept putting `Content-Length` bytes on the wire after a HEAD response's headers.
-  The bug arrived *with* the fix — before the GET fallback existed, `HEAD` simply
-  404'd — and it is worse than cosmetic: on a keep-alive connection the client
-  reads those bytes as the start of the next response, which is a response-queue
-  desync. Reproduced against the shipped `async_server` example, and the
+  This is **not** new in this release, and an earlier draft of this entry wrongly
+  said it was. At v2.0.1 the async writer had no body suppression at all, so in
+  async mode `HEAD /anything` already returned 404 headers followed by the 9-byte
+  `Not Found` body, and an application with an explicit `HTTP_HEAD` route got the
+  full handler body. The GET fallback widened the exposure to every path rather
+  than creating it. It is worse than cosmetic either way: on a keep-alive
+  connection the client reads those bytes as the start of the next response,
+  which is a response-queue desync — the request-smuggling family. Reproduced against the shipped `async_server` example, and the
   regression test pipelines `HEAD` then `GET` on one connection and asserts two
   cleanly framed responses.
 - **`/metrics` broke its own identity on the first WebSocket upgrade.**
@@ -184,8 +188,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the FD-leak and RSS checks were wrapped in guards that silently contributed
   zero checks when `lsof`/`ps` were missing; they now announce a skip.
 
+- **A second router silenced the first's metrics.** The "has the other half
+  already counted this request?" decision was one process-global flag, but
+  middleware and hooks belong to a router. So a router carrying only the metrics
+  middleware stopped counting the moment any *other* router in the process called
+  `metrics_register()`, and its traffic was counted nowhere — while the header
+  promised middleware-only wiring kept working. Measured: six requests through
+  such a router, `total_requests: 0`. The question is per-router and is now asked
+  per-router, via `router_has_middleware()`.
+- **Three checks in the HEAD tests could not fail.** `HEAD / sends no body`
+  counted bytes in `curl -I` output, and curl never writes a HEAD response's body
+  to stdout — measured 0 for a resource whose body is 3232 bytes, so the check
+  read 0 whatever the server sent. It now reads the response off a socket, and
+  catches 3233 bytes when body suppression is disabled. In the async test, the
+  `Content-Length` assertion searched the whole buffer, where the pipelined GET
+  response always supplied a match, and nothing asserted the GET body was
+  *present* — so the inverse desync, headers advertising a length with no body
+  behind them, passed silently. Both assertions are now scoped to one response,
+  and the test is verified to fail in both directions.
+
 ### Changed
 
+- **The examples wire metrics with `metrics_register()` alone.** Adding the
+  middleware as well is supported and does not double-count, but it counts the
+  total on the way *in*, so a `/metrics` scrape includes itself in
+  `total_requests` while its own status lands after the JSON is rendered. The
+  hook alone counts everything once, at completion, and the identity is exact.
+- **`tools/check-consistency.sh` cross-checks documented unit-test counts.** The
+  suite-count check said nothing about the number of tests inside `WebLibTests`,
+  so that figure sat at 166 in four files while the binary reported 172 and every
+  check still passed. The true value needs a build, which this script does not
+  do — but disagreement *between* documents needs no build, and every drift so
+  far has taken exactly that form. Its first implementation reported success
+  having compared nothing (`printf '%s'` leaves no trailing newline, so `wc -l`
+  returned 0 for a single value); it is verified in both directions now.
+- **The end-to-end suite asserts a floor on how many checks ran.** Guarded checks
+  that quietly evaluate false subtract an assertion while the total still prints
+  green — 36/36 and 38/38 look equally healthy. The count is now itself an
+  assertion.
 - **`examples/demo_app` states its real exposure.** It printed a `localhost` URL
   while `http_server_listen()` binds `INADDR_ANY`, so the demo — unauthenticated,
   with `Access-Control-Allow-Origin: *` — was reachable from the network.

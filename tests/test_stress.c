@@ -1343,22 +1343,42 @@ void test_stress_async_head_has_no_body(void) {
     buf[total] = '\0';
     close(sock);
 
-    /* Exactly two responses, and the HEAD one must be header-only. */
+    /* Exactly two responses. */
     int status_lines = 0;
     for (const char *p = buf; (p = strstr(p, "HTTP/1.1 200")) != NULL; p++) {
         status_lines++;
     }
     ASSERT(status_lines == 2);
 
-    /* The HEAD response ends at the first header terminator; the next byte must
-     * begin the second response, not dummy_handler's "OK" body. */
+    /* Split them. The HEAD response ends at the first header terminator, and
+     * everything after it must be the GET response. Every assertion below is
+     * scoped to one side or the other: searching the whole buffer let the GET
+     * response satisfy checks meant for the HEAD one, so they could not fail. */
     const char *first_end = strstr(buf, "\r\n\r\n");
     ASSERT(first_end != NULL);
-    ASSERT(strncmp(first_end + 4, "HTTP/1.1 200", 12) == 0);
+    const char *second = first_end + 4;
 
-    /* Content-Length is still reported: HEAD describes the resource GET would
-     * return, it does not claim the body is empty. */
-    ASSERT(strstr(buf, "Content-Length: 2") != NULL);
+    char head_resp[2048];
+    size_t head_len = (size_t)(second - buf);
+    ASSERT(head_len < sizeof(head_resp));
+    memcpy(head_resp, buf, head_len);
+    head_resp[head_len] = '\0';
+
+    /* HEAD: headers only, and Content-Length still describes the resource GET
+     * would return — HEAD does not claim the body is empty. Scoped to the HEAD
+     * response; searching `buf` matched the GET response's own Content-Length
+     * and so could never fail. */
+    ASSERT(strncmp(head_resp, "HTTP/1.1 200", 12) == 0);
+    ASSERT(strstr(head_resp, "Content-Length: 2") != NULL);
+
+    /* The GET response begins immediately — no leaked HEAD body — AND carries
+     * its body. Asserting only the ABSENCE of the HEAD body would be satisfied
+     * by a server that suppressed every body, which is the inverse desync:
+     * headers advertising Content-Length with nothing behind them. */
+    ASSERT(strncmp(second, "HTTP/1.1 200", 12) == 0);
+    const char *second_end = strstr(second, "\r\n\r\n");
+    ASSERT(second_end != NULL);
+    ASSERT(strcmp(second_end + 4, "OK") == 0);
 
     http_server_stop(server);
     pthread_join(th, NULL);

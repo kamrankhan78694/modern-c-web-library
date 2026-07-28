@@ -235,8 +235,12 @@ int main(int argc, char **argv) {
     middleware_fn_t cors_mw = cors_middleware_create(&cors);
     if (cors_mw) router_use_middleware(router, cors_mw);
 
-    middleware_fn_t metrics_mw = metrics_middleware_create();
-    if (metrics_mw) router_use_middleware(router, metrics_mw);
+    /* No metrics middleware: metrics_register() below installs the response
+     * hook that does all the counting, at completion, so total_requests always
+     * equals the sum of the status classes. Adding the middleware as well is
+     * supported but counts the total on the way IN, which makes a /metrics
+     * scrape include itself in the total while its own status lands after the
+     * JSON is rendered — the document then disagrees with itself by one. */
 
     router_add_route(router, HTTP_GET,  "/",                handle_index);
     router_add_route(router, HTTP_GET,  "/api/info",        handle_info);

@@ -86,6 +86,37 @@ static int _metrics_init(void) {
     return 0;
 }
 
+/* Classify a status into exactly one bucket. Caller holds the lock. */
+static void _bump_status_locked(metrics_data_t *m, int status) {
+    if (status >= 100 && status < 200)
+        m->status_1xx++;
+    else if (status >= 200 && status < 300)
+        m->status_2xx++;
+    else if (status >= 300 && status < 400)
+        m->status_3xx++;
+    else if (status >= 400 && status < 500)
+        m->status_4xx++;
+    else if (status >= 500 && status < 600)
+        m->status_5xx++;
+    else
+        m->status_other++;
+}
+
+/*
+ * Record only the status class, for the case where the metrics middleware is
+ * installed on the same router and has already counted this request's total and
+ * method on the way in. Not the public metrics_record_status(), which stands
+ * down whenever automatic recording is active.
+ */
+static void metrics_record_status_internal(int status) {
+    metrics_data_t *m = _metrics;
+    if (!m)
+        return;
+    pthread_mutex_lock(&m->lock);
+    _bump_status_locked(m, status);
+    pthread_mutex_unlock(&m->lock);
+}
+
 /*
  * Record one completed request: totals, method, and status class, all under a
  * single lock acquisition.
@@ -116,18 +147,7 @@ static void _metrics_record(const http_request_t *req, int status) {
             m->method_counts[method_idx]++;
     }
 
-    if (status >= 100 && status < 200)
-        m->status_1xx++;
-    else if (status >= 200 && status < 300)
-        m->status_2xx++;
-    else if (status >= 300 && status < 400)
-        m->status_3xx++;
-    else if (status >= 400 && status < 500)
-        m->status_4xx++;
-    else if (status >= 500 && status < 600)
-        m->status_5xx++;
-    else
-        m->status_other++;
+    _bump_status_locked(m, status);
 
     pthread_mutex_unlock(&m->lock);
 }
@@ -157,13 +177,11 @@ static bool _metrics_middleware(http_request_t *req, http_response_t *res, void 
         return true;
 
     pthread_mutex_lock(&m->lock);
-    if (!m->hook_installed) {
-        m->total_requests++;
-        if (req) {
-            int method_idx = (int)req->method;
-            if (method_idx >= 0 && method_idx < 7)
-                m->method_counts[method_idx]++;
-        }
+    m->total_requests++;
+    if (req) {
+        int method_idx = (int)req->method;
+        if (method_idx >= 0 && method_idx < 7)
+            m->method_counts[method_idx]++;
     }
     pthread_mutex_unlock(&m->lock);
 
@@ -220,18 +238,7 @@ void metrics_record_status(int status_code) {
         return;
     }
 
-    if (status_code >= 100 && status_code < 200)
-        _metrics->status_1xx++;
-    else if (status_code >= 200 && status_code < 300)
-        _metrics->status_2xx++;
-    else if (status_code >= 300 && status_code < 400)
-        _metrics->status_3xx++;
-    else if (status_code >= 400 && status_code < 500)
-        _metrics->status_4xx++;
-    else if (status_code >= 500 && status_code < 600)
-        _metrics->status_5xx++;
-    else
-        _metrics->status_other++;
+    _bump_status_locked(_metrics, status_code);
 
     pthread_mutex_unlock(&_metrics->lock);
 }
@@ -337,10 +344,21 @@ void metrics_handler(http_request_t *req, http_response_t *res) {
  */
 static void _metrics_response_hook(http_request_t *req, http_response_t *res,
                                    void *user_data) {
-    (void)user_data;
-    if (res) {
-        _metrics_record(req, (int)res->status);
+    if (!res) {
+        return;
     }
+    /* user_data is the router this hook was installed on. If that same router
+     * also carries the metrics middleware, the middleware already counted this
+     * request's total and method on the way in, so record only the status class
+     * and do not count it twice. Asked per-router, not per-process: a global
+     * answer silently zeroed a middleware-only router as soon as any other
+     * router in the process registered the endpoint. */
+    router_t *router = (router_t *)user_data;
+    if (router && router_has_middleware(router, _metrics_middleware)) {
+        metrics_record_status_internal((int)res->status);
+        return;
+    }
+    _metrics_record(req, (int)res->status);
 }
 
 int metrics_register(router_t *router) {
@@ -365,7 +383,7 @@ int metrics_register(router_t *router) {
     /* Record status classes automatically. Without this the counters only move
      * if the application calls metrics_record_status() by hand after every
      * response, which nothing documented and no example did. */
-    if (router_add_response_hook(router, _metrics_response_hook, NULL) != 0) {
+    if (router_add_response_hook(router, _metrics_response_hook, router) != 0) {
         return -1;
     }
 

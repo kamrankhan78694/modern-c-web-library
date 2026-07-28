@@ -197,7 +197,7 @@ Throughput and latency figures, with the caveats that belong on them, are in
 
 ## Code Quality
 
-- **7 ctest suites in a default build** — `WebLibTests` (172 unit tests), `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `StressDemoApp`, `WasmTests`. Building with `-DWEBLIB_ENABLE_TLS=ON` adds 6 covering the experimental TLS layer, for 13 in total; adding `-DWEBLIB_TLS_TEST_HOOKS=ON` adds a 7th, for 14. Run them all with `cd build && ctest --output-on-failure`.
+- **7 ctest suites in a default build** — `WebLibTests` (173 unit tests), `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `StressDemoApp`, `WasmTests`. Building with `-DWEBLIB_ENABLE_TLS=ON` adds 6 covering the experimental TLS layer, for 13 in total; adding `-DWEBLIB_TLS_TEST_HOOKS=ON` adds a 7th, for 14. Run them all with `cd build && ctest --output-on-failure`.
 - **Valgrind clean** — the default build runs the full suite under Valgrind in CI, and every binary's result gates the job: a definite or indirect leak anywhere fails it. The TLS build is covered by an ASan/UBSan run instead, not Valgrind.
 - **Static analysis** — Clean builds on GCC/Clang with `-Wall -Wextra -pedantic`
 - **CI/CD** — `primary-checks` (gcc build, full suite, Valgrind), `clang-check`, `tls-check` (TLS build plus an ASan/UBSan run of the TLS suites), `macos-check` (pull requests only), and `docker-image-check`

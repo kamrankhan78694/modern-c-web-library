@@ -1438,7 +1438,10 @@ void metrics_record_status(int status_code);
 ```
 
 `GET /metrics` returns JSON: total request count, a per-method breakdown, status code
-ranges (2xx/3xx/4xx/5xx), and uptime.
+classes, and uptime. The classes are `1xx`, `2xx`, `3xx`, `4xx`, `5xx` and
+`other`; together they account for every request in `total_requests`, so a
+scraper must read all six. `1xx` covers WebSocket upgrades (101) and `other`
+anything outside 100–599 — reading only 2xx–5xx silently drops them.
 
 ---
 
