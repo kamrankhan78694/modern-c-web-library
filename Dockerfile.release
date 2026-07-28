@@ -9,7 +9,7 @@ FROM gcc:11 AS builder
 
 LABEL org.opencontainers.image.source="https://github.com/kamrankhan78694/modern-c-web-library"
 LABEL org.opencontainers.image.description="Modern C Web Library - Production-ready HTTP and WebSocket server"
-LABEL org.opencontainers.image.version="2.0.1"
+LABEL org.opencontainers.image.version="2.1.0"
 LABEL org.opencontainers.image.licenses="MIT"
 
 # Install build dependencies
@@ -38,7 +38,7 @@ FROM debian:bullseye-slim
 
 LABEL org.opencontainers.image.source="https://github.com/kamrankhan78694/modern-c-web-library"
 LABEL org.opencontainers.image.description="Modern C Web Library - Production-ready HTTP and WebSocket server"
-LABEL org.opencontainers.image.version="2.0.1"
+LABEL org.opencontainers.image.version="2.1.0"
 LABEL org.opencontainers.image.licenses="MIT"
 
 # Install only runtime dependencies

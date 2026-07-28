@@ -239,9 +239,21 @@ jobs:
       - name: Run tests
         run: cd build && ctest --output-on-failure --timeout 120
 
-  # Production Docker image — validates that the release image builds
-  # and contains working executables.  Only runs when Dockerfiles or
-  # source code change (skipped for docs-only / CI-only edits).
+  # Production Docker image — validates that the RELEASE image builds and
+  # contains working executables.
+  #
+  # It must build Dockerfile.release, not Dockerfile: the published image comes
+  # from Dockerfile.release (docker-publish.yml), and the two differ materially
+  # — the release file builds -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF,
+  # ships websocket_echo_server (its default entrypoint), drops privileges to a
+  # non-root user and carries the version LABELs. Pointing this job at the plain
+  # Dockerfile meant a green "Production Docker Image" check proved nothing
+  # about the artifact being released: the first build of Dockerfile.release
+  # happened inside the publish workflow, after the tag was already pushed.
+  #
+  # This job runs on every push and PR. An earlier comment here claimed it was
+  # path-filtered to Dockerfile/source changes, but no `paths:` filter or `if:`
+  # ever existed to implement that.
   docker-image-check:
     name: Production Docker Image
     runs-on: ubuntu-latest
@@ -259,7 +271,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
+          file: ./Dockerfile.release
           load: true
           tags: modern-c-weblib:latest
           cache-from: type=gha
@@ -267,8 +279,24 @@ jobs:
 
       - name: Verify production image
         run: |
+          # websocket_echo_server is included deliberately: it is the release
+          # image's default entrypoint, and the old check (which built the plain
+          # Dockerfile) never looked for it.
           docker run --rm modern-c-weblib:latest /bin/bash -c '
-            echo "Checking simple_server..." && test -x /app/simple_server && echo "  OK" &&
-            echo "Checking async_server..."  && test -x /app/async_server  && echo "  OK" &&
+            echo "Checking simple_server..."         && test -x /app/simple_server         && echo "  OK" &&
+            echo "Checking async_server..."          && test -x /app/async_server          && echo "  OK" &&
+            echo "Checking websocket_echo_server..." && test -x /app/websocket_echo_server && echo "  OK" &&
             echo "Production image verified successfully"
           '
+
+      - name: Verify the image version LABEL matches CMakeLists.txt
+        run: |
+          # The release image carries org.opencontainers.image.version. It went
+          # stale before (DOCKER_PACKAGE.md shipped a 2.0.0 badge through two
+          # releases), so bind it to the build files rather than to review.
+          want="$(sed -n 's/^project(.*VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -1)"
+          got="$(docker image inspect modern-c-weblib:latest \
+                 --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+          echo "CMakeLists.txt: $want / image LABEL: $got"
+          test -n "$want" || { echo "could not read version from CMakeLists.txt"; exit 1; }
+          test "$want" = "$got" || { echo "image version LABEL disagrees with CMakeLists.txt"; exit 1; }
