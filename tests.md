@@ -10,9 +10,10 @@ TLS suites (`TlsTests`, `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, 
 `TlsHttpTests`, `TlsInteropOpenssl`).
 
 The audit itself was performed against the **129 tests** present at the time (commits `839b244` /
-`cc665d9`). `tests/test_weblib.c` now runs **172 tests**. The 37 added since are listed in their own
-table below with the position they occupy in `main()`; they have **not** been reviewed for false
-greens.
+`cc665d9`). `tests/test_weblib.c` now runs **172 tests**. The 37 added between that audit and test
+166 are listed in their own table below with the position they occupy in `main()`; they have **not**
+been reviewed for false greens. Six more were added after that table was written and are named at
+the end of it — 37 + 6 accounts for the gap between 129 and 172.
 
 Two things to know about the main table before you read it. The `#` column is audit order, which
 for tests added mid-list no longer matches current `main()` order. And the **Printed name** column
@@ -211,6 +212,20 @@ test was verified to assert". `main() #` is the test's position in the current `
 | 164 | `test_header_injection_rejected` | `header injection (CRLF in value → rejected)` | ❓ |
 | 165 | `test_websocket_fragment_oom` | `websocket fragment buffer OOM → clean close` | ❓ |
 | 166 | `test_websocket_oversized_frame` | `websocket oversized frame rejected (DoS guard)` | ❓ |
+
+Six further tests were added by the response-hook work and are not numbered above:
+
+| Test | Covers |
+|------|--------|
+| `test_metrics_status_counted_through_router` | #136: a real route through `router_route()` moves the status counters |
+| `test_metrics_totals_match_status_classes` | `total_requests` equals the sum of the status classes |
+| `test_metrics_identity_holds_for_1xx` | a `101` upgrade does not break that identity |
+| `test_metrics_middleware_only_still_counts` | middleware without `metrics_register()` still counts |
+| `test_response_hook_registration_is_idempotent` | a duplicate hook is not installed twice |
+| `test_undecodable_path_param_refuses_request` | `%00` in a path parameter → 400, handler not run |
+
+Unlike the rows above, each of these was verified to FAIL with its fix reverted, so none is a false
+green.
 
 ---
 

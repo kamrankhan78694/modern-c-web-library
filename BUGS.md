@@ -35,6 +35,8 @@ fixed — see the summary table below. Two things it deliberately does *not* cov
 | 10 | **Low** | Auth / CSRF Middleware | **Fixed** | `memset()` used instead of `secure_zero()` to wipe sensitive data — compiler may optimize away |
 | 11 | **Low** | HTTP Response | **Open** | `http_response_send_text()` *appends* `Content-Type` instead of replacing it, so a handler that then sets its own emits two — invalid per RFC 9110 |
 | 12 | **Low** | Router / Request | **Open** | Route parameters allocated by `router_route()` have no public free: `http_request_destroy()` is internal, so code driving the router directly leaks one node + key + value per parameter |
+| 13 | **Low** | HTTP Server (shutdown) | **Open** | `http_server_stop()` closes and clears `server->socket_fd` while the accept thread may be reading it — a close-while-in-use race confined to shutdown |
+| 14 | **Low** | Test infrastructure | **Open** | `tests/test_stress.c` binds 15 hardcoded ports with no retry, so back-to-back runs fail on `http_server_listen()` — flaky under rapid reruns |
 
 ---
 
@@ -312,6 +314,40 @@ mirrors the node layout, which is exactly the sort of copy that rots when the st
 
 **Fix direction:** export `http_request_destroy()`, or add a narrow
 `http_request_clear_params()`. Either is additive.
+
+### BUG-13: `socket_fd` closed from another thread during shutdown (Low) — ⚠️ OPEN
+
+In threaded mode `http_server_stop()` calls `shutdown()`, `close()`, then sets
+`server->socket_fd = -1` from the caller's thread, while the accept thread may be inside — or about
+to enter — `accept(server->socket_fd)`. Closing the descriptor is what unblocks `accept()`, so the
+close is deliberate; the race is the unsynchronised read of the field.
+
+Benign outcome: the accept thread reads `-1` and `accept()` fails with `EBADF`, which the loop
+handles. Not benign: between `close()` and the next `accept()`, another thread opens anything and is
+handed the same descriptor number, so `accept()` runs on an unrelated file.
+
+Confined to shutdown, and it predates the response-hook work (surrounding code dates to
+2025-11 / 2026-02), so it is recorded rather than fixed alongside unrelated changes.
+
+**Fix direction:** guard the field with the server mutex, or wake the accept thread through a
+self-pipe and let it close its own descriptor.
+
+### BUG-14: `test_stress.c` uses hardcoded ports with no bind retry (Low) — ⚠️ OPEN
+
+`tests/test_stress.c` binds fifteen fixed ports (19000–19016), each with a bare
+`ASSERT(http_server_listen(server, port) == 0)`. `SO_REUSEADDR` is set, but running the suite
+repeatedly in quick succession still leaves enough sockets in `TIME_WAIT` that a bind occasionally
+fails — and the test then reports a product failure for an environment condition.
+
+Observed at roughly 1 run in 3 while re-running `ctest` back to back, failing at
+`test_stress.c:631` (port 19000) and `test_stress.c:1567` (port 19007). Both belong to pre-existing
+tests; the response-hook work added only 19016. A single CI run does not rerun the suite, which is
+why CI stays green; it bites whoever iterates locally.
+
+`tests/stress_demo_app.sh` already derives its port from its pid and retries five times.
+
+**Fix direction:** bind port 0 and read back the assigned port. That removes the shared namespace
+rather than making collisions rarer.
 
 ---
 

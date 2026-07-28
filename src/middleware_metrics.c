@@ -96,8 +96,10 @@ static int _metrics_init(void) {
  * at least one: the /metrics request had already bumped total_requests, but
  * its own status was not recorded until after the JSON had been rendered, so
  * the document it returned could never satisfy
- * status_2xx + status_3xx + status_4xx + status_5xx == total_requests.
- * Counting once, at completion, makes that identity hold.
+ * status_1xx + status_2xx + ... + status_other == total_requests.
+ * Counting once, at completion, makes that identity hold — and every status
+ * has a class to land in, which is why status_1xx and status_other exist: a
+ * 101 upgrade was previously counted in the total and classified nowhere.
  */
 static void _metrics_record(const http_request_t *req, int status) {
     metrics_data_t *m = _metrics;
