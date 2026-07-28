@@ -271,6 +271,13 @@ typedef struct async_connection {
     size_t header_len;
     size_t header_sent;
     size_t body_sent;
+    /* RFC 9110 §9.3.2: a HEAD response carries the headers GET would send,
+     * including Content-Length, but no body. The threaded path suppresses the
+     * body inside send_response(); the async writer has its own send loop and
+     * needs its own flag. Without it a HEAD response puts Content-Length bytes
+     * on the wire after the headers, and on a keep-alive connection the client
+     * reads them as the start of the next response — a response-queue desync. */
+    bool suppress_body;
     bool parser_initialized;
     bool response_ready;
     bool keep_alive;
@@ -297,7 +304,8 @@ static void free_connection(connection_t *conn);
 static bool rearm_keepalive(connection_t *conn);
 static void handle_websocket_connection(int client_fd, http_request_t *req);
 static bool response_forces_close(http_response_t *res);
-static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive);
+static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive,
+                          bool suppress_body);
 static void send_error_response(int client_fd, void *tls, http_status_t status, const char *message);
 static int send_all(int fd, void *tls, const char *buf, size_t len);
 
@@ -1260,7 +1268,8 @@ static void *handle_connection(void *arg) {
             }
 #endif
             /* Send the upgrade response */
-            send_response(client_fd, CONN_TLS(conn), conn->response, false);
+            send_response(client_fd, CONN_TLS(conn), conn->response, false,
+                          conn->request && conn->request->method == HTTP_HEAD);
 
             /* Enter WebSocket mode - this function won't return until WS closes */
             handle_websocket_connection(client_fd, conn->request);
@@ -1271,7 +1280,8 @@ static void *handle_connection(void *arg) {
         }
 
         keep_alive = conn->parser.keep_alive && !response_forces_close(conn->response);
-        send_response(client_fd, CONN_TLS(conn), conn->response, keep_alive);
+        send_response(client_fd, CONN_TLS(conn), conn->response, keep_alive,
+                      conn->request && conn->request->method == HTTP_HEAD);
 
         if (!keep_alive) {
             connection_open = false;
@@ -1704,7 +1714,13 @@ static bool response_forces_close(http_response_t *res) {
     return false;
 }
 
-static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive) {
+/*
+ * suppress_body: true for a HEAD request. RFC 9110 §9.3.2 — the response must
+ * carry the same headers GET would, including Content-Length, but no body. The
+ * handler already produced the body; we simply do not put it on the wire.
+ */
+static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive,
+                          bool suppress_body) {
     if (!res || res->sent) {
         return;
     }
@@ -1716,7 +1732,7 @@ static void send_response(int client_fd, void *tls, http_response_t *res, bool k
     }
 
     if (send_all(client_fd, tls, header_buf, header_len) == 0) {
-        if (res->body && res->body_length > 0) {
+        if (!suppress_body && res->body && res->body_length > 0) {
             send_all(client_fd, tls, res->body, res->body_length);
         }
     }
@@ -1732,7 +1748,7 @@ static void send_error_response(int client_fd, void *tls, http_status_t status, 
     }
     const char *body = message ? message : "";
     http_response_send_text(res, status, body);
-    send_response(client_fd, tls, res, false);
+    send_response(client_fd, tls, res, false, false);
     http_response_destroy(res);
 }
 
@@ -3160,6 +3176,10 @@ static bool async_on_parser_result(async_connection_t *conn, int fd, parser_resu
     conn->header_len = 0;
     conn->header_sent = 0;
     conn->body_sent = 0;
+    /* Decided here, per request, rather than read off conn->request at write
+     * time: the write handler can run after a keep-alive reset has moved the
+     * parser on, and a stale method there would suppress the wrong response. */
+    conn->suppress_body = (conn->request && conn->request->method == HTTP_HEAD);
 
     if (serialize_response(conn->response, keep_alive, &conn->header_buf, &conn->header_len) < 0) {
         event_loop_remove_fd(server->event_loop, fd);
@@ -3284,12 +3304,17 @@ static void async_write_handler(int fd, int events, void *user_data) {
             conn->header_sent += (size_t)sent;
         }
 
-        while (conn->body_sent < conn->response->body_length) {
-            if (!conn->response->body || conn->response->body_length == 0) {
-                conn->body_sent = conn->response->body_length;
+        /* Recomputed each iteration, not hoisted out of the for(;;): the loop
+         * continues on to the next pipelined response, which may have a
+         * different method and length. */
+        const size_t body_target = conn->suppress_body ? 0 : conn->response->body_length;
+
+        while (conn->body_sent < body_target) {
+            if (!conn->response->body || body_target == 0) {
+                conn->body_sent = body_target;
                 break;
             }
-            size_t remaining = conn->response->body_length - conn->body_sent;
+            size_t remaining = body_target - conn->body_sent;
             ssize_t sent = send(fd, conn->response->body + conn->body_sent, remaining, SEND_FLAGS);
             if (sent < 0) {
                 if (errno == EINTR) {
@@ -3314,7 +3339,7 @@ static void async_write_handler(int fd, int events, void *user_data) {
             }
         }
 
-        if (conn->header_sent < conn->header_len || conn->body_sent < conn->response->body_length) {
+        if (conn->header_sent < conn->header_len || conn->body_sent < body_target) {
             return;
         }
 

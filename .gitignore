@@ -57,6 +57,7 @@ dkms.conf
 # CMake build files
 build/
 build-asan/
+build-devserver/
 build-tls/
 build-tls-san/
 CMakeFiles/

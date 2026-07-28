@@ -36,16 +36,17 @@ The Modern C Web Library has successfully demonstrated that **enterprise-grade w
 
 **Achievement**: Comprehensive test suite with 100% pass rate.
 
-**Metrics**: `ctest` runs **6 suites** in a default build and **13** when the experimental TLS layer
+**Metrics**: `ctest` runs **7 suites** in a default build and **14** when the experimental TLS layer
 is enabled together with its test hooks. Both configurations pass 100%.
 
 ```
-Default build (TLS off) — 6 suites:
-  WebLibTests (166 tests), KamranHeaderTests, AsyncWebSocketTests,
-  StressTests (37 tests), WorkerTests (32 tests), WasmTests (16 tests)
+Default build (TLS off) — 7 suites:
+  WebLibTests (173 tests), KamranHeaderTests, AsyncWebSocketTests,
+  StressTests (37 tests), WorkerTests (32 tests), WasmTests (16 tests),
+  StressDemoApp (end-to-end against a real running server)
 
-With -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON — 13 suites:
-  the 6 above, plus TlsTests, TlsCryptoTests, TlsParseTests,
+With -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON — 14 suites:
+  the 7 above, plus TlsTests, TlsCryptoTests, TlsParseTests,
   TlsTransportTests, TlsFuzzTests, TlsHttpTests, TlsInteropOpenssl
 
 Failures: 0    Success rate: 100%
@@ -259,7 +260,7 @@ See `examples/tls_server.c`, which reads the two PEM files itself and passes the
 
 | Metric | Value | Status |
 |--------|-------|--------|
-| Test Suite Size | 6 ctest suites by default (13 with the experimental TLS build); 166 unit + 37 stress tests | ✅ Comprehensive |
+| Test Suite Size | 7 ctest suites by default (14 with the experimental TLS build); 173 unit + 38 stress tests, plus an end-to-end suite against a running server | ✅ Comprehensive |
 | Pass Rate | 100% in both configurations | ✅ All passing |
 | Failed Tests | 0 | ✅ Perfect score |
 | Code Coverage | Not measured — there is no gcov/lcov instrumentation in the build or CI | ⚠️ Not tracked |
@@ -399,7 +400,7 @@ the native path.
 
 ### Technical Validation ✅
 - Proof of concept complete and working
-- 100% pass rate across all 13 ctest suites; nine of the ten bugs tracked in [BUGS.md](BUGS.md) are closed, with BUG-4 (middleware singleton state) partially fixed
+- 100% pass rate across all 14 ctest suites; nine of the ten bugs tracked in [BUGS.md](BUGS.md) are closed, with BUG-4 (middleware singleton state) partially fixed
 - Valgrind gates every test binary on every push; AddressSanitizer and UndefinedBehaviorSanitizer gate the TLS suites. All clean.
 - Production-ready code quality for the plain-HTTP core. The TLS layer is explicitly **not** in that bucket: it is experimental, unaudited, and off by default.
 

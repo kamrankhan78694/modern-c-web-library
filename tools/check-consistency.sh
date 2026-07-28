@@ -157,16 +157,63 @@ pass "registered: $DEFAULT_N default, $WITH_TLS with TLS, $WITH_HOOKS with TLS+h
 # NOTE: this list started as the three repo totals and immediately produced a
 # false positive on a correct "7 ctest suites" (the TLS subtotal). A checker
 # that flags correct text gets switched off, so the subtotals are valid here.
+#
+# But accepting ANY of those numbers for EVERY claim is too weak, and it let a
+# real regression through: adding StressDemoApp took the default build from 6
+# suites to 7, and "6 ctest suites in a default build" stayed green because 6
+# was still valid as the TLS subtotal. The number was checked; the sentence it
+# appeared in was not. So when the claim names its configuration, hold it to
+# that configuration's count, and stay permissive only when it names none.
+#
+# Version-scoped history is exempt. A changelog entry or a "v2.0.0 baseline"
+# line is a record of what was true at a point in time; it is SUPPOSED to keep
+# saying 6 after the seventh suite lands. Rewriting those to match today would
+# falsify the history, and flagging them would train everyone to ignore this
+# check. Only present-tense claims about the current tree are held to account.
 bad=0
 while IFS= read -r hit; do
     [ -z "$hit" ] && continue
-    n="$(printf '%s' "$hit" | sed 's/.*[^0-9]\([0-9][0-9]*\)[^0-9]*suites.*/\1/')"
-    case "$n" in
-        "$DEFAULT_N"|"$WITH_TLS"|"$WITH_HOOKS"|"$TLS_N"|"$TLS_ONLY") ;;
-        *) bad=$((bad + 1)); printf '          %s\n' "$hit" ;;
+    case "$hit" in
+        CHANGELOG.md:*)      continue ;;   # release-scoped by definition
+        *baseline*|*20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) continue ;;
     esac
+    # One sentence often, and legitimately, states counts for MORE THAN ONE
+    # configuration: "13 suites rather than 14", "all 14 suites, plus the 7 TLS
+    # suites". Reading only the first number and holding it to only one
+    # configuration flagged several such correct lines. A checker that flags
+    # correct text gets switched off, so: take EVERY count on the line, and
+    # accept the union of the configurations the line actually names. That still
+    # closes the original hole — "6 ctest suites in a default build" names one
+    # configuration, so its 6 is measured against 7 and fails.
+    expected=""; label=""
+    case "$hit" in *default*)
+        expected="$expected $DEFAULT_N"; label="$label a default build," ;; esac
+    case "$hit" in *hooks*|*TLS_TEST_HOOKS*)
+        expected="$expected $WITH_HOOKS $HOOKS_N"; label="$label a TLS+hooks build," ;; esac
+    # "a TLS build" covers BOTH TLS configurations in prose: most lines saying
+    # "build with TLS on and run all N suites" refer to a configure that also
+    # passed -DWEBLIB_TLS_TEST_HOOKS=ON, without saying the word "hooks". The
+    # checker cannot know which configure a sentence means, so it accepts either
+    # total here. The precision that matters is not lost: a line naming the
+    # DEFAULT build is still held to exactly one number, which is the case that
+    # actually went stale.
+    case "$hit" in *TLS*|*tls*)
+        expected="$expected $WITH_TLS $WITH_HOOKS $TLS_N $TLS_ONLY $HOOKS_N"; label="$label a TLS build," ;; esac
+    if [ -z "$expected" ]; then
+        expected="$DEFAULT_N $WITH_TLS $WITH_HOOKS $TLS_N $TLS_ONLY"; label=" any configuration,"
+    fi
+
+    for n in $(printf '%s' "$hit" | grep -oE '[0-9]+ (ctest |test )?suites' | grep -oE '^[0-9]+'); do
+        hit_ok=0
+        for e in $expected; do [ "$n" = "$e" ] && hit_ok=1; done
+        if [ "$hit_ok" -eq 0 ]; then
+            bad=$((bad + 1))
+            printf '          %s\n' "$hit"
+            printf '            ^ says %s suites;%s has:%s\n' "$n" "${label% }" "$expected"
+        fi
+    done
 done <<EOF
-$(git ls-files '*.md' | tr '\n' '\0' | xargs -0 grep -nE '\*\*[0-9]+ (ctest )?suites\*\*|[0-9]+ ctest suites' 2>/dev/null || true)
+$(git ls-files '*.md' | tr '\n' '\0' | xargs -0 grep -nE '[0-9]+ (ctest |test )?suites|\*\*[0-9]+ (ctest |test )?suites\*\*' 2>/dev/null || true)
 EOF
 if [ "$bad" -eq 0 ]; then
     pass "every documented suite count matches a real configuration ($DEFAULT_N/$WITH_TLS/$WITH_HOOKS total, $TLS_N/$TLS_ONLY TLS)"
@@ -197,6 +244,56 @@ else
 
     if grep -q 'errors-for-leak-kinds' "$CI"; then pass "leak kinds stated explicitly"
     else fail "--errors-for-leak-kinds not stated; the gate relies on Valgrind's default"; fi
+fi
+echo
+
+# ---------------------------------------------------------------------------
+# 5. Documented unit-test counts agree WITH EACH OTHER.
+#    The suite-count check above says nothing about the number of tests inside
+#    WebLibTests, so that figure drifted freely: it sat at 166 in four files
+#    while the binary reported 172, and every check here still passed. The true
+#    value needs a build, which this script deliberately does not do — but
+#    disagreement between documents needs no build to detect, and every drift so
+#    far has shown up as exactly that.
+# ---------------------------------------------------------------------------
+echo "[5] documented unit-test counts agree with each other"
+
+TC_SEEN=""
+while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    case "$hit" in
+        CHANGELOG.md:*) continue ;;                       # release-scoped history
+        *baseline*|*20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) continue ;;
+        *stress_demo_app.sh*) continue ;;                 # narrative in a file header
+    esac
+    # Only claims ABOUT WebLibTests. A bare "N tests" matches unrelated prose —
+    # "the 37 added since", "129 tests present at the time" — and a checker that
+    # reports those as disagreement is noise, which is how checkers get disabled.
+    case "$hit" in
+        *WebLibTests*|*test_weblib*) ;;
+        *) continue ;;
+    esac
+    n="$(printf '%s' "$hit" | grep -oE '[0-9]+ (unit )?tests?' | grep -oE '^[0-9]+' | head -1)"
+    [ -z "$n" ] && continue
+    TC_SEEN="$TC_SEEN$n
+"
+done <<EOF
+$(git ls-files '*.md' | tr '\n' '\0' | xargs -0 grep -nE '[0-9]+ unit tests|\([0-9]+ tests\)|runs \*\*[0-9]+ tests\*\*' 2>/dev/null || true)
+EOF
+
+TC_UNIQ="$(printf '%s\n' "$TC_SEEN" | sed '/^$/d' | sort -u)"
+# printf '%s' (no \n) leaves no trailing newline, so `wc -l` reported 0 for a
+# single value and this check announced success having compared nothing — the
+# very failure mode it exists to catch. Count with a terminated line.
+TC_N="$(printf '%s\n' "$TC_UNIQ" | sed '/^$/d' | wc -l | tr -d ' ')"
+if [ "$TC_N" -eq 0 ]; then
+    pass "no documented unit-test counts to cross-check"
+elif [ "$TC_N" -eq 1 ]; then
+    pass "all documented unit-test counts agree ($TC_UNIQ)"
+else
+    fail "documented unit-test counts disagree: $(printf '%s' "$TC_UNIQ" | tr '\n' ' ')"
+    git ls-files '*.md' | tr '\n' '\0' | xargs -0 grep -nE '[0-9]+ unit tests|\([0-9]+ tests\)|runs \*\*[0-9]+ tests\*\*' 2>/dev/null \
+        | grep -v '^CHANGELOG.md:' | sed 's/^/          /'
 fi
 echo
 

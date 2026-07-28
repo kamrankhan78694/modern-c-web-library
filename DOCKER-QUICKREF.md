@@ -29,7 +29,7 @@ chmod +x docker-run.sh docker-verify.sh
 mkdir -p build && cd build
 cmake ..
 make                    # Build
-make test               # Run tests (6 ctest suites)
+make test               # Run tests (7 ctest suites)
 ./examples/async_server # Run server
 valgrind --leak-check=full ./tests/test_weblib  # Check memory
 ```
@@ -40,7 +40,7 @@ If you have already built on your **host**, the mounted `build/` holds a host CM
 
 | Command | Purpose |
 |---------|---------|
-| `./docker-run.sh test` | Run the default test suite (6 ctest suites; no TLS) |
+| `./docker-run.sh test` | Run the default test suite (7 ctest suites; no TLS) |
 | `./docker-run.sh dev` | Start dev shell |
 | `./docker-run.sh async` | Run async server |
 | `./docker-run.sh threaded 3000` | Run threaded server on port 3000 |
@@ -109,7 +109,7 @@ Before submitting a PR:
 - [ ] `./docker-run.sh test` - The 6 default ctest suites pass
 - [ ] `./docker-run.sh dev` then `mkdir -p build && cd build && cmake .. && make 2>&1 | grep -i warning` - No warnings
 - [ ] `valgrind --leak-check=full --errors-for-leak-kinds=definite,indirect --error-exitcode=1 ./tests/test_weblib` - exits 0 (no definite/indirect leaks; still-reachable is expected and not gated)
-- [ ] If you touched `src/tls/`: build with TLS on and run all 13 suites (below)
+- [ ] If you touched `src/tls/`: build with TLS on and run all 14 suites (below)
 - [ ] Code follows style guide (see CONTRIBUTING.md)
 
 `./docker-run.sh test` configures with a bare `cmake ..`, so `WEBLIB_ENABLE_TLS` stays OFF and none of `src/tls/` is compiled or tested. To cover it, inside `./docker-run.sh dev`:

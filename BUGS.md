@@ -33,6 +33,10 @@ fixed — see the summary table below. Two things it deliberately does *not* cov
 | 8 | **Medium** | Security Headers Middleware | **Fixed** | Shallow `memcpy` of config struct containing string pointers (dangling pointer risk) |
 | 9 | **Medium** | CSRF / Session / Auth | **Fixed** | Private functions duplicate public security APIs (`secure_random_bytes`, `secure_compare`) |
 | 10 | **Low** | Auth / CSRF Middleware | **Fixed** | `memset()` used instead of `secure_zero()` to wipe sensitive data — compiler may optimize away |
+| 11 | **Low** | HTTP Response | **Open** | `http_response_send_text()` *appends* `Content-Type` instead of replacing it, so a handler that then sets its own emits two — invalid per RFC 9110 |
+| 12 | **Low** | Router / Request | **Open** | Route parameters allocated by `router_route()` have no public free: `http_request_destroy()` is internal, so code driving the router directly leaks one node + key + value per parameter |
+| 13 | **Low** | HTTP Server (shutdown) | **Open** | `http_server_stop()` closes and clears `server->socket_fd` while the accept thread may be reading it — a close-while-in-use race confined to shutdown |
+| 14 | **Low** | Test infrastructure | **Open** | `tests/test_stress.c` binds 15 hardcoded ports with no retry, so back-to-back runs fail on `http_server_listen()` — flaky under rapid reruns |
 
 ---
 
@@ -273,9 +277,83 @@ secure_zero(decoded, sizeof(decoded));
 
 ---
 
+### BUG-11: `http_response_send_text()` appends `Content-Type` (Low) — ⚠️ OPEN
+
+`http_response_send_text()` adds its `Content-Type` with `replace_existing = false`
+([`src/http_server.c:1767`](src/http_server.c#L1767)), so it appends rather than replaces. A handler
+that sends text and then sets a different content type emits **two** `Content-Type` headers, which is
+invalid per RFC 9110 and which browsers resolve by rendering as plain text.
+
+There is also no `http_response_send_html()` helper, so serving HTML means sending text and then
+correcting the header — which is exactly the sequence that triggers this.
+
+**Workaround (used by `examples/demo_app.c`):** call `http_response_set_header()` *after* the send,
+never before. `set_header` replaces, so the ordering wins.
+
+```c
+http_response_send_text(res, HTTP_OK, PAGE);
+http_response_set_header(res, "Content-Type", "text/html; charset=utf-8");  /* must come after */
+```
+
+**Fix direction:** either make `send_text` replace, or add `send_html`. Both are source-compatible;
+making `send_text` replace changes observable behaviour for anyone currently relying on the append,
+which is unlikely to be deliberate. Covered by the end-to-end suite, which asserts exactly one
+`Content-Type` on `GET /`.
+
+### BUG-12: no public way to free route parameters (Low) — ⚠️ OPEN
+
+`router_route()` stores route parameters on the request via `http_request_set_param()`, which
+allocates a node, a key and a value. They are released by `param_list_free()` from
+`http_request_destroy()` — and **neither is exported**. The HTTP server owns the request lifecycle,
+so a normal server is unaffected.
+
+Code that drives the router directly leaks: a Cloudflare Worker handler, an embedder using the
+library as a routing core, or a test. Measured at three allocations (80 bytes) per parameterised
+request; `tests/test_weblib.c` works around it with a test-local `_test_free_param_list()` that
+mirrors the node layout, which is exactly the sort of copy that rots when the struct changes.
+
+**Fix direction:** export `http_request_destroy()`, or add a narrow
+`http_request_clear_params()`. Either is additive.
+
+### BUG-13: `socket_fd` closed from another thread during shutdown (Low) — ⚠️ OPEN
+
+In threaded mode `http_server_stop()` calls `shutdown()`, `close()`, then sets
+`server->socket_fd = -1` from the caller's thread, while the accept thread may be inside — or about
+to enter — `accept(server->socket_fd)`. Closing the descriptor is what unblocks `accept()`, so the
+close is deliberate; the race is the unsynchronised read of the field.
+
+Benign outcome: the accept thread reads `-1` and `accept()` fails with `EBADF`, which the loop
+handles. Not benign: between `close()` and the next `accept()`, another thread opens anything and is
+handed the same descriptor number, so `accept()` runs on an unrelated file.
+
+Confined to shutdown, and it predates the response-hook work (surrounding code dates to
+2025-11 / 2026-02), so it is recorded rather than fixed alongside unrelated changes.
+
+**Fix direction:** guard the field with the server mutex, or wake the accept thread through a
+self-pipe and let it close its own descriptor.
+
+### BUG-14: `test_stress.c` uses hardcoded ports with no bind retry (Low) — ⚠️ OPEN
+
+`tests/test_stress.c` binds fifteen fixed ports (19000–19016), each with a bare
+`ASSERT(http_server_listen(server, port) == 0)`. `SO_REUSEADDR` is set, but running the suite
+repeatedly in quick succession still leaves enough sockets in `TIME_WAIT` that a bind occasionally
+fails — and the test then reports a product failure for an environment condition.
+
+Observed at roughly 1 run in 3 while re-running `ctest` back to back, failing at
+`test_stress.c:631` (port 19000) and `test_stress.c:1567` (port 19007). Both belong to pre-existing
+tests; the response-hook work added only 19016. A single CI run does not rerun the suite, which is
+why CI stays green; it bites whoever iterates locally.
+
+`tests/stress_demo_app.sh` already derives its port from its pid and retries five times.
+
+**Fix direction:** bind port 0 and read back the assigned port. That removes the shared namespace
+rather than making collisions rarer.
+
+---
+
 ## Stress Test Results Summary
 
-All 37 stress tests pass with zero failures and zero **definite or indirect** memory leaks. The leak
+All 38 stress tests pass with zero failures and zero **definite or indirect** memory leaks. The leak
 check runs on every push in the `Build, Test & Memcheck (Docker)` CI job, which executes every test
 binary under Valgrind on Ubuntu with
 `--errors-for-leak-kinds=definite,indirect` and fails the job if any of them reports one. *Possible*

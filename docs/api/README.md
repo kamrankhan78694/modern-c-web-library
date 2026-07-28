@@ -388,14 +388,59 @@ registered by their `*_create()` call when it is `NULL`. Rate limiting is the
 exception — its state type is not part of the public header, so it cannot be handed a
 per-instance pointer.
 
+### `router_add_response_hook()`
+Install a hook that runs **after** the handler, when the outcome of the request is
+known. Middleware runs *before* the handler and so can never see `res->status`;
+anything that needs the result — status metrics, access logs carrying the status,
+timing, tracing — belongs here.
+```c
+typedef void (*response_hook_fn_t)(http_request_t *req, http_response_t *res,
+                                   void *user_data);
+
+int router_add_response_hook(router_t *router, response_hook_fn_t hook,
+                             void *user_data);
+// Returns: 0 on success (including when this exact hook is already installed),
+//         -1 if router or hook was NULL, or the per-router limit of 8 is reached
+```
+Hooks run at every exit that produces a response: after a handler, after the built-in
+404, and when a middleware short-circuits. They do not run when `router_route()`
+rejects its arguments, because no response exists to describe.
+
+Registering the same `(hook, user_data)` pair twice is absorbed rather than obeyed —
+hooks have side effects, so a duplicate would double whatever the hook records.
+
+`metrics_register()` uses this internally; you do not need to install anything for
+`/metrics` to work.
+
+```c
+static void access_log(http_request_t *req, http_response_t *res, void *ud) {
+    (void)ud;
+    printf("%s %s -> %d\n", http_method_to_string(req->method), req->path, res->status);
+}
+router_add_response_hook(router, access_log, NULL);
+```
+
+### `router_has_middleware()`
+Query whether a specific middleware function is installed on a router.
+```c
+bool router_has_middleware(router_t *router, middleware_fn_t middleware);
+```
+Returns `true` if `middleware` is in the router's middleware chain, `false` otherwise
+(including when either argument is `NULL`). Used internally by the metrics response
+hook to decide whether the middleware already counted the request's total and method,
+but available for any code that needs to branch on a router's configuration.
+
 ### `router_route()`
 Dispatch a request through the middleware chain and into the matching handler.
 ```c
 int router_route(router_t *router, http_request_t *req, http_response_t *res);
-// Returns:  0  a route matched and ran, or a middleware stopped the chain
+// Returns:  0  a route matched and ran, or a middleware stopped the chain, or a
+//              path parameter could not be decoded (a 400 body is filled in and
+//              the handler is NOT run)
 //           1  no route matched — a 404 "Not Found" body is filled in for you
 //          -1  router, req, res, or req->path was NULL; nothing was written
 ```
+Response hooks run on all three of the `0` outcomes.
 The HTTP server calls this for you. You need it directly only when you are driving
 the router yourself — in a Cloudflare Worker, or in a test.
 
@@ -1398,11 +1443,15 @@ void metrics_handler(http_request_t *req, http_response_t *res);
 // The handler itself, if you would rather register it on your own path
 
 void metrics_record_status(int status_code);
-// Call after sending a response to fold it into the 2xx/3xx/4xx/5xx counters
+// Only for responses served outside the router: metrics_register() already
+// records routed responses, and this is a no-op once its hook is installed.
 ```
 
 `GET /metrics` returns JSON: total request count, a per-method breakdown, status code
-ranges (2xx/3xx/4xx/5xx), and uptime.
+classes, and uptime. The classes are `1xx`, `2xx`, `3xx`, `4xx`, `5xx` and
+`other`; together they account for every request in `total_requests`, so a
+scraper must read all six. `1xx` covers WebSocket upgrades (101) and `other`
+anything outside 100–599 — reading only 2xx–5xx silently drops them.
 
 ---
 

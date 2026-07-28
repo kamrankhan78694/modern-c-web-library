@@ -12,12 +12,28 @@
 #include <time.h>
 #include <pthread.h>
 
-/* Module-level start time, set on first handler invocation */
+/*
+ * Module-level start time.
+ *
+ * This used to be initialised by pthread_once on the FIRST handler call, which
+ * meant /healthz reported time-since-first-probe rather than uptime: a server
+ * up for an hour but never probed answered 0, and thereafter counted from the
+ * first probe. For an endpoint whose stated purpose is load-balancer and
+ * Kubernetes probes that is worse than useless — it looks plausible, because
+ * once probes arrive on a schedule the number grows normally.
+ *
+ * health_check_register() now stamps it at wiring time, which is server start
+ * for any realistic program. The pthread_once remains as a fallback so calling
+ * health_check_handler() directly (as the unit tests do) still yields a sane
+ * value rather than an epoch-sized one.
+ */
 static time_t _health_start_time = 0;
 static pthread_once_t _health_once = PTHREAD_ONCE_INIT;
 
 static void _health_init_start_time(void) {
-    _health_start_time = time(NULL);
+    if (_health_start_time == 0) {
+        _health_start_time = time(NULL);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -65,5 +81,7 @@ void health_check_handler(http_request_t *req, http_response_t *res) {
 /* ------------------------------------------------------------------ */
 int health_check_register(router_t *router) {
     if (!router) return -1;
+    /* Stamp the start time at wiring time, not on the first probe. */
+    pthread_once(&_health_once, _health_init_start_time);
     return router_add_route(router, HTTP_GET, "/healthz", health_check_handler);
 }

@@ -2,9 +2,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <stdbool.h>
 
 #define MAX_ROUTES 256
 #define MAX_MIDDLEWARES 32
+#define MAX_RESPONSE_HOOKS 8
 
 /* Route structure */
 struct route {
@@ -21,11 +24,54 @@ struct router {
     middleware_fn_t middlewares[MAX_MIDDLEWARES];
     void *middleware_data[MAX_MIDDLEWARES];
     size_t middleware_count;
+    response_hook_fn_t response_hooks[MAX_RESPONSE_HOOKS];
+    void *response_hook_data[MAX_RESPONSE_HOOKS];
+    size_t response_hook_count;
 };
 
 /* Internal functions */
 static bool match_route(const char *pattern, const char *path);
-static void extract_params(http_request_t *req, const char *pattern, const char *path);
+static void run_response_hooks(router_t *router, http_request_t *req, http_response_t *res);
+/*
+ * Percent-decode a path segment in place.
+ *
+ * Path parameters used to be handed to handlers raw, so /api/greet/hello%20world
+ * yielded "hello%20world". Every handler had to decode by hand, and most would
+ * not — which is also a validation hazard, since length and charset checks then
+ * run against the encoded form.
+ *
+ * Decoding happens AFTER route matching, on the extracted value only. Matching
+ * still runs on the raw path, so this cannot re-open path traversal: a %2F in a
+ * segment never becomes a separator the router acted on.
+ *
+ * Output is never longer than input, so in-place is safe. A malformed escape
+ * ("%zz", a truncated "%4") is left verbatim rather than guessed at. "+" is left
+ * alone: it means space in a query string, not in a path (RFC 3986).
+ *
+ * An encoded NUL (%00) is REFUSED — decoding it would truncate the C string and
+ * silently shorten a value that validation had already accepted at full length.
+ * Returns false in that case and the caller stores nothing.
+ */
+static bool percent_decode_inplace(char *s) {
+    char *out = s;
+    for (const char *in = s; *in; ) {
+        if (in[0] == '%' && isxdigit((unsigned char)in[1]) && isxdigit((unsigned char)in[2])) {
+            char hex[3] = { in[1], in[2], '\0' };
+            long v = strtol(hex, NULL, 16);
+            if (v == 0) {
+                return false;                  /* embedded NUL — refuse */
+            }
+            *out++ = (char)v;
+            in += 3;
+        } else {
+            *out++ = *in++;
+        }
+    }
+    *out = '\0';
+    return true;
+}
+
+static bool extract_params(http_request_t *req, const char *pattern, const char *path);
 
 /* Create router */
 router_t *router_create(void) {
@@ -89,8 +135,83 @@ int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware
     return 0;
 }
 
-/* Route request.
- * Returns: 0 = routed, 1 = no route found (404 already sent), -1 = invalid input */
+/*
+ * Is this middleware function installed on this router?
+ *
+ * Exists because the metrics module has one process-global counter set but the
+ * router owns middleware and hooks per-router. Deciding "has the other half of
+ * metrics already counted this request?" from a global flag was wrong the moment
+ * a second router existed: a router carrying only the middleware stopped
+ * counting because a DIFFERENT router had registered the hook, and its traffic
+ * was counted nowhere. The question is per-router, so it is answered per-router.
+ */
+bool router_has_middleware(router_t *router, middleware_fn_t middleware) {
+    if (!router || !middleware) {
+        return false;
+    }
+    for (size_t i = 0; i < router->middleware_count; i++) {
+        if (router->middlewares[i] == middleware) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * Install a post-response hook. Idempotent: registering the same (hook,
+ * user_data) pair again succeeds without adding a second entry.
+ *
+ * That guard is not defensive tidiness. Every hook here runs once per response
+ * and is expected to have side effects — counting, logging, tracing — so a
+ * duplicate entry does not merely waste a call, it doubles whatever the hook
+ * records. Calling metrics_register() twice on one router silently reported 6
+ * requests for 3, with no error anywhere to notice. Registering the identical
+ * hook twice is a mistake in every case, so it is absorbed rather than obeyed.
+ * Two different routers each still get their own hook, which is what a global
+ * metrics singleton fed by several routers needs.
+ */
+int router_add_response_hook(router_t *router, response_hook_fn_t hook,
+                             void *user_data) {
+    if (!router || !hook) {
+        return -1;
+    }
+    for (size_t i = 0; i < router->response_hook_count; i++) {
+        if (router->response_hooks[i] == hook &&
+            router->response_hook_data[i] == user_data) {
+            return 0;   /* already installed */
+        }
+    }
+    if (router->response_hook_count >= MAX_RESPONSE_HOOKS) {
+        return -1;
+    }
+    router->response_hooks[router->response_hook_count] = hook;
+    router->response_hook_data[router->response_hook_count] = user_data;
+    router->response_hook_count++;
+    return 0;
+}
+
+/*
+ * Run the post-response hooks. Called at every router_route() exit that
+ * produced a response, and nowhere else.
+ *
+ * There is deliberately no "was a response produced" guard here. An earlier
+ * version skipped hooks when res->status was 0, on the theory that a middleware
+ * could stop the chain without sending anything and leave the status at a
+ * zero-initialised value. That state does not exist: http_response_create()
+ * sets status to HTTP_OK before any handler sees the response, so the test was
+ * dead code resting on a false premise. What res holds at this point is exactly
+ * what the server serialises onto the wire — both router_route() call sites
+ * send it unconditionally — so reporting it is not a guess about the outcome,
+ * it IS the outcome. A middleware that stops the chain silently really does
+ * yield a 200 to the client, and metrics that hid it would be lying.
+ */
+static void run_response_hooks(router_t *router, http_request_t *req,
+                               http_response_t *res) {
+    for (size_t i = 0; i < router->response_hook_count; i++) {
+        router->response_hooks[i](req, res, router->response_hook_data[i]);
+    }
+}
+
 int router_route(router_t *router, http_request_t *req, http_response_t *res) {
     if (!router || !req || !res || !req->path) {
         return -1;
@@ -99,41 +220,70 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res) {
     /* Execute middlewares */
     for (size_t i = 0; i < router->middleware_count; i++) {
         if (!router->middlewares[i](req, res, router->middleware_data[i])) {
-            /* Middleware stopped the chain */
+            /* Middleware stopped the chain — it may have sent a response
+             * (a 429 from the rate limiter, a 403 from auth), so the hooks
+             * still need to see the outcome. */
+            run_response_hooks(router, req, res);
             return 0;
         }
         /* If middleware already sent a response, stop */
         if (res->sent) {
+            run_response_hooks(router, req, res);
             return 0;
         }
     }
     
-    /* Find matching route */
+    /*
+     * Find matching route.
+     *
+     * RFC 9110 §9.3.2: HEAD is identical to GET except that the server must not
+     * send a body. A HEAD request therefore matches a GET route when no explicit
+     * HEAD route exists — previously HEAD / returned 404 on a path where GET /
+     * returned 200. The handler runs normally and produces a body; the server
+     * drops it at send time while keeping Content-Length, so the response
+     * describes the resource exactly as GET would.
+     */
+    http_method_t match_method = req->method;
+    for (int pass = 0; pass < 2; pass++) {
     for (size_t i = 0; i < router->route_count; i++) {
         route_t *route = &router->routes[i];
         
         /* Check method */
-        if (route->method != req->method) {
+        if (route->method != match_method) {
             continue;
         }
         
         /* Check path */
         if (route->has_params) {
             if (match_route(route->path, req->path)) {
-                extract_params(req, route->path, req->path);
+                if (!extract_params(req, route->path, req->path)) {
+                    http_response_send_text(res, HTTP_BAD_REQUEST, "Bad Request");
+                    run_response_hooks(router, req, res);
+                    return 0;
+                }
                 route->handler(req, res);
+                run_response_hooks(router, req, res);
                 return 0;
             }
         } else {
             if (strcmp(route->path, req->path) == 0) {
                 route->handler(req, res);
+                run_response_hooks(router, req, res);
                 return 0;
             }
+        }
+    }
+        /* Nothing matched as HEAD — retry the search as GET, once. */
+        if (pass == 0 && req->method == HTTP_HEAD) {
+            match_method = HTTP_GET;
+        } else {
+            break;
         }
     }
     
     /* No route found */
     http_response_send_text(res, HTTP_NOT_FOUND, "Not Found");
+    run_response_hooks(router, req, res);
     return 1; /* Distinct from -1 (invalid input) */
 }
 
@@ -200,9 +350,18 @@ static bool match_route(const char *pattern, const char *path) {
 }
 
 /* Extract route parameters */
-static void extract_params(http_request_t *req, const char *pattern, const char *path) {
+/*
+ * Extract route parameters.
+ *
+ * Returns false when a parameter cannot be decoded, so the caller can fail the
+ * request instead of running the handler with that parameter missing. Bad input
+ * (NULL arguments) and allocation failure return true: neither is the client's
+ * doing, and turning an out-of-memory condition into a 400 would blame the
+ * request for the server's problem.
+ */
+static bool extract_params(http_request_t *req, const char *pattern, const char *path) {
     if (!req || !pattern || !path) {
-        return;
+        return true;
     }
 
     char *pattern_copy = strdup(pattern);
@@ -210,7 +369,7 @@ static void extract_params(http_request_t *req, const char *pattern, const char 
     if (!pattern_copy || !path_copy) {
         free(pattern_copy);
         free(path_copy);
-        return;
+        return true;
     }
 
     char *pattern_save = NULL;
@@ -221,7 +380,19 @@ static void extract_params(http_request_t *req, const char *pattern, const char 
     while (p_tok && s_tok) {
         if (p_tok[0] == ':' && p_tok[1] != '\0') {
             const char *key = p_tok + 1;
-            /* Store raw segment value (no decoding here) */
+            /* Decode the segment before handing it to the handler. s_tok points
+             * into path_copy, which we own, so decoding in place is safe. */
+            if (!percent_decode_inplace(s_tok)) {
+                /* Undecodable — today only an encoded NUL. Previously the
+                 * parameter was simply not set and the handler ran anyway, so
+                 * an attacker could make a declared :param vanish and a handler
+                 * that assumed it was present would dereference NULL or fall
+                 * back to a default. "Refused", which is what the header and
+                 * CHANGELOG both claim, has to mean the request fails. */
+                free(pattern_copy);
+                free(path_copy);
+                return false;
+            }
             http_request_set_param(req, key, s_tok);
         }
         p_tok = strtok_r(NULL, "/", &pattern_save);
@@ -230,4 +401,5 @@ static void extract_params(http_request_t *req, const char *pattern, const char 
 
     free(pattern_copy);
     free(path_copy);
+    return true;
 }

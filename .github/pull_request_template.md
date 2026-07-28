@@ -28,7 +28,7 @@ Title: <short summary>
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --parallel
-cd build && ctest --output-on-failure     # 6 suites with TLS off
+cd build && ctest --output-on-failure     # 7 suites with TLS off
 ```
 
 ## Checklist
@@ -45,7 +45,7 @@ The TLS layer is hand-written, experimental and unaudited cryptography, so it ca
 higher bar. Delete this section if it does not apply; otherwise tick every box.
 
 - [ ] TLS build passes: `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` +
-      `ctest --output-on-failure` (13 suites; a skipped `TlsInteropOpenssl` is not a pass)
+      `ctest --output-on-failure` (14 suites; a skipped `TlsInteropOpenssl` is not a pass)
 - [ ] Sanitizer build passes: same options in a *separate* build dir, plus
       `-fsanitize=address,undefined -fno-omit-frame-pointer -g`, then
       `ctest --output-on-failure --no-tests=error -R '^Tls'` (without `--no-tests=error`,

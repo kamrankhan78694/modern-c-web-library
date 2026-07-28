@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`router_add_response_hook()` — a post-handler phase for the router.**
+  Middleware runs *before* the handler, so nothing in the request pipeline could
+  observe the status code. Anything needing the outcome of a request — status
+  metrics, access logs carrying the status, timing, tracing — had nowhere to
+  live. Hooks run after the handler, after the built-in 404, and when a
+  middleware short-circuits having sent a response; they do not run when
+  `router_route()` rejects its arguments, because no response exists to describe.
+- **`tests/stress_demo_app.sh`, registered as the `StressDemoApp` ctest suite** —
+  the first suite that exercises the *assembled* system. It starts the real
+  server binary and talks HTTP to it over a socket: every endpoint, validation
+  boundaries, adversarial input (CRLF injection, traversal, oversized URL and
+  body, malformed request lines), a concurrency phase asserting **zero lost
+  requests**, and FD/RSS growth checks. It asserts correctness, never
+  throughput — a perf number that fails on a slow runner gets muted, and then
+  protects nothing.
+
+  This exists because a browser session found three defects in ten minutes that
+  166 unit tests, 37 stress tests, Valgrind and ASan had all missed. Every one
+  was a wiring defect: the unit worked, the assembly did not, and nothing
+  spanned the gap. Verified it catches regressions by reintroducing the
+  duplicate-`Content-Type` bug — the suite reports `got '2', expected '1'` and
+  fails.
+
+  The `/healthz` check spins up a throwaway server rather than probing the main
+  one, because that endpoint's bug was precisely that its clock started at the
+  first probe: any earlier check in the suite would have started it, and the
+  later assertion would then have reported the bug as fixed. A dedicated server
+  left untouched for three seconds is the only way to observe it.
+
+- **`examples/demo_app` + `tools/dev-server.sh` + `.claude/launch.json`** — a
+  minimal dev server whose page drives its own API from the browser, so opening
+  it exercises HTML out, JSON out and JSON in against the real request path.
+  Two library bugs surfaced within minutes of running it; see below.
 - **`tools/check-consistency.sh`, run in CI as the `consistency` job.** Three
   times in one release cycle a fix corrected the instance a reviewer named and
   left the same claim wrong elsewhere — and twice the defect was introduced *by
@@ -34,11 +67,189 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   testing anything) with the concrete cases, so the lesson reaches the next
   agent rather than living in one session's memory.
 
+### Fixed
+
+- **`/healthz` reported time since the first probe, not uptime.** Its start
+  time was initialised by `pthread_once` on the first handler call, so a server
+  up for an hour but never probed answered `0`, then counted from that probe.
+  For an endpoint whose stated purpose is load-balancer and Kubernetes probes
+  this is worse than an obvious break: once probes arrive on a schedule the
+  number grows plausibly, so nothing looks wrong. `health_check_register()` now
+  stamps the start time at wiring time; the `pthread_once` stays as a fallback
+  so calling the handler directly still yields a sane value.
+- **Path parameters are now percent-decoded.** `/api/greet/hello%20world` gave
+  handlers `hello%20world`. Every handler had to decode by hand, and length and
+  charset validation ran against the encoded form. Decoding happens *after*
+  route matching, on the extracted value only, so a `%2F` can never become a
+  separator the router already acted on. Malformed escapes are left verbatim
+  rather than guessed at, `+` stays literal (it means space in a query string,
+  not a path), and an encoded NUL is **refused** rather than decoded — it would
+  truncate the C string after validation had accepted the full length.
+- **`HEAD` now behaves as `GET` without a body** (RFC 9110 §9.3.2). `HEAD /`
+  returned 404 on a path where `GET /` returned 200. The router falls back to
+  the GET route when no explicit HEAD route exists, and the send path drops the
+  body while keeping `Content-Length`, so the response describes the resource
+  exactly as GET would.
+- **`/metrics` status-class counters were always zero (#136).** `2xx`/`3xx`/
+  `4xx`/`5xx` reported 0 no matter how much traffic was served, because
+  `metrics_record_status()` — public, and unit-tested in isolation — was never
+  called by anything in the library. The metrics middleware could not call it:
+  middleware runs before the handler and never sees the status. `metrics_register()`
+  now installs a response hook, so the counters work with no application changes.
+
+  The existing unit test called `metrics_record_status()` directly and passed
+  throughout, which is exactly how this shipped: a unit that works, a wiring that
+  does not, and no test spanning the gap. The new integration test drives a real
+  route through `router_route()` and asserts the counter moved — verified to
+  fail when the hook registration is removed.
+- **`/metrics` no longer contradicts itself.** `total_requests` and the
+  per-method counts were incremented on the way in, the status classes on the
+  way out, so the two halves of every scrape described different sets of
+  requests: `2xx + 3xx + 4xx + 5xx` never equalled `total_requests`, and the gap
+  was permanent rather than transient because the `/metrics` request itself was
+  counted in the total before its own status could be recorded. All counting now
+  happens once per completed request, under one lock, in the response hook. The
+  new test asserts that identity — see the `1xx`/`other` entry below for its
+  final form — and fails against the previous code.
+- **`metrics_register()` works on its own.** The counter state was allocated
+  only by `metrics_middleware_create()`, so registering the endpoint without
+  also installing the middleware served a `/metrics` full of zeroes. It now
+  allocates the state if nothing else has. `metrics_middleware_destroy()`
+  releases it either way.
+- **The stress suite reported phantom failures on macOS.** Its malformed-request
+  probes ran `timeout 3 nc`, but `timeout` is GNU coreutils and is absent from a
+  stock macOS runner — so the command was never found, the reply was empty, and
+  three checks failed against a server that was in fact answering `400`
+  correctly. The deadline now rides on `nc -w`, which both BSD and GNU `nc`
+  support, and a missing `nc` announces itself as a skip instead of silently
+  contributing zero checks. Verified by running the suite with `timeout` removed
+  from `PATH`: 35/35.
+
+- **`HEAD` sent a body in async mode.** The RFC 9110 §9.3.2 fix landed only in
+  the threaded `send_response()`; the event-loop writer has its own send loop and
+  kept putting `Content-Length` bytes on the wire after a HEAD response's headers.
+  This is **not** new in this release, and an earlier draft of this entry wrongly
+  said it was. At v2.0.1 the async writer had no body suppression at all, so in
+  async mode `HEAD /anything` already returned 404 headers followed by the 9-byte
+  `Not Found` body, and an application with an explicit `HTTP_HEAD` route got the
+  full handler body. The GET fallback widened the exposure to every path rather
+  than creating it. It is worse than cosmetic either way: on a keep-alive
+  connection the client reads those bytes as the start of the next response,
+  which is a response-queue desync — the request-smuggling family. Reproduced against the shipped `async_server` example, and the
+  regression test pipelines `HEAD` then `GET` on one connection and asserts two
+  cleanly framed responses.
+- **`/metrics` broke its own identity on the first WebSocket upgrade.**
+  `total_requests` counted every request while only `2xx`–`5xx` had a bucket, so
+  a `101` was counted once and classified nowhere; the gap then grew for the life
+  of the process. Added `1xx` and `other` classes so every request lands
+  somewhere, making the identity exact:
+  `total_requests == 1xx + 2xx + 3xx + 4xx + 5xx + other`.
+- **Middleware-only metrics wiring reported all zeroes.** Consolidating the
+  counting into the response hook emptied the middleware, which silently broke
+  applications that install it without calling `metrics_register()` — while the
+  header still promised existing wiring kept working. The middleware now counts
+  request entry whenever no hook is installed, so that promise is true again.
+- **`metrics_record_status()` documented a contract that now double-counts.**
+  The header and API reference still said "call after sending a response", which
+  with the hook installed added a second increment to every status class. It is
+  now a no-op once the hook is registered, and documented as being for responses
+  served outside the router.
+- **The `StressDemoApp` suite reported a pass when it asserted nothing.** `skip()`
+  exited 0, so a missing prerequisite — `curl` absent from the CI image, the
+  binary not where CMake said, `mktemp` failing — turned the repo's only
+  end-to-end suite into a green tick. It now exits 77 with `SKIP_RETURN_CODE`
+  set, and ctest reports `Skipped`.
+- **The `#138` keep-alive gate could not fail.** It asserted only that `ab`
+  exited, but `ab` exits 0 even when every response failed — measured here:
+  40 requests, `Non-2xx responses: 40`, exit status 0. It now asserts the
+  completed count, zero failed requests and zero non-2xx, and reports
+  throughput without asserting on it.
+
+- **An undecodable path parameter now fails the request.** `%00` was refused by
+  the decoder, but the caller then simply did not set the parameter and ran the
+  handler anyway — so an attacker could make a declared `:param` vanish, and a
+  handler that assumed it was present would dereference NULL or fall back to a
+  default. Both the header and this changelog already called that "refused",
+  which it was not. `router_route()` now returns a 400 and does not run the
+  handler. The end-to-end suite could not have caught this: `demo_app` validates
+  the parameter itself, so its check passed while the library did nothing.
+- **Registering the same response hook twice double-counted everything.** Hooks
+  run once per response and exist to have side effects, so a duplicate entry
+  doubles whatever the hook records — `metrics_register()` called twice on one
+  router reported 6 requests for 3, with both calls returning success.
+  `router_add_response_hook()` now absorbs an exact `(hook, user_data)` duplicate.
+- **Three more end-to-end checks that could not fail.** The path-traversal check
+  never sent a traversal, because curl removes dot-segments client-side and the
+  server only ever saw `GET /etc/passwd` (it now also sends the raw form with
+  `--path-as-is`). The CRLF-injection check was a tautology: nothing in the demo
+  routed a path parameter into a header, so the grep could not have found an
+  injected one whatever the guard did — `demo_app` now echoes the decoded `:name`
+  into `X-Greeted-Name` deliberately, giving the check a real path to defeat. And
+  the FD-leak and RSS checks were wrapped in guards that silently contributed
+  zero checks when `lsof`/`ps` were missing; they now announce a skip.
+
+- **A second router silenced the first's metrics.** The "has the other half
+  already counted this request?" decision was one process-global flag, but
+  middleware and hooks belong to a router. So a router carrying only the metrics
+  middleware stopped counting the moment any *other* router in the process called
+  `metrics_register()`, and its traffic was counted nowhere — while the header
+  promised middleware-only wiring kept working. Measured: six requests through
+  such a router, `total_requests: 0`. The question is per-router and is now asked
+  per-router, via `router_has_middleware()`.
+- **Three checks in the HEAD tests could not fail.** `HEAD / sends no body`
+  counted bytes in `curl -I` output, and curl never writes a HEAD response's body
+  to stdout — measured 0 for a resource whose body is 3232 bytes, so the check
+  read 0 whatever the server sent. It now reads the response off a socket, and
+  catches 3233 bytes when body suppression is disabled. In the async test, the
+  `Content-Length` assertion searched the whole buffer, where the pipelined GET
+  response always supplied a match, and nothing asserted the GET body was
+  *present* — so the inverse desync, headers advertising a length with no body
+  behind them, passed silently. Both assertions are now scoped to one response,
+  and the test is verified to fail in both directions.
+
+### Changed
+
+- **The examples wire metrics with `metrics_register()` alone.** Adding the
+  middleware as well is supported and does not double-count, but it counts the
+  total on the way *in*, so a `/metrics` scrape includes itself in
+  `total_requests` while its own status lands after the JSON is rendered. The
+  hook alone counts everything once, at completion, and the identity is exact.
+- **`tools/check-consistency.sh` cross-checks documented unit-test counts.** The
+  suite-count check said nothing about the number of tests inside `WebLibTests`,
+  so that figure sat at 166 in four files while the binary reported 172 and every
+  check still passed. The true value needs a build, which this script does not
+  do — but disagreement *between* documents needs no build, and every drift so
+  far has taken exactly that form. Its first implementation reported success
+  having compared nothing (`printf '%s'` leaves no trailing newline, so `wc -l`
+  returned 0 for a single value); it is verified in both directions now.
+- **The end-to-end suite asserts a floor on how many checks ran.** Guarded checks
+  that quietly evaluate false subtract an assertion while the total still prints
+  green — 36/36 and 38/38 look equally healthy. The count is now itself an
+  assertion.
+- **`examples/demo_app` states its real exposure.** It printed a `localhost` URL
+  while `http_server_listen()` binds `INADDR_ANY`, so the demo — unauthenticated,
+  with `Access-Control-Allow-Origin: *` — was reachable from the network.
+  Verified: it answered on the machine's LAN address. The banner now says so.
+- **`tools/check-consistency.sh` reads more phrasings, and reads whole
+  sentences.** It only matched "N ctest suites" and `**N suites**`, so the same
+  stale claim written "N test suites" or "N/N suites" drifted undetected — one
+  such claim was stale in `CONTRIBUTING.md`. It also now takes every count on a
+  line and accepts the union of the configurations that line names, because
+  sentences legitimately state two ("13 suites rather than 14"), and flagging
+  those correct lines is how a checker gets switched off. Widening it immediately
+  found four genuinely stale counts.
+- **`tools/dev-server.sh` builds into `build-devserver/`, not `build/`.** It
+  configures with its own build type and flags, so sharing the conventional
+  directory meant either adopting a contributor's cache and silently ignoring
+  those settings, or creating one they did not ask for. Starting the preview can
+  no longer disturb an existing build tree.
+
 ## [2.0.1] - 2026-07-28
 
 A maintenance release. No library API change — the fixes are in CI, the test
 suite and the examples. Notably, this is the first release in which the Valgrind
 leak gate actually gates.
+
 ### Added
 
 - **The benchmarking suite now produces numbers.** `src/benchmark.c` has shipped

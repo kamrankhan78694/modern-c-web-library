@@ -21,6 +21,10 @@ if(NOT EMSCRIPTEN)
     add_executable(rest_api_server rest_api_server.c)
     target_link_libraries(rest_api_server weblib ${PLATFORM_LIBS})
 
+    # Demo app / dev server — serves a browser page that drives its own API
+    add_executable(demo_app demo_app.c)
+    target_link_libraries(demo_app weblib ${PLATFORM_LIBS})
+
     # Throughput/latency benchmark runner (drives src/benchmark.c, which
     # previously had no caller anywhere in the tree)
     add_executable(benchmark_server benchmark_server.c)

@@ -411,6 +411,11 @@ middlewares. `examples/rest_api_server.c` wires up a full stack this way.
 Two ready-made endpoints are one call each: `health_check_register(router)` adds
 `GET /healthz`, and `metrics_register(router)` adds `GET /metrics`.
 
+`metrics_register()` also installs the response hook that populates the counters and
+allocates the counter state, so it is complete on its own — you do not need
+`metrics_middleware_create()` as well. Because it allocates, pair it with
+`metrics_middleware_destroy()` at shutdown.
+
 ### Test Middleware
 
 ```bash

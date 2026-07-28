@@ -59,10 +59,12 @@ valgrind --leak-check=full ./build/tests/test_stress
 SKIP_SERVER_TESTS=1 ./build/tests/test_stress
 ```
 
-`StressTests` is one of the **6 ctest suites** in a default build (`WebLibTests`,
-`KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`). Building with
-the experimental TLS layer adds seven more — `TlsTests`, `TlsCryptoTests`, `TlsParseTests`,
-`TlsTransportTests`, `TlsFuzzTests`, `TlsHttpTests`, `TlsInteropOpenssl` — for **13 suites** total:
+`StressTests` is one of the **7 ctest suites** in a default build (`WebLibTests`,
+`KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `StressDemoApp`,
+`WasmTests`). Building with the experimental TLS layer adds six more — `TlsTests`,
+`TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`, `TlsInteropOpenssl` —
+for **13 suites** total.
+Adding the test hooks registers `TlsHttpTests` as well, for **14 suites**:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -71,10 +73,10 @@ cmake --build build --parallel
 cd build && ctest --output-on-failure
 ```
 
-Both flags matter. `-DWEBLIB_ENABLE_TLS=ON` alone gives you 12 suites: `TlsHttpTests` additionally
+Both flags matter. `-DWEBLIB_ENABLE_TLS=ON` alone gives you 13 suites: `TlsHttpTests` additionally
 needs `-DWEBLIB_TLS_TEST_HOOKS=ON`, because it drives the server through a deterministic-RNG test
 seam. That hooks flag must never be set in a production build. The CI `tls-check` job configures
-with both and runs all 13. The TLS suites are outside the scope of this report.
+with both and runs all 14. The TLS suites are outside the scope of this report.
 
 ---
 
@@ -241,7 +243,7 @@ in [BUGS.md](BUGS.md).
 | Compiles without warnings | ✅ | `-Wall -Wextra -pedantic` clean |
 | All unit tests pass | ✅ | 166/166 (test_weblib) |
 | All stress tests pass | ✅ | 37/37 (test_stress) |
-| Full ctest run passes | ✅ | 6/6 suites by default; 13/13 with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` |
+| Full ctest run passes | ✅ | 7/7 suites by default; 14/14 with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` |
 | Memory leak free | ✅ | Valgrind: 0 definite/indirect leaks, 0 errors — gated on every test binary in CI |
 | Buffer overflow safe | ✅ | All `sprintf` → `snprintf` |
 | JSON depth limit | ✅ | MAX_DEPTH=512 prevents stack overflow |

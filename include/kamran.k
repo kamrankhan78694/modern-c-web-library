@@ -309,6 +309,42 @@ int router_add_route(router_t *router, http_method_t method, const char *path, r
  */
 int router_use_middleware(router_t *router, middleware_fn_t middleware);
 
+/* Response hook callback - runs AFTER the handler has produced a response.
+ *
+ * Middleware runs *before* the handler, so it cannot observe the status code.
+ * Anything that needs the outcome of a request - status-class metrics, access
+ * logs carrying the status, request timing, tracing spans - needs this hook
+ * instead. The metrics module was shipped without it, which is why its
+ * status-class counters read zero regardless of traffic (issue #136).
+ *
+ * Hooks run in registration order, after the handler or after the built-in 404,
+ * and also when a middleware short-circuits the chain having sent a response.
+ * They do NOT run when router_route() rejects its arguments, because no
+ * response exists to describe.
+ *
+ * A hook must not send a response; the response is already complete.
+ */
+typedef void (*response_hook_fn_t)(http_request_t *req, http_response_t *res,
+                                   void *user_data);
+
+/**
+ * Register a callback to run after each request has been handled.
+ * @param router    Router instance
+ * @param hook      Callback; must not be NULL
+ * @param user_data Passed back to the callback; may be NULL
+ * @return 0 on success, -1 on invalid arguments or when the hook table is full
+ */
+int router_add_response_hook(router_t *router, response_hook_fn_t hook,
+                             void *user_data);
+
+/**
+ * Report whether a middleware function is installed on this router.
+ * @param router Router instance
+ * @param middleware Middleware function to look for
+ * @return true if installed on this router, false otherwise (or on NULL input)
+ */
+bool router_has_middleware(router_t *router, middleware_fn_t middleware);
+
 /**
  * Add middleware with per-instance user data to the router.
  * This enables multiple instances of the same middleware type with
@@ -325,9 +361,14 @@ int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware
  * @param router Router instance
  * @param req Request object
  * @param res Response object
- * @return 0 if a route matched and ran, or a middleware stopped the chain;
+ * @return 0 if a route matched and ran, or a middleware stopped the chain, or a
+ *           path parameter could not be percent-decoded (a 400 "Bad Request" body
+ *           is filled in and the handler is NOT run);
  *         1 if no route matched (a 404 "Not Found" body is filled in for you);
  *        -1 if router, req or res was NULL, or req->path was NULL (nothing written)
+ *
+ * Response hooks run on every outcome that produced a response, i.e. all three
+ * of the 0 cases and the 404, but not on -1.
  */
 int router_route(router_t *router, http_request_t *req, http_response_t *res);
 
@@ -1671,20 +1712,54 @@ size_t cache_count(cache_t *cache);
 /* ===== Metrics Middleware API (Observability) ===== */
 
 /**
- * Create a metrics collection middleware.
- * Tracks total requests, per-method counts, and status code ranges.
- * @return Middleware function or NULL on failure
+ * Create a metrics collection middleware and initialise the counter state.
+ *
+ * The returned middleware does not itself count anything: all counting happens
+ * once per completed request, in the response hook that metrics_register()
+ * installs, so that total_requests always equals the sum of the status classes.
+ * Installing this middleware is therefore optional — metrics_register() alone is
+ * enough to both serve GET /metrics and populate it.
+ *
+ * This middleware counts request entry (total_requests and the per-method
+ * counts) on every router it is installed on, exactly as it always did, so
+ * middleware-only wiring keeps working. Status classes do not move without a
+ * response hook — they never did, which is issue #136 and the reason the hook
+ * exists. Use metrics_register() to get status counts.
+ *
+ * Installing BOTH on the same router does not double-count: the hook sees that
+ * this router carries the middleware and records only the status class. But the
+ * total is then counted on the way IN, so a GET /metrics includes itself in
+ * total_requests while its own status lands after the JSON is rendered — the
+ * document is one ahead of its classes. metrics_register() ALONE avoids that,
+ * counts everything once at completion, and is what the examples use.
+ *
+ * Not thread-safe with respect to metrics_middleware_destroy(); call both during
+ * setup and teardown, not while requests are in flight.
+ *
+ * @return Middleware function, or NULL on allocation failure OR if the metrics
+ *         state already exists (created by an earlier call, or by
+ *         metrics_register()). A NULL return is therefore not necessarily an
+ *         error — check whether metrics were already initialised.
  */
 middleware_fn_t metrics_middleware_create(void);
 
 /**
- * Destroy metrics middleware and free resources
+ * Destroy metrics middleware and free resources.
+ * Safe to call more than once, and safe when metrics were never initialised.
+ * Releases the state allocated by either metrics_middleware_create() or
+ * metrics_register(), so a program that calls only the latter must still call
+ * this to avoid leaking the counters.
  */
 void metrics_middleware_destroy(void);
 
 /**
  * Record a response status code in metrics.
- * Call after sending a response to track 2xx/3xx/4xx/5xx counts.
+ *
+ * Only needed for responses served OUTSIDE the router. When metrics_register()
+ * has installed the response hook, every routed response is already recorded and
+ * this call deliberately does nothing — calling it as well would double the
+ * class counts and break the documented identity against total_requests.
+ *
  * @param status_code HTTP status code
  */
 void metrics_record_status(int status_code);
@@ -1698,8 +1773,17 @@ void metrics_record_status(int status_code);
 void metrics_handler(http_request_t *req, http_response_t *res);
 
 /**
- * Register the metrics endpoint on an existing router.
- * Adds GET /metrics → metrics_handler.
+ * Register the metrics endpoint and collection on an existing router.
+ *
+ * Adds GET /metrics → metrics_handler, and installs the router response hook
+ * that records every completed request. This is the complete wiring: it
+ * allocates the counter state if no one has yet, so it needs no accompanying
+ * call to metrics_middleware_create(). Pair it with metrics_middleware_destroy()
+ * at shutdown to release that state.
+ *
+ * Requests that never reach the router — a malformed request rejected by the
+ * parser, for instance — are not counted.
+ *
  * @param router Router instance
  * @return 0 on success, -1 on failure
  */

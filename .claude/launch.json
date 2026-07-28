@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "weblib-demo",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["tools/dev-server.sh"],
+      "port": 8080
+    }
+  ]
+}

@@ -310,9 +310,10 @@ int main(int argc, char *argv[]) {
     if (err)
         router_use_middleware(router, err);
 
-    middleware_fn_t metrics = metrics_middleware_create();
-    if (metrics)
-        router_use_middleware(router, metrics);
+    /* metrics_register() below is the whole wiring: it installs the response
+     * hook that counts each request once, at completion. The metrics middleware
+     * is not needed and would count the total on the way in, leaving a /metrics
+     * scrape one ahead of its own status classes. */
 
     /* CRUD routes */
     router_add_route(router, HTTP_GET, "/api/items", handle_list_items);

@@ -29,6 +29,31 @@ typedef struct _test_hdr_node {
     struct _test_hdr_node *next;
 } _test_hdr_node_t;
 
+/*
+ * Test-local helper mirroring the library's param node layout, for the same
+ * reason as _test_free_header_list below: a stack-allocated http_request_t is
+ * never passed to http_request_destroy(), so the route parameters it accumulates
+ * have no public owner. There is no exported way to free them — worth knowing if
+ * you drive router_route() directly (a Worker, or a test) with a parameterised
+ * route. Mirrors src/http_server.c's http_param_node_t.
+ */
+typedef struct _test_param_node {
+    char *key;
+    char *value;
+    struct _test_param_node *next;
+} _test_param_node_t;
+
+static void _test_free_param_list(void *params) {
+    _test_param_node_t *p = (_test_param_node_t *)params;
+    while (p) {
+        _test_param_node_t *next = p->next;
+        free(p->key);
+        free(p->value);
+        free(p);
+        p = next;
+    }
+}
+
 static void _test_free_header_list(void *headers) {
     _test_hdr_node_t *h = (_test_hdr_node_t *)headers;
     while (h) {
@@ -3731,12 +3756,18 @@ void test_metrics_register(void) {
     ASSERT(metrics_register(router) == 0);
 
     router_destroy(router);
+    /* metrics_register() allocates the counter state when the middleware has
+     * not already done so, which is what lets it be used on its own. That makes
+     * releasing it this test's job — otherwise it leaks, and the next test to
+     * call metrics_middleware_create() gets NULL for "already initialized". */
+    metrics_middleware_destroy();
     PASS();
 }
 
 void test_metrics_record_status(void) {
     TEST("metrics (record_status)");
 
+    metrics_middleware_destroy();          /* start from a known state */
     middleware_fn_t mw = metrics_middleware_create();
     ASSERT(mw != NULL);
 
@@ -4219,6 +4250,391 @@ void test_middleware_user_data(void) {
     _test_free_header_list(res.headers);
     free(res.body);
     router_destroy(router);
+    PASS();
+}
+
+/*
+ * Integration test for issue #136: serving a request through the router must
+ * move the metrics status counters.
+ *
+ * test_metrics_record_status() above calls metrics_record_status() directly and
+ * passes even when nothing in the library ever calls it — which is exactly how
+ * the bug shipped: /metrics reported 2xx/3xx/4xx/5xx as zero forever while the
+ * unit test stayed green. This test spans the gap the unit test cannot.
+ */
+/* Read one status-class counter the way a client would: through the /metrics
+ * handler, parsed as JSON. Returns -1 if the field cannot be read. */
+static double _metrics_status_count(const char *cls) {
+    http_request_t req = {0};
+    http_response_t res = {0};
+    double out = -1;
+    req.method = HTTP_GET;
+    req.path = "/metrics";
+    metrics_handler(&req, &res);
+    if (res.body) {
+        json_value_t *m = json_parse(res.body);
+        if (m) {
+            json_value_t *st = json_object_get(m, "status");
+            if (st) {
+                json_value_t *v = json_object_get(st, cls);
+                if (v && v->type == JSON_NUMBER) {
+                    out = v->data.number_val;
+                }
+            }
+            json_value_free(m);
+        }
+    }
+    free(res.body);
+    _test_free_header_list(res.headers);
+    return out;
+}
+
+static void _ok_handler(http_request_t *req, http_response_t *res) {
+    (void)req;
+    http_response_send_text(res, HTTP_OK, "ok");
+}
+
+void test_metrics_status_counted_through_router(void) {
+    TEST("metrics (status recorded by the router response hook)");
+
+    metrics_middleware_destroy();          /* start from a known state */
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    middleware_fn_t mw = metrics_middleware_create();
+    ASSERT(mw != NULL);
+    ASSERT(router_use_middleware(router, mw) == 0);
+    ASSERT(metrics_register(router) == 0);  /* installs the response hook */
+    router_add_route(router, HTTP_GET, "/ok", _ok_handler);
+
+    /* A 200 through a real route. */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/ok";
+    http_response_t res = {0};
+    ASSERT(router_route(router, &req, &res) == 0);
+    ASSERT(res.status == HTTP_OK);
+
+    ASSERT(_metrics_status_count("2xx") == 1);   /* was 0 before the hook existed */
+
+    _test_free_header_list(res.headers);
+    free(res.body);
+
+    /* An unmatched path must count as 4xx — the built-in 404 also runs hooks. */
+    http_request_t req404 = {0};
+    req404.method = HTTP_GET;
+    req404.path = "/does-not-exist";
+    http_response_t res404 = {0};
+    ASSERT(router_route(router, &req404, &res404) == 1);
+
+    ASSERT(_metrics_status_count("4xx") == 1);
+
+    _test_free_header_list(res404.headers);
+    free(res404.body);
+    router_destroy(router);
+    metrics_middleware_destroy();
+    PASS();
+}
+
+/* Read a top-level numeric field from /metrics. Returns -1 if unreadable. */
+static double _metrics_top_number(const char *field) {
+    http_request_t req = {0};
+    http_response_t res = {0};
+    double out = -1;
+    req.method = HTTP_GET;
+    req.path = "/metrics";
+    metrics_handler(&req, &res);
+    if (res.body) {
+        json_value_t *m = json_parse(res.body);
+        if (m) {
+            json_value_t *v = json_object_get(m, field);
+            if (v && v->type == JSON_NUMBER) {
+                out = v->data.number_val;
+            }
+            json_value_free(m);
+        }
+    }
+    free(res.body);
+    _test_free_header_list(res.headers);
+    return out;
+}
+
+/*
+ * /metrics must agree with itself: every request counted in total_requests is
+ * also counted in exactly one status class.
+ *
+ * This failed before the counters were consolidated. total_requests moved in
+ * the middleware (before the handler) while the status classes moved in the
+ * response hook (after it), so the sum always trailed the total. It is also the
+ * reason this test does NOT install the middleware: metrics_register() alone
+ * has to produce a complete, self-consistent document.
+ */
+void test_metrics_totals_match_status_classes(void) {
+    TEST("metrics (total_requests == sum of status classes)");
+
+    metrics_middleware_destroy();          /* start from a known state */
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    /* No metrics_middleware_create() here — deliberately. */
+    ASSERT(metrics_register(router) == 0);
+    router_add_route(router, HTTP_GET, "/ok", _ok_handler);
+
+    /* Three 200s and two 404s: five requests, five recorded outcomes. */
+    for (int i = 0; i < 5; i++) {
+        http_request_t req = {0};
+        http_response_t res = {0};
+        req.method = HTTP_GET;
+        req.path = (i < 3) ? "/ok" : "/does-not-exist";
+        router_route(router, &req, &res);
+        _test_free_header_list(res.headers);
+        free(res.body);
+    }
+
+    double total = _metrics_top_number("total_requests");
+    double sum   = _metrics_status_count("1xx") + _metrics_status_count("2xx")
+                 + _metrics_status_count("3xx") + _metrics_status_count("4xx")
+                 + _metrics_status_count("5xx") + _metrics_status_count("other");
+
+    ASSERT(total == 5);
+    ASSERT(_metrics_status_count("2xx") == 3);
+    ASSERT(_metrics_status_count("4xx") == 2);
+    ASSERT(total == sum);
+
+    router_destroy(router);
+    metrics_middleware_destroy();
+    PASS();
+}
+
+static void _upgrade_handler(http_request_t *req, http_response_t *res) {
+    (void)req;
+    res->status = HTTP_SWITCHING_PROTOCOLS;   /* what a WebSocket upgrade sets */
+}
+
+/*
+ * A 101 must not break the identity.
+ *
+ * total_requests counted every request while only 2xx-5xx had a bucket, so the
+ * first WebSocket upgrade put the two halves permanently out of step and the
+ * gap then grew for the life of the process — on a WebSocket-heavy server,
+ * without bound. Every status now lands in a class.
+ */
+void test_metrics_identity_holds_for_1xx(void) {
+    TEST("metrics (101 upgrade keeps total == sum of classes)");
+
+    metrics_middleware_destroy();
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    ASSERT(metrics_register(router) == 0);
+    router_add_route(router, HTTP_GET, "/ok", _ok_handler);
+    router_add_route(router, HTTP_GET, "/ws", _upgrade_handler);
+
+    char *paths[] = { "/ok", "/ws", "/ws" };   /* req.path is char *, not const */
+    for (int i = 0; i < 3; i++) {
+        http_request_t req = {0};
+        http_response_t res = {0};
+        req.method = HTTP_GET;
+        req.path = paths[i];
+        router_route(router, &req, &res);
+        _test_free_header_list(res.headers);
+        free(res.body);
+    }
+
+    double total = _metrics_top_number("total_requests");
+    double sum   = _metrics_status_count("1xx") + _metrics_status_count("2xx")
+                 + _metrics_status_count("3xx") + _metrics_status_count("4xx")
+                 + _metrics_status_count("5xx") + _metrics_status_count("other");
+
+    ASSERT(total == 3);
+    ASSERT(_metrics_status_count("1xx") == 2);   /* was unbucketed before */
+    ASSERT(_metrics_status_count("2xx") == 1);
+    ASSERT(total == sum);
+
+    router_destroy(router);
+    metrics_middleware_destroy();
+    PASS();
+}
+
+/*
+ * Middleware-only wiring must keep counting.
+ *
+ * Consolidating all counting into the response hook emptied the middleware, so
+ * an application that installs the middleware WITHOUT calling metrics_register()
+ * — a supported, documented setup — silently served an all-zero /metrics while
+ * the header still promised existing wiring kept working. The middleware now
+ * counts request entry whenever no hook is installed.
+ */
+/*
+ * Registering the same hook twice must not double-count.
+ *
+ * Response hooks run once per response and exist to have side effects, so a
+ * duplicate entry doubles whatever the hook records. metrics_register() called
+ * twice on one router reported 6 requests for 3 — silently, with both calls
+ * returning success. router_add_response_hook() now absorbs an exact duplicate.
+ */
+static int _naive_param_handler_ran = 0;
+static void _naive_param_handler(http_request_t *req, http_response_t *res) {
+    /* Deliberately does NOT check for a missing parameter — the point is that a
+     * handler written this way must never be reached with one absent. */
+    _naive_param_handler_ran = 1;
+    const char *v = http_request_get_param(req, "name");
+    http_response_send_text(res, HTTP_OK, v ? v : "(absent)");
+}
+
+/*
+ * An undecodable path parameter must fail the request, not vanish.
+ *
+ * percent_decode_inplace() refuses an encoded NUL, but the caller then simply
+ * did not set the parameter and ran the handler anyway. So an attacker could
+ * make a declared :param disappear: a handler that assumed it was present would
+ * dereference NULL, and one with a fallback would silently take it. Both the
+ * header and the CHANGELOG called this "refused", which it was not.
+ *
+ * The end-to-end suite could not catch this because demo_app validates the
+ * parameter itself and returns its own 400 — the check passed while the library
+ * was doing nothing.
+ */
+/*
+ * A second router must not silence the first.
+ *
+ * The "has the other half already counted this request?" decision was a single
+ * process-global flag, but middleware and hooks are per-router. So a router
+ * carrying only the metrics middleware stopped counting the moment ANY other
+ * router in the process called metrics_register() — its traffic was counted
+ * nowhere, silently, and the header still promised middleware-only wiring
+ * worked. Measured before the fix: six requests, total_requests 0.
+ */
+void test_metrics_second_router_does_not_silence_first(void) {
+    TEST("metrics (middleware-only router keeps counting when another registers)");
+
+    metrics_middleware_destroy();
+
+    /* Public router: metrics middleware, no endpoint. */
+    router_t *pub = router_create();
+    ASSERT(pub != NULL);
+    middleware_fn_t mw = metrics_middleware_create();
+    ASSERT(mw != NULL);
+    ASSERT(router_use_middleware(pub, mw) == 0);
+    router_add_route(pub, HTTP_GET, "/ok", _ok_handler);
+
+    /* Admin router elsewhere in the same process mounts the endpoint. */
+    router_t *adm = router_create();
+    ASSERT(adm != NULL);
+    ASSERT(metrics_register(adm) == 0);
+
+    for (int i = 0; i < 6; i++) {
+        http_request_t req = {0};
+        http_response_t res = {0};
+        req.method = HTTP_GET;
+        req.path = "/ok";
+        router_route(pub, &req, &res);
+        _test_free_header_list(res.headers);
+        free(res.body);
+    }
+
+    ASSERT(_metrics_top_number("total_requests") == 6);   /* was 0 */
+
+    router_destroy(pub);
+    router_destroy(adm);
+    metrics_middleware_destroy();
+    PASS();
+}
+
+void test_undecodable_path_param_refuses_request(void) {
+    TEST("router (encoded NUL in a path param → 400, handler not run)");
+
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/greet/:name", _naive_param_handler);
+
+    _naive_param_handler_ran = 0;
+    http_request_t req = {0};
+    http_response_t res = {0};
+    req.method = HTTP_GET;
+    req.path = "/greet/a%00b";
+    ASSERT(router_route(router, &req, &res) == 0);
+
+    ASSERT(res.status == HTTP_BAD_REQUEST);      /* was 200 with the param absent */
+    ASSERT(_naive_param_handler_ran == 0);       /* handler must not have run */
+
+    _test_free_header_list(res.headers);
+    free(res.body);
+
+    /* A normal encoded value still decodes and reaches the handler. */
+    _naive_param_handler_ran = 0;
+    http_request_t req2 = {0};
+    http_response_t res2 = {0};
+    req2.method = HTTP_GET;
+    req2.path = "/greet/hello%20world";
+    ASSERT(router_route(router, &req2, &res2) == 0);
+    ASSERT(res2.status == HTTP_OK);
+    ASSERT(_naive_param_handler_ran == 1);
+    ASSERT(res2.body && strcmp(res2.body, "hello world") == 0);
+
+    _test_free_header_list(res2.headers);
+    free(res2.body);
+    _test_free_param_list(req2.params);   /* stack request: no destroy to do it */
+    router_destroy(router);
+    PASS();
+}
+
+void test_response_hook_registration_is_idempotent(void) {
+    TEST("router (duplicate response hook is not installed twice)");
+
+    metrics_middleware_destroy();
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    ASSERT(metrics_register(router) == 0);
+    ASSERT(metrics_register(router) == 0);   /* second call must be absorbed */
+    router_add_route(router, HTTP_GET, "/ok", _ok_handler);
+
+    for (int i = 0; i < 3; i++) {
+        http_request_t req = {0};
+        http_response_t res = {0};
+        req.method = HTTP_GET;
+        req.path = "/ok";
+        router_route(router, &req, &res);
+        _test_free_header_list(res.headers);
+        free(res.body);
+    }
+
+    ASSERT(_metrics_top_number("total_requests") == 3);   /* was 6 */
+    ASSERT(_metrics_status_count("2xx") == 3);
+
+    router_destroy(router);
+    metrics_middleware_destroy();
+    PASS();
+}
+
+void test_metrics_middleware_only_still_counts(void) {
+    TEST("metrics (middleware without metrics_register still counts)");
+
+    metrics_middleware_destroy();
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    middleware_fn_t mw = metrics_middleware_create();
+    ASSERT(mw != NULL);
+    ASSERT(router_use_middleware(router, mw) == 0);
+    /* Deliberately NO metrics_register(): the endpoint is mounted by hand, the
+     * way docs/api/README.md describes serving metrics_handler on your own path. */
+    router_add_route(router, HTTP_GET, "/ok", _ok_handler);
+
+    for (int i = 0; i < 3; i++) {
+        http_request_t req = {0};
+        http_response_t res = {0};
+        req.method = HTTP_GET;
+        req.path = "/ok";
+        router_route(router, &req, &res);
+        _test_free_header_list(res.headers);
+        free(res.body);
+    }
+
+    ASSERT(_metrics_top_number("total_requests") == 3);
+
+    router_destroy(router);
+    metrics_middleware_destroy();
     PASS();
 }
 
@@ -5212,6 +5628,13 @@ int main(void) {
     test_metrics_create_destroy();
     test_metrics_register();
     test_metrics_record_status();
+    test_metrics_status_counted_through_router();
+    test_metrics_totals_match_status_classes();
+    test_metrics_identity_holds_for_1xx();
+    test_metrics_middleware_only_still_counts();
+    test_response_hook_registration_is_idempotent();
+    test_undecodable_path_param_refuses_request();
+    test_metrics_second_router_does_not_silence_first();
     test_metrics_endpoint();
 
     /* Phase 9: Compression tests */

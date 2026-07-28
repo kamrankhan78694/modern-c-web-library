@@ -582,7 +582,7 @@ make test
 ctest --verbose
 ```
 
-In a default configure this is 6 suites, and it compiles **none** of `src/tls/`.
+In a default configure this is 7 suites, and it compiles **none** of `src/tls/`.
 
 ### Testing the experimental TLS layer
 
@@ -594,7 +594,7 @@ local run has tested nothing you wrote:
 cmake -S . -B build-tls -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON
 cmake --build build-tls --parallel
-cd build-tls && ctest --output-on-failure          # 13 suites: the 6 above + 7 TLS suites
+cd build-tls && ctest --output-on-failure          # 14 suites: the 7 above + 7 TLS suites
 
 # Just the TLS suites. Use --no-tests=error (CTest 3.20+): with -R alone,
 # ctest exits 0 if the filter matches nothing.
@@ -614,7 +614,7 @@ CI (`.github/workflows/ci.yml`) runs both configurations, and a PR has to be gre
 | `consistency` | `tools/check-consistency.sh` — version declarations agree across `CMakeLists.txt`, `include/kamran.k`, `Dockerfile.release` and `publish-package.sh`; no hardcoded version literals in `src/`/`examples/`; documented ctest suite counts match `tests/CMakeLists.txt`; the Valgrind step still gates. No build, so it is fast |
 | `primary-checks` | GCC build in Docker, the full default (TLS-off) suite, plus a Valgrind memory check |
 | `clang-check` | Same default configuration built with Clang |
-| `tls-check` | A `RelWithDebInfo` TLS build running all 13 suites, then a Clang ASan/UBSan build running the 7 TLS suites |
+| `tls-check` | A `RelWithDebInfo` TLS build running all 14 suites, then a Clang ASan/UBSan build running the 7 TLS suites |
 | `macos-check` | macOS compatibility build and tests (pull requests only) |
 | `docker-image-check` | Builds and verifies the production Docker image |
 
