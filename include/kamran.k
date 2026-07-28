@@ -33,11 +33,11 @@ extern "C" {
  * Update these macros (and CMakeLists.txt project VERSION) when releasing.
  */
 #define WEBLIB_VERSION_MAJOR 2
-#define WEBLIB_VERSION_MINOR 0
-#define WEBLIB_VERSION_PATCH 1
+#define WEBLIB_VERSION_MINOR 1
+#define WEBLIB_VERSION_PATCH 0
 
 /** Full version string in "MAJOR.MINOR.PATCH" form. */
-#define WEBLIB_VERSION "2.0.1"
+#define WEBLIB_VERSION "2.1.0"
 
 /** Server identity string embedded in HTTP Server header. */
 #define WEBLIB_VERSION_STRING "weblib/" WEBLIB_VERSION " (author:" WEBLIB_AUTHOR_KAMRAN ")"

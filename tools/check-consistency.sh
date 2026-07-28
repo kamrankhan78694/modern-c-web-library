@@ -297,6 +297,66 @@ else
 fi
 echo
 
+# ---------------------------------------------------------------------------
+# 6. Present-tense "the current version is X" claims in markdown must match.
+#    Check [1] binds the four BUILD files to CMakeLists.txt, which is why the
+#    header above cites `"currently 2.0.0" in DOCKER_PACKAGE.md` as a motivating
+#    failure — and yet that file's version BADGE then shipped 2.0.0 through both
+#    2.0.1 and 2.1.0, because no check ever read markdown. Checking the build
+#    files and calling the class closed is how it survived: the instance named in
+#    review was fixed, the class was not.
+#
+#    Only forms that can ONLY mean "this is the current version" are matched:
+#    a shields.io version badge, a release-tag badge link, "currently X.Y.Z",
+#    and a `**Version X.Y.Z**` banner. Historical prose ("shipped in 2.0.0",
+#    changelog entries, "fixed in 2.0.1") uses none of these, so it is not
+#    flagged — a checker that cries wolf gets disabled, and then protects
+#    nothing.
+#
+#    USE vs MENTION. Its first run flagged a correct line in
+#    copilot-instructions.md that QUOTES the historical bad strings while
+#    explaining this very failure: `docker push ...:2.0.0` and "currently
+#    2.0.0". Quoting a stale claim is not making one. Backticked and
+#    double-quoted spans are markdown's mention markers, so they are stripped
+#    before version literals are read. The cost is honest and small: a claim
+#    written entirely inside a code span — PUBLISH_GUIDE.md's
+#    "(currently `2.1.0`)" — is not checked here. Every claim that actually went
+#    stale (the badge, five `**Version X.Y.Z**` banners) is bare text and is.
+# ---------------------------------------------------------------------------
+echo "[6] present-tense version claims in markdown match CMakeLists.txt"
+
+if [ -z "$CMAKE_VER" ]; then
+    fail "no CMakeLists.txt version to check markdown against"
+else
+    bad=0
+    while IFS= read -r hit; do
+        [ -z "$hit" ] && continue
+        case "$hit" in CHANGELOG.md:*) continue ;; esac   # release-scoped by definition
+        # Strip mentions (see USE vs MENTION above) before reading versions.
+        used="$(printf '%s' "$hit" | sed 's/`[^`]*`//g; s/"[^"]*"//g')"
+        # Every version literal that survives must be the current one. These
+        # forms are current-version claims by construction, so a different
+        # number is stale, not history.
+        for v in $(printf '%s' "$used" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'); do
+            if [ "$v" != "$CMAKE_VER" ]; then
+                bad=$((bad + 1))
+                printf '          %s\n' "$hit"
+                printf '            ^ claims %s is current; CMakeLists.txt says %s\n' "$v" "$CMAKE_VER"
+                break
+            fi
+        done
+    done <<EOF
+$(git ls-files '*.md' | tr '\n' '\0' | xargs -0 grep -nE \
+    'img\.shields\.io/badge/version-[0-9]+\.[0-9]+\.[0-9]+|releases/tag/v[0-9]+\.[0-9]+\.[0-9]+\)|[Cc]urrently \`?[0-9]+\.[0-9]+\.[0-9]+|\*\*Version [0-9]+\.[0-9]+\.[0-9]+\*\*' 2>/dev/null || true)
+EOF
+    if [ "$bad" -eq 0 ]; then
+        pass "every current-version claim in markdown says $CMAKE_VER"
+    else
+        fail "$bad markdown claim(s) name a version other than $CMAKE_VER as current (listed above)"
+    fi
+fi
+echo
+
 echo "=== $((checks - fails))/$checks checks passed ==="
 if [ "$fails" -gt 0 ]; then
     echo "FAILED: $fails check(s). These are mechanical facts, not style opinions —" >&2

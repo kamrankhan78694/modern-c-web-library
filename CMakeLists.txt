@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(ModernCWebLibrary VERSION 2.0.1 LANGUAGES C)
+project(ModernCWebLibrary VERSION 2.1.0 LANGUAGES C)
 
 # Set C standard
 set(CMAKE_C_STANDARD 11)

@@ -183,7 +183,7 @@ Phase 12 — DELIVERED in v2.0.0 (planned as v1.2.0): TLS 1.3 Handshake & HTTPS
    └── [ ] Browser page-load — NOT achieved; Ed25519-only server certs have limited and
            inconsistent browser support. See Phase 21.
 
-Phase 13 (v2.1.0): HTTP/2 Protocol
+Phase 13 (v2.2.0): HTTP/2 Protocol
    ├── Binary framing layer (RFC 7540)
    ├── HPACK header compression (RFC 7541, static table)
    ├── Stream multiplexing with priority
@@ -192,7 +192,7 @@ Phase 13 (v2.1.0): HTTP/2 Protocol
    ├── `http_server_enable_http2()` API
    └── h2 + h2c (cleartext) support
 
-Phase 14 (v2.2.0): Persistent Storage Engine
+Phase 14 (v2.3.0): Persistent Storage Engine
    ├── B-tree key-value store (on-disk, memory-mapped)
    ├── Write-ahead log (WAL) for crash recovery
    ├── Transaction support (begin/commit/rollback)
@@ -201,7 +201,7 @@ Phase 14 (v2.2.0): Persistent Storage Engine
    ├── `storage_open()` / `storage_close()` lifecycle
    └── Integration with session store + cache persistence
 
-Phase 15 (v2.3.0): Advanced Middleware & Content
+Phase 15 (v2.4.0): Advanced Middleware & Content
    ├── Directory listing (auto-generated HTML indexes)
    ├── Server-Sent Events (SSE) for streaming
    ├── Content negotiation (Accept header parsing)
@@ -210,7 +210,7 @@ Phase 15 (v2.3.0): Advanced Middleware & Content
    ├── Regex-based route matching
    └── ETag generation improvements (weak/strong)
 
-Phase 16 (v2.4.0): Multi-Process Architecture
+Phase 16 (v2.5.0): Multi-Process Architecture
    ├── Master-worker process model (fork-based)
    ├── Worker supervision and auto-restart
    ├── SO_REUSEPORT per-worker accept
@@ -219,7 +219,7 @@ Phase 16 (v2.4.0): Multi-Process Architecture
    ├── `http_server_set_workers(n)` API
    └── Per-worker metrics aggregation
 
-Phase 17 (v2.5.0): Cross-Platform Hardening
+Phase 17 (v2.6.0): Cross-Platform Hardening
    ├── Platform abstraction layer (`src/platform.h`)
    ├── Windows IOCP event loop backend
    ├── Windows named pipes for IPC
@@ -228,7 +228,7 @@ Phase 17 (v2.5.0): Cross-Platform Hardening
    ├── CI matrix: Linux (GCC/Clang) + macOS (Clang) + Windows (MSVC) + FreeBSD
    └── Platform compatibility documentation
 
-Phase 18 (v2.6.0): Developer Experience & Configuration
+Phase 18 (v2.7.0): Developer Experience & Configuration
    ├── INI configuration file parser
    ├── Plugin/extension architecture (compile-time modules)
    ├── Multiple template formats (Mustache-style, includes, inheritance)
@@ -237,7 +237,7 @@ Phase 18 (v2.6.0): Developer Experience & Configuration
    ├── API versioning support (URL prefix + header-based)
    └── Configuration validation and hot-reload
 
-Phase 19 (v2.7.0): HTTP/3 & QUIC
+Phase 19 (v2.8.0): HTTP/3 & QUIC
    ├── UDP socket layer
    ├── QUIC transport protocol (RFC 9000)
    ├── QUIC handshake (integrates Phase 11-12 TLS 1.3)
@@ -312,7 +312,7 @@ Phase 21 (unscheduled): Security Residuals & TLS Hardening
 with them browser interop), SNI, session resumption, client mode, async-mode TLS, WebSocket-over-TLS,
 external audit.
 
-### Phase 13: HTTP/2 Protocol — v2.1.0 (5 weeks)
+### Phase 13: HTTP/2 Protocol — v2.2.0 (5 weeks)
 
 | Week | Milestone | Deliverables | Dependencies |
 |------|-----------|-------------|--------------|
@@ -322,7 +322,7 @@ external audit.
 | **W16** | HTTP/2 Server Integration | `http_server_enable_http2()` API; connection preface handling; settings negotiation; integration with existing router; server push API; h2c upgrade support | W13–W15, Phase 12 (ALPN) |
 | **W17** | HTTP/2 Testing | `curl --http2` validation; multiplexed request tests; flow control tests; HPACK bomb protection; 50+ HTTP/2 unit tests; performance comparison vs HTTP/1.1 | W13–W16 |
 
-### Phase 14: Persistent Storage Engine — v2.2.0 (5 weeks)
+### Phase 14: Persistent Storage Engine — v2.3.0 (5 weeks)
 
 | Week | Milestone | Deliverables | Dependencies |
 |------|-----------|-------------|--------------|
@@ -332,7 +332,7 @@ external audit.
 | **W21** | Iterator & Query Interface | `storage_iterator_t` — forward/reverse iteration; range queries (start_key, end_key); prefix scan; cursor-based pagination | W18 |
 | **W22** | Integration & Persistence APIs | `storage_open(path)` / `storage_close()` lifecycle; `storage_get()` / `storage_put()` / `storage_delete()`; session store backend; cache persistence backend; 40+ storage tests | W18–W21 |
 
-### Phase 15: Advanced Middleware & Content — v2.3.0 (4 weeks)
+### Phase 15: Advanced Middleware & Content — v2.4.0 (4 weeks)
 
 | Week | Milestone | Deliverables | Dependencies |
 |------|-----------|-------------|--------------|
@@ -341,7 +341,7 @@ external audit.
 | **W25** | Route Groups & Regex Routes | `router_group_create(prefix)` — scoped middleware per group; `router_add_regex_route()` — POSIX `regcomp()`/`regexec()` based pattern matching; named captures | None |
 | **W26** | Testing & Integration | 30+ middleware tests; SSE example (`examples/sse_server.c`); directory listing example; streaming upload example; backward-compatible with existing router API | W23–W25 |
 
-### Phase 16: Multi-Process Architecture — v2.4.0 (5 weeks)
+### Phase 16: Multi-Process Architecture — v2.5.0 (5 weeks)
 
 | Week | Milestone | Deliverables | Dependencies |
 |------|-----------|-------------|--------------|
@@ -351,7 +351,7 @@ external audit.
 | **W30** | Metrics Aggregation | Per-worker metrics collection; master aggregates via shared memory or pipe; `/metrics` endpoint serves combined JSON; worker health monitoring | W27, Phase 9 (metrics) |
 | **W31** | Testing & Stabilization | `http_server_set_workers(n)` API; multi-worker stress tests (10 workers, 10K requests); graceful shutdown of all workers; Valgrind on single-worker mode; 25+ worker tests | W27–W30 |
 
-### Phase 17: Cross-Platform Hardening — v2.5.0 (4 weeks)
+### Phase 17: Cross-Platform Hardening — v2.6.0 (4 weeks)
 
 | Week | Milestone | Deliverables | Dependencies |
 |------|-----------|-------------|--------------|
@@ -360,7 +360,7 @@ external audit.
 | **W34** | BSD & CI Matrix | FreeBSD/OpenBSD CI runners (or cross-compilation); BSD-specific `kqueue` flags; `arc4random_buf()` for random bytes; platform compatibility matrix documentation | W32 |
 | **W35** | MSVC Build & Testing | CMake MSVC generator support; `#pragma` warning suppression mapping; Windows-specific test adaptations; end-to-end CI: Linux (GCC/Clang) + macOS (Clang) + Windows (MSVC) + FreeBSD | W32–W34 |
 
-### Phase 18: Developer Experience & Configuration — v2.6.0 (5 weeks)
+### Phase 18: Developer Experience & Configuration — v2.7.0 (5 weeks)
 
 | Week | Milestone | Deliverables | Dependencies |
 |------|-----------|-------------|--------------|
@@ -370,7 +370,7 @@ external audit.
 | **W39** | Debug Mode & API Versioning | `http_server_set_debug(true)` — verbose request/response logging with headers, timing per middleware, memory allocation tracking; `router_version_group("v1", router_v1)` — URL-prefix and `Accept-Version` header-based API versioning | None |
 | **W40** | Testing & Documentation | 35+ developer experience tests; configuration example; plugin example; advanced template example; debug mode documentation; API versioning tutorial | W36–W39 |
 
-### Phase 19: HTTP/3 & QUIC — v2.7.0 (6 weeks)
+### Phase 19: HTTP/3 & QUIC — v2.8.0 (6 weeks)
 
 | Week | Milestone | Deliverables | Dependencies |
 |------|-----------|-------------|--------------|
@@ -1051,13 +1051,13 @@ the version column moved.
 |-------|-----------------|----------------|----------|-----------|-----------------|
 | Phase 11 | v1.1.0 | **✅ shipped in v2.0.0** | 6 weeks | W1–W6 | Crypto primitives — SHA-256/512, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519 (**no AES-GCM**) |
 | Phase 12 | v1.2.0 | **✅ shipped in v2.0.0** | 6 weeks | W7–W12 | TLS 1.3 **server** handshake + HTTPS — EXPERIMENTAL · UNAUDITED |
-| Phase 13 | v1.3.0 | v2.1.0 | 5 weeks | W13–W17 | HTTP/2 protocol (framing, HPACK, streams, push) |
-| Phase 14 | v1.4.0 | v2.2.0 | 5 weeks | W18–W22 | Persistent storage engine (B-tree, WAL, transactions) |
-| Phase 15 | v1.5.0 | v2.3.0 | 4 weeks | W23–W26 | Advanced middleware (directory listing, SSE, route groups) |
-| Phase 16 | v1.6.0 | v2.4.0 | 5 weeks | W27–W31 | Multi-process architecture (fork, reload, metrics) |
-| Phase 17 | v1.7.0 | v2.5.0 | 4 weeks | W32–W35 | Cross-platform (Windows IOCP, BSD, MSVC, CI matrix) |
-| Phase 18 | v1.8.0 | v2.6.0 | 5 weeks | W36–W40 | Developer experience (config, plugins, templates, debug) |
-| Phase 19 | v1.9.0 | v2.7.0 | 6 weeks | W41–W46 | HTTP/3 & QUIC (UDP, transport, handshake, streams) |
+| Phase 13 | v1.3.0 | v2.2.0 | 5 weeks | W13–W17 | HTTP/2 protocol (framing, HPACK, streams, push) |
+| Phase 14 | v1.4.0 | v2.3.0 | 5 weeks | W18–W22 | Persistent storage engine (B-tree, WAL, transactions) |
+| Phase 15 | v1.5.0 | v2.4.0 | 4 weeks | W23–W26 | Advanced middleware (directory listing, SSE, route groups) |
+| Phase 16 | v1.6.0 | v2.5.0 | 5 weeks | W27–W31 | Multi-process architecture (fork, reload, metrics) |
+| Phase 17 | v1.7.0 | v2.6.0 | 4 weeks | W32–W35 | Cross-platform (Windows IOCP, BSD, MSVC, CI matrix) |
+| Phase 18 | v1.8.0 | v2.7.0 | 5 weeks | W36–W40 | Developer experience (config, plugins, templates, debug) |
+| Phase 19 | v1.9.0 | v2.8.0 | 6 weeks | W41–W46 | HTTP/3 & QUIC (UDP, transport, handshake, streams) |
 | Phase 20 | v2.0.0 | v3.0.0 | 4 weeks | W47–W50 | Release engineering (CLI, observability, fuzz, release) |
 | Phase 21 | — (new) | unscheduled | 8 weeks | W51–W58 | Security residuals & TLS hardening — external audit, RSA/ECDSA certs, AES-GCM, async/WS TLS, resumption, client mode, PBKDF2, request-ID and IP-access middleware |
 | **Total** | | | **58 weeks** | | **W1–W12 delivered in v2.0.0 (2026-07-27); W13–W58 (~11 months) remain, re-baselined from that date** |
@@ -1093,18 +1093,19 @@ the version column moved.
 | 2.0 | 2026-02-19 | Complete rewrite for Phases 7–10: first-principles design, adversarial review, atomic task breakdown, security threat model |
 | 3.0 | 2026-03-02 | Phase 10.1 delivered (security utilities, headers middleware, secure secrets); Phase 11 planned (TLS, password hashing, HKDF, fuzz testing) |
 | 4.0 | 2026-07-27 | Roadmap re-baselined against shipped work for the **v2.0.0** release. WebAssembly/Emscripten and Cloudflare Workers (KV, R2, D1, Queues) targets shipped Apr 2026 — supersedes the "WebAssembly compilation target" non-goal in §2. Phases 11 and 12 delivered together in v2.0.0 as an experimental pure-C TLS 1.3 **server**: EXPERIMENTAL · UNAUDITED, native-only, threaded-mode only, OFF by default behind `WEBLIB_ENABLE_TLS`; `TLS_CHACHA20_POLY1305_SHA256` / X25519 / Ed25519 only; `http_server_enable_tls()`; `openssl s_client` interop, deterministic fuzzer, `tls-check` CI job with ASan/UBSan. Narrower than planned: no AES-GCM, no SHA-384, no RSA/ECDSA certificate verification, no client side, no session resumption, no SNI; manual checkpoint M1 (browser page-load) **not met**. That residual scope is carried forward as the new **Phase 21**, and the version targets for Phases 13–20 were re-baselined onto v2.1.0–v3.0.0. Note "4.0" is this *document's* revision number, not a project version |
+| 4.1 | 2026-07-29 | **v2.1.0 was consumed by an unplanned release** — the router response-hook phase (#136), the dev server + end-to-end suite, RFC 9110 HEAD handling, and BUG-11..14, all additive public API and therefore a semver MINOR. Phase content is unchanged; the targets for Phases 13–19 shift one minor to v2.2.0–v2.8.0 (Phase 20 keeps v3.0.0). Weeks and durations are unaffected |
 
 ---
 
 **Maintained by**: MCWL Core Team
-**Last Updated**: 2026-07-27
+**Last Updated**: 2026-07-29
 **Status**: Phases 11–12 delivered in **v2.0.0** — the hand-written pure-C **TLS 1.3 server**
 (server-side only; `TLS_CHACHA20_POLY1305_SHA256` + X25519 + Ed25519) is **EXPERIMENTAL · UNAUDITED**,
 opt-in via `-DWEBLIB_ENABLE_TLS=ON`, threaded-mode and native-only — see
 [`src/tls/README.md`](src/tls/README.md). Not for production without an external cryptographic audit.
 Still open from those phases (now **Phase 21**): external audit, RSA/ECDSA certificates and browser
 interop, AES-GCM, TLS in async mode, WebSocket over TLS, session resumption, SNI, client mode,
-PBKDF2 password hashing, request-ID and IP-access middleware. Next protocol phase: HTTP/2 (Phase 13, v2.1.0).
+PBKDF2 password hashing, request-ID and IP-access middleware. Next protocol phase: HTTP/2 (Phase 13, v2.2.0).
 **License**: MIT (see LICENSE file)
 
 For questions or discussions about this roadmap, please open an issue on GitHub or contact the maintainers.

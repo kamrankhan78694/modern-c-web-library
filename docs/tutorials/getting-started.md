@@ -1,6 +1,6 @@
 # Getting Started with Modern C Web Library
 
-**Version 2.0.1**
+**Version 2.1.0**
 
 Welcome to the Modern C Web Library! This tutorial walks you from an empty directory
 to a running HTTP server, a JSON API, middleware, and — at the end — an experimental

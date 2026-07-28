@@ -55,7 +55,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
     - [ ] ALPN `h2` — waits on Phase 13
     - [ ] TLS 1.2 fallback — currently rejected by design; reopening it would need a new decision record
 
-- [ ] 🔧 **HTTP/2 Support** - Implement HTTP/2 protocol *(Phase 13, v2.1.0)*
+- [ ] 🔧 **HTTP/2 Support** - Implement HTTP/2 protocol *(Phase 13, v2.2.0)*
   - Binary framing layer (RFC 7540, all 10 frame types)
   - HPACK header compression (RFC 7541, static + dynamic tables)
   - Stream multiplexing with priority and flow control
@@ -63,7 +63,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - `http_server_enable_http2()` API
   - h2 (TLS) + h2c (cleartext) support
 
-- [ ] 💡 **HTTP/3 / QUIC Support** - Next-generation HTTP protocol *(Phase 19, v2.7.0)*
+- [ ] 💡 **HTTP/3 / QUIC Support** - Next-generation HTTP protocol *(Phase 19, v2.8.0)*
   - UDP socket layer with batch I/O
   - QUIC transport protocol (RFC 9000) with connection migration
   - HTTP/3 framing (RFC 9114) over QUIC streams
@@ -130,7 +130,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - ETag support
   - Cache headers
 
-- [ ] 🔧 **Directory Listing** - Auto-generate directory indexes *(Phase 15, v2.3.0)*
+- [ ] 🔧 **Directory Listing** - Auto-generate directory indexes *(Phase 15, v2.4.0)*
   - Configurable templates
   - File size formatting
   - Sorting options
@@ -143,7 +143,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Context-based rendering
   - HTTP response integration
 
-- [ ] 💡 **Multiple Template Formats** - Support various template languages *(Phase 18, v2.6.0)*
+- [ ] 💡 **Multiple Template Formats** - Support various template languages *(Phase 18, v2.7.0)*
   - Mustache templates (sections, partials, inheritance)
   - Auto-escaping (HTML/URL/JS context-aware)
   - Template includes and compiled template caching
@@ -156,7 +156,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Transaction management
   - Query builder helpers
 
-- [ ] 💡 **Custom File-Based Storage** - Simple data persistence *(Phase 14, v2.2.0)*
+- [ ] 💡 **Custom File-Based Storage** - Simple data persistence *(Phase 14, v2.3.0)*
   - B-tree key-value store (on-disk, memory-mapped)
   - Write-ahead log for crash recovery
   - Transaction support (begin/commit/rollback)
@@ -289,13 +289,13 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - Cache invalidation
   - TTL support
 
-- [ ] 🔧 **Load Balancing** - Distribute traffic *(Phase 16, v2.4.0)*
+- [ ] 🔧 **Load Balancing** - Distribute traffic *(Phase 16, v2.5.0)*
   - Multi-process master-worker model (fork-based)
   - SO_REUSEPORT per-worker accept
   - Worker supervision and auto-restart
   - Per-worker health monitoring
 
-- [ ] 💡 **Worker Pool** - Process management *(Phase 16, v2.4.0)*
+- [ ] 💡 **Worker Pool** - Process management *(Phase 16, v2.5.0)*
   - Multi-process model via fork()
   - Process supervision with auto-restart
   - Zero-downtime hot reload (SIGHUP)
@@ -311,8 +311,8 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Developer Experience
 
-- [ ] 🔧 **Hot Reload** - Automatic server restart on code changes *(Phase 16, v2.4.0)*
-- [ ] 🔧 **Debug Mode** - Enhanced debugging features *(Phase 18, v2.6.0)*
+- [ ] 🔧 **Hot Reload** - Automatic server restart on code changes *(Phase 16, v2.5.0)*
+- [ ] 🔧 **Debug Mode** - Enhanced debugging features *(Phase 18, v2.7.0)*
   - Verbose logging with request/response headers
   - Request/response inspection with per-middleware timing
   - Memory allocation tracking
@@ -364,7 +364,7 @@ This document tracks planned features, enhancements, and improvements for the Mo
   - GitHub Actions CI: `primary-checks` (Docker GCC build + full ctest + Valgrind), `clang-check`, `macos-check` (pull requests only), `docker-image-check`
   - `tls-check` — a RelWithDebInfo build with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` running all 13 suites, plus an ASan/UBSan build running the 7 TLS suites
   - Valgrind memory check gate in `primary-checks` (every test binary; a leak in any one fails the job)
-  - Platform coverage today is Linux (GCC + Clang) and macOS (Clang, pull requests only); Windows and BSD runners are still open *(Phase 17, v2.5.0)*
+  - Platform coverage today is Linux (GCC + Clang) and macOS (Clang, pull requests only); Windows and BSD runners are still open *(Phase 17, v2.6.0)*
 
 - [x] ✅ **Benchmarking Suite** - Performance benchmarks
   - Throughput tests (requests/sec)
@@ -373,13 +373,13 @@ This document tracks planned features, enhancements, and improvements for the Mo
 
 ### Cross-Platform
 
-- [ ] 🔧 **Windows Improvements** - Better Windows support *(Phase 17, v2.5.0)*
+- [ ] 🔧 **Windows Improvements** - Better Windows support *(Phase 17, v2.6.0)*
   - IOCP event loop backend (`src/event_loop_iocp.c`)
   - MSVC build support (CMake generator)
   - Windows-specific CI runner
   - Platform abstraction layer (`src/platform.h`)
 
-- [ ] 💡 **BSD Support** - Explicit BSD testing and support *(Phase 17, v2.5.0)*
+- [ ] 💡 **BSD Support** - Explicit BSD testing and support *(Phase 17, v2.6.0)*
   - FreeBSD CI testing
   - OpenBSD CI testing
   - NetBSD CI testing
@@ -473,16 +473,18 @@ For a detailed, phased implementation plan with timelines, priorities, and imple
 
 ### Planned Phases
 
-> Phases 11 and 12 shipped together in v2.0.0 rather than as separate v1.1.0 / v1.2.0 releases, so
-> the version targets below have been re-baselined. Phase numbers and scope are unchanged.
+> Phases 11 and 12 shipped together in v2.0.0 rather than as separate v1.1.0 / v1.2.0 releases, and
+> v2.1.0 was then consumed by an unplanned additive-API release (router response hooks, dev server +
+> end-to-end suite, BUG-11..14), so the version targets below have been re-baselined twice. Phase
+> numbers and scope are unchanged.
 
-- **Phase 13 (v2.1.0)**: 🎯 HTTP/2 Protocol — binary framing, HPACK compression, stream multiplexing, flow control, server push
-- **Phase 14 (v2.2.0)**: 🔧 Persistent Storage Engine — B-tree key-value store, write-ahead log, transactions, crash recovery, iterator API
-- **Phase 15 (v2.3.0)**: 🔧 Advanced Middleware & Content — directory listing, Server-Sent Events, content negotiation, route groups, regex routes
-- **Phase 16 (v2.4.0)**: 🔧 Multi-Process Architecture — master-worker fork model, SO_REUSEPORT, zero-downtime reload, per-worker metrics
-- **Phase 17 (v2.5.0)**: 🔧 Cross-Platform Hardening — platform abstraction layer, Windows IOCP, BSD testing, MSVC build, CI matrix expansion
-- **Phase 18 (v2.6.0)**: 🔧 Developer Experience & Configuration — INI config parser, plugin architecture, advanced templates, debug mode, API versioning
-- **Phase 19 (v2.7.0)**: 💡 HTTP/3 & QUIC — UDP transport, QUIC protocol (RFC 9000), connection migration, HTTP/3 framing, QPACK compression
+- **Phase 13 (v2.2.0)**: 🎯 HTTP/2 Protocol — binary framing, HPACK compression, stream multiplexing, flow control, server push
+- **Phase 14 (v2.3.0)**: 🔧 Persistent Storage Engine — B-tree key-value store, write-ahead log, transactions, crash recovery, iterator API
+- **Phase 15 (v2.4.0)**: 🔧 Advanced Middleware & Content — directory listing, Server-Sent Events, content negotiation, route groups, regex routes
+- **Phase 16 (v2.5.0)**: 🔧 Multi-Process Architecture — master-worker fork model, SO_REUSEPORT, zero-downtime reload, per-worker metrics
+- **Phase 17 (v2.6.0)**: 🔧 Cross-Platform Hardening — platform abstraction layer, Windows IOCP, BSD testing, MSVC build, CI matrix expansion
+- **Phase 18 (v2.7.0)**: 🔧 Developer Experience & Configuration — INI config parser, plugin architecture, advanced templates, debug mode, API versioning
+- **Phase 19 (v2.8.0)**: 💡 HTTP/3 & QUIC — UDP transport, QUIC protocol (RFC 9000), connection migration, HTTP/3 framing, QPACK compression
 - **Phase 20 (v3.0.0)**: 💡 Release Engineering & Ecosystem — CLI tools, Prometheus metrics, OpenTelemetry tracing, fuzz testing, v3.0.0 release
 - **Phase 21 (unscheduled)**: 🎯 Security Residuals & TLS Hardening — external cryptographic audit of `src/tls/`, RSA/ECDSA certificates + X.509 chain validation (and with them browser interop), AES-256-GCM, TLS in async mode, WebSocket over TLS, session resumption, SNI, TLS client mode, PBKDF2 password hashing, request-ID middleware, IP allowlist/denylist
 
@@ -510,5 +512,5 @@ Priorities may change based on community feedback and project direction.
 
 ---
 
-**Last Updated**: 2026-07-27 (v2.0.0)  
+**Last Updated**: 2026-07-29 (v2.1.0)  
 **Maintainer**: [@kamrankhan78694](https://github.com/kamrankhan78694)

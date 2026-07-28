@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [2.1.0] - 2026-07-29
+
+A dev server drove this release: running the library in a browser surfaced wiring
+defects that 166 unit tests, Valgrind and ASan had all missed, and fixing them
+produced a post-handler router phase, an end-to-end test suite, four bug fixes
+with regression coverage, and five new public APIs. Additive only — no breaking
+changes; the one observable behaviour change is `send_text` replacing (not
+appending) `Content-Type`, which no correct caller could have relied on.
+
 ### Added
 
 - **`http_response_send_html()`** — sends with `Content-Type: text/html;
@@ -259,6 +270,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CI's "Production Docker Image" job now builds the image that is actually
+  released.** It built `./Dockerfile`, while the published image comes from
+  `./Dockerfile.release` — so a green check proved nothing about the release
+  artifact, and the first build of `Dockerfile.release` happened inside the
+  publish workflow, *after* the tag was pushed. The two differ materially
+  (`-DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF`, the `websocket_echo_server`
+  entrypoint, a non-root user, the version LABELs). The verify step now also
+  checks `websocket_echo_server`, which the old one never looked for, and a new
+  step asserts the image's `org.opencontainers.image.version` LABEL equals the
+  version in `CMakeLists.txt`. A comment claiming the job was path-filtered to
+  Dockerfile/source changes was removed: no `paths:` filter or `if:` ever
+  implemented it.
+- **`tools/check-consistency.sh` checks present-tense version claims in
+  markdown (check [6]).** Check [1] binds the four *build* files to
+  `CMakeLists.txt`, and the script's own header cites `"currently 2.0.0" in
+  DOCKER_PACKAGE.md` as a motivating failure — yet that file's version **badge**
+  then shipped `2.0.0` through both 2.0.1 and 2.1.0, because nothing ever read
+  markdown. The instance named in review was fixed; the class was not. The new
+  check caught six more stale claims a manual sweep for this release had missed,
+  including `**Version 2.0.1**` banners in `docs/api/README.md` and all three
+  tutorials. It matches only forms that can only mean "this is current" (a
+  shields.io version badge, a release-tag badge link, `currently X.Y.Z`, a
+  `**Version X.Y.Z**` banner), and strips backticked and double-quoted spans
+  first — its first run flagged a *correct* line that quotes the historical bad
+  strings while explaining this exact failure, and a checker that cries wolf
+  gets disabled. Verified to fail on a reintroduced stale badge.
 - **The examples wire metrics with `metrics_register()` alone.** Adding the
   middleware as well is supported and does not double-count, but it counts the
   total on the way *in*, so a `/metrics` scrape includes itself in
@@ -994,7 +1031,9 @@ All planned phases (4-10) are complete with comprehensive documentation and tuto
 - **0.2.x**: WebSocket support (RFC 6455 compliant)
 - **0.1.x**: Initial HTTP server implementation with event loop
 
-[Unreleased]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v2.0.1...v2.1.0
+[2.0.1]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/kamrankhan78694/modern-c-web-library/compare/v0.8.0...v0.9.0

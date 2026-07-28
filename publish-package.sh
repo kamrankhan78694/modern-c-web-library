@@ -4,7 +4,7 @@
 
 set -e
 
-VERSION=${1:-"2.0.1"}
+VERSION=${1:-"2.1.0"}
 REGISTRY="ghcr.io"
 IMAGE_NAME="kamrankhan78694/modern-c-web-library"
 FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}"

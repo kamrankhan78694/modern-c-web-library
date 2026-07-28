@@ -1,6 +1,6 @@
 # Building a REST API with Modern C Web Library
 
-**Version 2.0.1**
+**Version 2.1.0**
 
 ## Introduction
 

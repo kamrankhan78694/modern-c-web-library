@@ -1,6 +1,6 @@
 # Benchmarks
 
-**Version 2.0.0**
+**Version 2.1.0**
 
 The library has shipped a benchmarking module (`src/benchmark.c`) since v0.9.0.
 Until now nothing called it — no example, no test, no CI job — so the

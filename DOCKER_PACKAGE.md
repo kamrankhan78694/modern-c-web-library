@@ -1,7 +1,7 @@
 # Modern C Web Library - Docker Package
 
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://github.com/kamrankhan78694/modern-c-web-library/pkgs/container/modern-c-web-library)
-[![Version](https://img.shields.io/badge/version-2.0.0-green)](https://github.com/kamrankhan78694/modern-c-web-library/releases/tag/v2.0.0)
+[![Version](https://img.shields.io/badge/version-2.1.0-green)](https://github.com/kamrankhan78694/modern-c-web-library/releases/tag/v2.1.0)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Docker image for the Modern C Web Library. It ships the project's three bundled example servers — a WebSocket echo server and two HTTP servers — built from `Dockerfile.release` with `-DCMAKE_BUILD_TYPE=Release`, running as a non-root user behind a health check. They are working demonstrations of the library rather than a finished application: use them to try it out, or as the starting point for your own binary.
@@ -39,16 +39,16 @@ docker run -d -p 8080:8080 --name weblib ghcr.io/kamrankhan78694/modern-c-web-li
 
 ## Available Images
 
-- `latest` - Latest stable release (currently 2.0.1)
-- `2.0.1` - Exact release version
-- `2.0` - Major.minor version
+- `latest` - Latest stable release (currently 2.1.0)
+- `2.1.0` - Exact release version
+- `2.1` - Major.minor version
 - `2` - Major version only
 
-The tags CI publishes carry **no `v` prefix**: `.github/workflows/docker-publish.yml` uses `docker/metadata-action` with `type=semver,pattern={{version}}`, which strips the `v` from the git tag. Pull `...:2.0.1`, not `...:v2.0.1` — the latter is not a tag CI creates, and will normally come back as `manifest unknown`. (The older `publish-package.sh` helper does push a `v`-prefixed tag, so a stale `v`-prefixed tag may still linger in the registry; see [PUBLISH_GUIDE.md](PUBLISH_GUIDE.md).)
+The tags CI publishes carry **no `v` prefix**: `.github/workflows/docker-publish.yml` uses `docker/metadata-action` with `type=semver,pattern={{version}}`, which strips the `v` from the git tag. Pull `...:2.1.0`, not `...:v2.1.0` — the latter is not a tag CI creates, and will normally come back as `manifest unknown`. (The older `publish-package.sh` helper does push a `v`-prefixed tag, so a stale `v`-prefixed tag may still linger in the registry; see [PUBLISH_GUIDE.md](PUBLISH_GUIDE.md).)
 
 ## Features
 
-### What's in the Image (2.0.1)
+### What's in the Image (2.1.0)
 
 ✅ **WebSocket Support** (RFC 6455)
 - Automatic ping/pong handling
@@ -184,7 +184,8 @@ The repository has no published throughput or latency benchmarks. If numbers mat
 
 ## Version History
 
-- **v2.0.1** (2026-07-28) - Current release
+- **v2.1.0** (2026-07-29) - Current release — response hooks (#136), HEAD per RFC 9110, dev server + end-to-end suite, BUG-11..14 fixed
+- **v2.0.1** (2026-07-28) - Maintenance: CI, test suite and examples; first release where the Valgrind gate gates
 - **v2.0.0** (2026-07-27) - Pure-C TLS 1.3, WASM & Workers, security hardening
 - **v1.0.0** (2026-02-22) - First stable release
 - **v0.9.0** (2026-02-20) - Performance and observability (cache, metrics, gzip, async WebSocket)

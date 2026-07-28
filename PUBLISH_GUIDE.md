@@ -21,7 +21,7 @@ The workflow is already set up! It will run automatically when you:
 
 **This is the easiest method!** ⭐
 
-> **A manual run does not produce a version tag.** The `type=semver` patterns in `docker-publish.yml` only fire on a tag ref, so a `workflow_dispatch` run from `main` pushes `main`, `sha-<sha>` and `latest` — but no `2.0.0` / `2.0` / `2`. Push the `v2.0.1` git tag (or publish the GitHub release) when you want the versioned tags.
+> **A manual run does not produce a version tag.** The `type=semver` patterns in `docker-publish.yml` only fire on a tag ref, so a `workflow_dispatch` run from `main` pushes `main`, `sha-<sha>` and `latest` — but no `2.0.0` / `2.0` / `2`. Push the `v2.1.0` git tag (or publish the GitHub release) when you want the versioned tags.
 
 ---
 
@@ -34,7 +34,7 @@ If you have Docker running locally:
 open -a Docker  # macOS
 
 # Then run the publish script
-./publish-package.sh 2.0.1
+./publish-package.sh 2.1.0
 ```
 
 You'll need a GitHub Personal Access Token with `write:packages` permission:
@@ -55,7 +55,7 @@ open -a Docker  # macOS
 
 # 2. Build the image (tags are unprefixed, matching what CI publishes)
 docker build -f Dockerfile.release \
-  -t ghcr.io/kamrankhan78694/modern-c-web-library:2.0.1 \
+  -t ghcr.io/kamrankhan78694/modern-c-web-library:2.1.0 \
   -t ghcr.io/kamrankhan78694/modern-c-web-library:latest \
   .
 
@@ -63,11 +63,11 @@ docker build -f Dockerfile.release \
 echo $GITHUB_TOKEN | docker login ghcr.io -u kamrankhan78694 --password-stdin
 
 # 4. Push the images
-docker push ghcr.io/kamrankhan78694/modern-c-web-library:2.0.1
+docker push ghcr.io/kamrankhan78694/modern-c-web-library:2.1.0
 docker push ghcr.io/kamrankhan78694/modern-c-web-library:latest
 ```
 
-Keep the version in step 2 in sync with `CMakeLists.txt`, `include/kamran.k` and the `org.opencontainers.image.version` labels in `Dockerfile.release` (currently `2.0.1`).
+Keep the version in step 2 in sync with `CMakeLists.txt`, `include/kamran.k` and the `org.opencontainers.image.version` labels in `Dockerfile.release` (currently `2.1.0`).
 
 ---
 

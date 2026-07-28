@@ -1,6 +1,6 @@
 # Modern C Web Library - API Reference
 
-**Version 2.0.1**
+**Version 2.1.0**
 
 This is the API reference for the Modern C Web Library: the public surface declared
 in `include/kamran.k`, plus the pooled-database API in `include/db_pool.h`. Every
