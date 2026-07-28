@@ -22,6 +22,7 @@ The HTTP, WebSocket and middleware core is the stable, supported surface of the 
 ### Advanced Topics
 - **[Debugging Guide](DEBUGGING.md)** — Debug tools and techniques
 - **[Technical Debt](TECHNICAL_DEBT.md)** — Known limitations and future work
+- **[Benchmarks](BENCHMARKS.md)** — throughput/latency baseline, how to reproduce, and what the numbers do *not* claim
 - **[Changelog](../CHANGELOG.md)** — What changed in each release, including the source-breaking changes in 2.0.0
 - **[Cloudflare Workers API](WORKER_API.md)** — Worker request/response, the fetch handler, and the KV, R2, D1 and Queues bindings
 - **[Experimental TLS 1.3 Layer](../src/tls/README.md)** — what the hand-written pure-C TLS server does and does not give you (EXPERIMENTAL · UNAUDITED; off by default, native builds only)
@@ -191,7 +192,8 @@ Designed for high performance:
 - **LRU Cache**: Fast in-memory caching
 - **Compression**: Optional gzip for bandwidth savings
 
-Stress-test results are in [STRESS_TESTS.md](../STRESS_TESTS.md) — originally written against v0.9.0, with its test counts and per-test descriptions re-checked against 2.0.0. It is a pass/fail and static-limits report; it carries no throughput or latency numbers.
+Throughput and latency figures, with the caveats that belong on them, are in
+[BENCHMARKS.md](BENCHMARKS.md). Stress-test results are in [STRESS_TESTS.md](../STRESS_TESTS.md) — originally written against v0.9.0, with its test counts and per-test descriptions re-checked against 2.0.0. It is a pass/fail and static-limits report; it carries no throughput or latency numbers.
 
 ## Code Quality
 
