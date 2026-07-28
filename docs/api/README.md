@@ -420,6 +420,16 @@ static void access_log(http_request_t *req, http_response_t *res, void *ud) {
 router_add_response_hook(router, access_log, NULL);
 ```
 
+### `router_has_middleware()`
+Query whether a specific middleware function is installed on a router.
+```c
+bool router_has_middleware(router_t *router, middleware_fn_t middleware);
+```
+Returns `true` if `middleware` is in the router's middleware chain, `false` otherwise
+(including when either argument is `NULL`). Used internally by the metrics response
+hook to decide whether the middleware already counted the request's total and method,
+but available for any code that needs to branch on a router's configuration.
+
 ### `router_route()`
 Dispatch a request through the middleware chain and into the matching handler.
 ```c
