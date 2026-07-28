@@ -14,6 +14,22 @@ Nothing yet.
 A maintenance release. No library API change — the fixes are in CI, the test
 suite and the examples. Notably, this is the first release in which the Valgrind
 leak gate actually gates.
+### Added
+
+- **The benchmarking suite now produces numbers.** `src/benchmark.c` has shipped
+  since v0.9.0 with nothing calling it — no example, no test, no CI job — so the
+  advertised "Benchmarking Suite" had never yielded a figure and no baseline
+  existed to detect a regression against. `examples/benchmark_server` starts a
+  server, drives `benchmark_run()` against a plain-text and a JSON route, and
+  prints throughput plus p50/p95/p99. `tests/benchmark_tls.sh` measures the TLS
+  path with a real `openssl s_client`, which is the only option: the library is
+  TLS **server-side only**, so there is no in-process TLS client to benchmark
+  with. First baseline (Apple M5, loopback) recorded in
+  [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), along with what the numbers
+  explicitly do *not* claim — they are a single-client latency floor, not a
+  capacity or concurrency measurement. Neither tool is a ctest suite: they are
+  measurement tools, not gates, and an ungated performance number in CI is noise
+  that also costs wall time.
 
 ### Fixed
 
