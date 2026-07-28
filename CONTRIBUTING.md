@@ -611,6 +611,7 @@ CI (`.github/workflows/ci.yml`) runs both configurations, and a PR has to be gre
 
 | Job | What it runs |
 |-----|--------------|
+| `consistency` | `tools/check-consistency.sh` — version declarations agree across all six places one is declared, no hardcoded version literals in `src/`/`examples/`, documented ctest suite counts match `tests/CMakeLists.txt`, and the Valgrind step still gates. No build, so it is fast |
 | `primary-checks` | GCC build in Docker, the full default (TLS-off) suite, plus a Valgrind memory check |
 | `clang-check` | Same default configuration built with Clang |
 | `tls-check` | A `RelWithDebInfo` TLS build running all 13 suites, then a Clang ASan/UBSan build running the 7 TLS suites |

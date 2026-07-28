@@ -81,6 +81,25 @@ jobs:
             exit $rc
           '
 
+  # Mechanical consistency checks. Cheap (no build), so it runs first and in
+  # parallel with everything else. Guards the specific claim-drift that has
+  # shipped before: version declarations disagreeing across the six places that
+  # declare one, hardcoded version literals in examples, documented ctest suite
+  # counts that match no real configuration, and the Valgrind step silently
+  # losing its ability to gate.
+  consistency:
+    name: Consistency Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check repository consistency
+        run: bash tools/check-consistency.sh
+
   # Clang compilation — catches warnings/errors that GCC misses.
   # No valgrind (already covered above), so this is a lightweight job.
   clang-check:

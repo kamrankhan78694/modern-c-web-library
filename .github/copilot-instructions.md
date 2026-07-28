@@ -430,6 +430,55 @@ Don't create separate event loops unless implementing custom async patterns.
 9. **TLS maturity**: Never describe the TLS layer as production-ready, audited, or browser-compatible — it is none of those. And never present `http_server_enable_tls()` as taking file paths; it takes PEM buffers plus lengths
 10. **TLS test hooks**: Never suggest enabling `WEBLIB_TLS_TEST_HOOKS` outside a test build
 
+## Two failure modes this repository keeps hitting
+
+These are not hypothetical. Both shipped, more than once, and both were
+introduced *by the very change that was fixing an earlier instance of them*.
+Read them before you fix anything.
+
+### 1. Fixing the instance instead of the class
+
+A review names one location; the fix corrects that location and leaves every
+other instance of the same claim untouched — so the tree now contradicts itself,
+and the next reviewer finds the siblings.
+
+It has happened with the Workers routing claim, the "bindings are in-memory"
+claim, the middleware `user_data` split, the Valgrind gating claim, Windows
+support, and the v2.0.1 version bump.
+
+**Grepping one phrase is not enough** — the same claim is usually worded
+differently elsewhere. The v2.0.1 bump swept `Version 2.0.0` banners and still
+missed `docker push ...:2.0.0` and "currently 2.0.0", because those are the same
+claim in different words.
+
+Do this instead: **enumerate the artifacts, not the phrasing.** All four Workers
+binding constructors. Every `image.version` LABEL. Every place a version can be
+declared. Then re-grep afterwards and show zero remaining.
+
+`tools/check-consistency.sh` mechanises the cases with one machine-readable
+source of truth; it runs in CI as the `consistency` job. It does not cover
+prose claims — those still need the enumeration discipline.
+
+### 2. Writing a gate that passes without testing anything
+
+The worst kind of bug here, because it is invisible: everything is green and
+nothing was checked.
+
+- The Valgrind CI step ran six binaries and gated on one — a shell `for` loop
+  exits with its *last* iteration's status. It could also pass on an empty glob
+  or a failed `cd`.
+- The TLS suites were registered but never run in CI at all.
+- `ctest -R <filter>` exits 0 when the filter matches nothing, which is why
+  `--no-tests=error` is mandatory with `-R`.
+- `tests/benchmark_tls.sh` was written *while fixing the Valgrind gate* and had
+  the identical defect: a non-integer count made `seq` expand to nothing, so it
+  printed PASS after zero handshakes.
+
+**Any loop or filter that gates must prove it did work.** Accumulate status
+across iterations rather than relying on the last one, assert a non-zero count
+of things actually checked, and say so in the log. When you write a new gate,
+ask directly: *what input makes this pass while checking nothing?*
+
 ## When Adding New Features
 
 Before implementing new functionality:
