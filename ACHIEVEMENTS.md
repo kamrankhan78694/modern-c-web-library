@@ -41,7 +41,7 @@ is enabled together with its test hooks. Both configurations pass 100%.
 
 ```
 Default build (TLS off) — 7 suites:
-  WebLibTests (176 tests), KamranHeaderTests, AsyncWebSocketTests,
+  WebLibTests (177 tests), KamranHeaderTests, AsyncWebSocketTests,
   StressTests (38 tests), WorkerTests (32 tests), WasmTests (16 tests),
   StressDemoApp (end-to-end against a real running server)
 
@@ -260,7 +260,7 @@ See `examples/tls_server.c`, which reads the two PEM files itself and passes the
 
 | Metric | Value | Status |
 |--------|-------|--------|
-| Test Suite Size | 7 ctest suites by default (14 with the experimental TLS build); 176 unit + 38 stress tests, plus an end-to-end suite against a running server | ✅ Comprehensive |
+| Test Suite Size | 7 ctest suites by default (14 with the experimental TLS build); 177 unit + 38 stress tests, plus an end-to-end suite against a running server | ✅ Comprehensive |
 | Pass Rate | 100% in both configurations | ✅ All passing |
 | Failed Tests | 0 | ✅ Perfect score |
 | Code Coverage | Not measured — there is no gcov/lcov instrumentation in the build or CI | ⚠️ Not tracked |

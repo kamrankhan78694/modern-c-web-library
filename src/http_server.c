@@ -443,7 +443,16 @@ int http_server_listen(http_server_t *server, uint16_t port) {
     if (!server) {
         return -1;
     }
-    
+
+    /* Refuse a second listen on a running server. Without this guard the call
+     * overwrote socket_fd (leaking it and orphaning the accept thread on the
+     * old descriptor) and would now leak the accept wake pipe as well. Stop
+     * first, then listen again — the restart test exercises that sequence. */
+    if (server->running) {
+        fprintf(stderr, "http_server_listen: server is already running\n");
+        return -1;
+    }
+
     /* Create socket */
     server->socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server->socket_fd < 0) {
@@ -1034,6 +1043,16 @@ static void *accept_connections(void *arg) {
              * returns here instead of blocking where the wake pipe can't reach. */
             if (errno == EAGAIN || errno == EWOULDBLOCK ||
                 errno == EINTR || errno == ECONNABORTED) {
+                continue;
+            }
+            /* Out of descriptors: the pending connection stays queued, so
+             * poll() reports POLLIN immediately and a bare continue would
+             * busy-spin flooding the log. (The old blocking accept() could
+             * not spin here — it parked until the next connection.) Back off
+             * briefly; the condition clears when a worker closes a socket. */
+            if (errno == EMFILE || errno == ENFILE) {
+                perror("accept failed (fd exhaustion)");
+                usleep(50000);
                 continue;
             }
             if (server->running) {

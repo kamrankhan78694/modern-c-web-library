@@ -53,6 +53,17 @@ static const char *_test_find_header(void *headers, const char *name_lower) {
     return NULL;
 }
 
+/* How many headers with this name? Exists because BUG-11 was precisely a
+ * DUPLICATE header: find-by-name returns the first match and cannot see a
+ * second one, so an assertion built on it passed against the very bug. */
+static int _test_count_header(void *headers, const char *name_lower) {
+    int count = 0;
+    for (_test_hdr_node_t *h = (_test_hdr_node_t *)headers; h; h = h->next) {
+        if (strcmp(h->name, name_lower) == 0) count++;
+    }
+    return count;
+}
+
 /*
  * Test-local helper: prepend a header node onto an http_header_node list, using
  * the same layout header_list_add() builds. Name is stored lowercased because
@@ -3981,6 +3992,28 @@ void test_gzip_compress_valid(void) {
     PASS();
 }
 
+void test_send_compressed_fallback_keeps_content_type(void) {
+    TEST("send_compressed (uncompressed path keeps caller's Content-Type)");
+
+    /* No Accept-Encoding → the uncompressed path. It used to send text/plain
+     * regardless of the content_type argument, so whether a response was
+     * labelled text/html depended on whether it happened to compress. */
+    const char *body = "<h1>short html body</h1>";
+    http_response_t res = {0};
+    http_response_send_compressed(&res, HTTP_OK, body, 0, "text/html", NULL);
+
+    ASSERT(res.body != NULL);
+    ASSERT(res.body_length == strlen(body));
+    const char *ct = _test_find_header(res.headers, "content-type");
+    ASSERT(ct != NULL);
+    ASSERT(strcmp(ct, "text/html") == 0);
+    ASSERT(_test_count_header(res.headers, "content-type") == 1);
+
+    free(res.body);
+    _test_free_header_list(res.headers);
+    PASS();
+}
+
 /* ===== Phase 9: Benchmark tests ===== */
 
 void test_benchmark_timestamp(void) {
@@ -5415,14 +5448,6 @@ void test_websocket_oversized_frame(void) {
     PASS();
 }
 
-static int _test_count_header(void *headers, const char *name_lower) {
-    int count = 0;
-    for (_test_hdr_node_t *h = (_test_hdr_node_t *)headers; h; h = h->next) {
-        if (strcmp(h->name, name_lower) == 0) count++;
-    }
-    return count;
-}
-
 static void _html_handler(http_request_t *req, http_response_t *res) {
     (void)req;
     http_response_send_html(res, HTTP_OK, "<h1>Hello</h1>");
@@ -5710,6 +5735,7 @@ int main(void) {
     test_compression_negotiate_locale();
     test_compression_should_compress();
     test_gzip_compress_valid();
+    test_send_compressed_fallback_keeps_content_type();
 
     /* Phase 9: Benchmark tests */
     test_benchmark_timestamp();

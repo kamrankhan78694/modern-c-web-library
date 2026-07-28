@@ -1844,14 +1844,17 @@ bool compression_should_compress(const char *content_type, size_t content_length
  *
  * If the accept_encoding header indicates gzip support and the content_type
  * is compressible, the body is gzip-compressed before being set on the
- * response.  Otherwise, the body is sent uncompressed via
- * http_response_send_text().
+ * response.  Otherwise the body is sent uncompressed. Either way the response
+ * carries the given content_type (when non-NULL) — the uncompressed path used
+ * to send text/plain regardless, so the label depended on whether the body
+ * happened to compress.
  *
  * @param res             HTTP response object
  * @param status          HTTP status code
  * @param body            Response body text
  * @param body_len        Response body length (0 = use strlen)
- * @param content_type    Content-Type for compressibility check (e.g. "text/html")
+ * @param content_type    Content-Type for the response and the compressibility
+ *                        check (e.g. "text/html")
  * @param accept_encoding Value of the Accept-Encoding request header (may be NULL)
  */
 void http_response_send_compressed(http_response_t *res, http_status_t status,

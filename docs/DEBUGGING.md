@@ -102,7 +102,7 @@ ctest -R WebLibTests --output-on-failure
 # directly or under a debugger (see above)
 ```
 
-A default build registers **7 suites**: `WebLibTests` (which by itself runs 176 unit
+A default build registers **7 suites**: `WebLibTests` (which by itself runs 177 unit
 tests), `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`,
 `StressDemoApp` and `WasmTests`.
 

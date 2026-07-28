@@ -10,11 +10,11 @@ TLS suites (`TlsTests`, `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, 
 `TlsHttpTests`, `TlsInteropOpenssl`).
 
 The audit itself was performed against the **129 tests** present at the time (commits `839b244` /
-`cc665d9`). `tests/test_weblib.c` now runs **176 tests**. The 37 added between that audit and test
+`cc665d9`). `tests/test_weblib.c` now runs **177 tests**. The 37 added between that audit and test
 166 are listed in their own table below with the position they occupy in `main()`; they have **not**
-been reviewed for false greens. Ten more were added after that table was written and are named at
-the end of it — 37 + 7 (response-hook work) + 3 (BUG-11/12 fixes) accounts for the gap between
-129 and 176.
+been reviewed for false greens. Eleven more were added after that table was written and are named at
+the end of it — 37 + 7 (response-hook work) + 4 (BUG-11/12 fixes and the compression-fallback
+Content-Type fix) accounts for the gap between 129 and 177.
 
 Two things to know about the main table before you read it. The `#` column is audit order, which
 for tests added mid-list no longer matches current `main()` order. And the **Printed name** column
@@ -229,6 +229,7 @@ none are numbered above:
 | `test_send_text_replaces_content_type` | BUG-11: exactly one `Content-Type` when a handler set one before `send_text` |
 | `test_send_html_sets_html_content_type` | `send_html` sends `text/html; charset=utf-8` |
 | `test_request_clear_params` | BUG-12: `http_request_clear_params()` frees, nulls, is idempotent and NULL-safe |
+| `test_send_compressed_fallback_keeps_content_type` | `send_compressed`'s uncompressed path carries the caller's `content_type`, not `text/plain` |
 
 Unlike the rows above, each of these was verified to FAIL with its fix reverted (the `send_html` and
 `clear_params` tests fail by not compiling — the API did not exist), so none is a false green.
@@ -244,8 +245,8 @@ Unlike the rows above, each of these was verified to FAIL with its fix reverted 
 | 🔴→✅ False green (fixed) | 13 |
 | **Total audited** | **129** |
 | ❓ Added since this audit, not yet reviewed | 37 |
-| Verified-to-fail additions (response-hook work + BUG-11/12) | 10 |
-| **Tests in `test_weblib.c` today** | **176** |
+| Verified-to-fail additions (response-hook work + BUG-11/12 + compression fallback) | 11 |
+| **Tests in `test_weblib.c` today** | **177** |
 
 The ✅ figure was previously written as 109, which did not sum to 129. Tallying the verdict column of
 the table above gives 111 ✅ / 5 ⚠️ / 13 🔴→✅.
