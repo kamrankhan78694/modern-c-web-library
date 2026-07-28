@@ -134,15 +134,30 @@ is "path traversal          -> 404"  "$(code "$B/../../etc/passwd")" "404"
 is "8KB URL                 -> 414"  "$(code "$B/api/greet/$(printf 'a%.0s' $(seq 1 8000))")" "414"
 is "body over MAX_BODY_BYTES-> 413" \
    "$(python3 -c 'import sys;sys.stdout.write("{\"m\":\""+"x"*1200000+"\"}")' 2>/dev/null | code -X POST --data-binary @- "$B/api/echo")" "413"
-for junk in 'GARBAGE\r\n\r\n' 'GET\r\n\r\n' 'GET / HTTP/9.9\r\n\r\n'; do
-    if command -v nc >/dev/null 2>&1; then
-        line="$(printf "$junk" | timeout 3 nc 127.0.0.1 "$PORT" 2>/dev/null | head -1 | tr -d '\r')"
+# `timeout` is GNU coreutils and is NOT installed on a stock macOS runner, so a
+# bare `timeout 3 nc` there is a "command not found" — the pipeline yields an
+# empty reply and every probe reports the server said nothing. That is exactly
+# how this read on macOS CI: three phantom failures against a server that was
+# in fact answering 400 correctly. nc's own -w carries the deadline (BSD and
+# GNU nc both support it); the external timeout is only an extra upper bound
+# when the platform happens to have one.
+NC_TIMEOUT=""
+for _t in timeout gtimeout; do
+    command -v "$_t" >/dev/null 2>&1 && { NC_TIMEOUT="$_t 5"; break; }
+done
+if command -v nc >/dev/null 2>&1; then
+    for junk in 'GARBAGE\r\n\r\n' 'GET\r\n\r\n' 'GET / HTTP/9.9\r\n\r\n'; do
+        line="$(printf "$junk" | $NC_TIMEOUT nc -w 3 127.0.0.1 "$PORT" 2>/dev/null | head -1 | tr -d '\r')"
         case "$line" in
             "HTTP/1.1 400"*) ok "malformed request rejected with 400" ;;
             *)               bad "malformed request: got '${line:-<none>}', expected 400" ;;
         esac
-    fi
-done
+    done
+else
+    # Announce the gap rather than silently contributing zero checks — a probe
+    # that quietly tests nothing is worse than one that fails.
+    echo "  skip  nc not installed — cannot send malformed requests"
+fi
 # Surviving junk matters more than the status code it returns.
 kill -0 "$SRV_PID" 2>/dev/null && ok "server alive after malformed input" \
                                || bad "server DIED on malformed input"
