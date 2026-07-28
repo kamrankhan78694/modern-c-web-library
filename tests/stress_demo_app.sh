@@ -244,6 +244,39 @@ else
 fi
 echo
 
+# ---------------------------------------------------------------------------
+# Keep-alive concurrency above the worker count (#138).
+#
+# In threaded mode each connection was pinned to a pool thread for its whole
+# keep-alive lifetime, so THREAD_POOL_DEFAULT_SIZE (16) concurrent keep-alive
+# clients saturated the pool and the 17th blocked forever — a total outage, not
+# degradation: unrelated requests got no response at all until the load stopped.
+#
+# Browsers use keep-alive by default, so ~17 tabs triggered it. This asserts the
+# server both completes the run AND stays answerable to a separate client while
+# it is in progress. `ab` is used when present because a curl-per-request client
+# closes its connection each time and therefore never reproduces this.
+# ---------------------------------------------------------------------------
+echo "[7] keep-alive concurrency above the worker count (#138)"
+if command -v ab >/dev/null 2>&1; then
+    KA_C="${STRESS_KEEPALIVE_CONC:-32}"        # comfortably above the 16 workers
+    ab -n 4000 -c "$KA_C" -k -q "$B/api/info" >"$TMP/ka.out" 2>&1 &
+    AB_PID=$!
+    sleep 2
+    # The decisive check: is the server still answering ANYONE mid-load?
+    mid="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$B/api/info" 2>/dev/null)"
+    if wait "$AB_PID" 2>/dev/null; then
+        rps="$(awk '/Requests per second/{print $4}' "$TMP/ka.out")"
+        ok "keep-alive c=$KA_C completed (${rps:-?} req/s)"
+    else
+        bad "keep-alive c=$KA_C did not complete — pool saturated (#138 regression)"
+    fi
+    is "server answerable during c=$KA_C keep-alive load" "$mid" "200"
+else
+    echo "  skip  ab not installed — cannot drive keep-alive concurrency"
+fi
+echo
+
 echo "=== $((checks - fails))/$checks checks passed ==="
 if [ "$fails" -gt 0 ]; then
     echo "--- server log ---" >&2
