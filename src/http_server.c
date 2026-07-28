@@ -78,6 +78,7 @@ void weblib_version_components(int *major, int *minor, int *patch) {
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -185,6 +186,8 @@ typedef enum {
     SERVER_DRAINING
 } server_state_t;
 
+typedef struct connection connection_t;
+
 /* Default timeouts in seconds */
 #define DEFAULT_READ_TIMEOUT_SEC 30
 #define DEFAULT_WRITE_TIMEOUT_SEC 30
@@ -213,6 +216,12 @@ struct http_server {
     /* Thread pool (threaded mode) */
     thread_pool_t *pool;
     int thread_count;
+    pthread_t keepalive_thread;
+    volatile sig_atomic_t keepalive_thread_started;
+    bool keepalive_stopping;
+    int keepalive_wake[2];
+    connection_t *keepalive_head;
+    pthread_mutex_t keepalive_lock;
     
     /* Active connection tracking (BUG-6 fix) */
     int active_connections;
@@ -237,16 +246,19 @@ struct http_server {
 };
 
 /* Connection handler data */
-typedef struct {
+struct connection {
     int client_fd;
     http_server_t *server;
     http_parser_t parser;
     http_request_t *request;
     http_response_t *response;
+    bool parser_initialized;
+    time_t idle_deadline;
+    connection_t *keepalive_next;
 #ifdef WEBLIB_TLS
     tls_transport_t *tls;   /* NULL = plaintext; set once the TLS handshake succeeds */
 #endif
-} connection_t;
+};
 
 /* Async connection context */
 typedef struct async_connection {
@@ -277,7 +289,12 @@ typedef struct async_connection {
 
 /* Forward declarations */
 static void *accept_connections(void *arg);
+static void *keepalive_dispatch(void *arg);
 static void *handle_connection(void *arg);
+static int start_keepalive_dispatcher(http_server_t *server);
+static void stop_keepalive_dispatcher(http_server_t *server);
+static void free_connection(connection_t *conn);
+static bool rearm_keepalive(connection_t *conn);
 static void handle_websocket_connection(int client_fd, http_request_t *req);
 static bool response_forces_close(http_response_t *res);
 static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive,
@@ -355,6 +372,9 @@ http_server_t *http_server_create(void) {
     server->request_timeout_sec = DEFAULT_REQUEST_TIMEOUT_SEC;
     server->pool = NULL;
     server->thread_count = THREAD_POOL_DEFAULT_SIZE;
+    server->keepalive_wake[0] = -1;
+    server->keepalive_wake[1] = -1;
+    pthread_mutex_init(&server->keepalive_lock, NULL);
     
     /* BUG-6 fix: Initialize connection tracking */
     server->active_connections = 0;
@@ -376,6 +396,7 @@ http_server_t *http_server_create(void) {
  * server indistinguishable from "never listened": stop()/destroy() early-return
  * on running==false, so the join is unreachable, and the pool is freed here. */
 static void _listen_fail_cleanup(http_server_t *server) {
+    stop_keepalive_dispatcher(server);
     if (server->socket_fd >= 0) {
         close(server->socket_fd);
         server->socket_fd = -1;
@@ -482,6 +503,11 @@ int http_server_listen(http_server_t *server, uint16_t port) {
             _listen_fail_cleanup(server);
             return -1;
         }
+        if (start_keepalive_dispatcher(server) != 0) {
+            fprintf(stderr, "Failed to create keep-alive dispatcher\n");
+            _listen_fail_cleanup(server);
+            return -1;
+        }
 
         printf("HTTP server listening on port %d (threaded mode, pool=%d)\n", port, server->thread_count);
 
@@ -524,6 +550,7 @@ void http_server_stop(http_server_t *server) {
             pthread_join(server->accept_thread, NULL);
             server->accept_thread_started = false;
         }
+        stop_keepalive_dispatcher(server);
 
         /* Drain and destroy thread pool */
         if (server->pool) {
@@ -582,6 +609,7 @@ int http_server_shutdown(http_server_t *server, int timeout_sec) {
             pthread_join(server->accept_thread, NULL);
             server->accept_thread_started = false;
         }
+        stop_keepalive_dispatcher(server);
         if (server->pool) {
             thread_pool_destroy(server->pool);
             server->pool = NULL;
@@ -614,6 +642,7 @@ void http_server_destroy(http_server_t *server) {
     }
     
     pthread_mutex_destroy(&server->conn_lock);
+    pthread_mutex_destroy(&server->keepalive_lock);
 
 #ifdef WEBLIB_TLS
     if (server->tls_cert_der) {
@@ -664,6 +693,218 @@ static time_t monotonic_seconds(void) {
 /* Thread pool work wrapper — handle_connection expects void* and frees conn */
 static void connection_work(void *arg) {
     handle_connection(arg);
+}
+
+static void free_connection(connection_t *conn) {
+    http_server_t *server;
+
+    if (!conn) {
+        return;
+    }
+    server = conn->server;
+    http_request_destroy(conn->request);
+    http_response_destroy(conn->response);
+    if (conn->parser_initialized) {
+        http_parser_destroy(&conn->parser);
+    }
+#ifdef WEBLIB_TLS
+    if (conn->tls != NULL) {
+        tls_transport_close(conn->tls);
+        free(conn->tls);
+    }
+#endif
+    close(conn->client_fd);
+    pthread_mutex_lock(&server->conn_lock);
+    if (server->active_connections > 0) {
+        server->active_connections--;
+    }
+    pthread_mutex_unlock(&server->conn_lock);
+    free(conn);
+}
+
+static bool remove_waiting_connection(http_server_t *server, connection_t *target) {
+    connection_t **link = &server->keepalive_head;
+
+    while (*link && *link != target) {
+        link = &(*link)->keepalive_next;
+    }
+    if (!*link) {
+        return false;
+    }
+    *link = target->keepalive_next;
+    target->keepalive_next = NULL;
+    return true;
+}
+
+static bool rearm_keepalive(connection_t *conn) {
+    http_server_t *server = conn->server;
+    int idle_timeout = server->read_timeout_sec;
+    char wake = 1;
+
+    if (server->request_timeout_sec > 0 &&
+        (idle_timeout <= 0 || idle_timeout > server->request_timeout_sec)) {
+        idle_timeout = server->request_timeout_sec;
+    }
+    conn->idle_deadline = idle_timeout > 0 ? monotonic_seconds() + idle_timeout : 0;
+
+    pthread_mutex_lock(&server->keepalive_lock);
+    if (!server->running || server->keepalive_stopping) {
+        pthread_mutex_unlock(&server->keepalive_lock);
+        return false;
+    }
+    conn->keepalive_next = server->keepalive_head;
+    server->keepalive_head = conn;
+    pthread_mutex_unlock(&server->keepalive_lock);
+
+    (void)write(server->keepalive_wake[1], &wake, sizeof(wake));
+    return true;
+}
+
+static void *keepalive_dispatch(void *arg) {
+    http_server_t *server = (http_server_t *)arg;
+
+    for (;;) {
+        struct pollfd *poll_fds;
+        connection_t **connections;
+        connection_t *item;
+        size_t count = 0;
+        size_t i;
+
+        pthread_mutex_lock(&server->keepalive_lock);
+        if (server->keepalive_stopping) {
+            pthread_mutex_unlock(&server->keepalive_lock);
+            break;
+        }
+        for (item = server->keepalive_head; item; item = item->keepalive_next) {
+            count++;
+        }
+        poll_fds = (struct pollfd *)calloc(count + 1, sizeof(*poll_fds));
+        connections = count ? (connection_t **)calloc(count, sizeof(*connections)) : NULL;
+        if (!poll_fds || (count && !connections)) {
+            connection_t *failed = server->keepalive_head;
+            server->keepalive_head = NULL;
+            pthread_mutex_unlock(&server->keepalive_lock);
+            free(poll_fds);
+            free(connections);
+            while (failed) {
+                connection_t *next = failed->keepalive_next;
+                failed->keepalive_next = NULL;
+                free_connection(failed);
+                failed = next;
+            }
+            usleep(10000);
+            continue;
+        }
+
+        poll_fds[0].fd = server->keepalive_wake[0];
+        poll_fds[0].events = POLLIN;
+        i = 0;
+        for (item = server->keepalive_head; item; item = item->keepalive_next) {
+            connections[i] = item;
+            poll_fds[i + 1].fd = item->client_fd;
+            poll_fds[i + 1].events = POLLIN;
+            i++;
+        }
+        pthread_mutex_unlock(&server->keepalive_lock);
+
+        int ready = poll(poll_fds, count + 1, 1000);
+        time_t now = monotonic_seconds();
+        if (ready < 0 && errno != EINTR) {
+            perror("keep-alive poll failed");
+        }
+        if (poll_fds[0].revents & POLLIN) {
+            char drain[64];
+            while (read(server->keepalive_wake[0], drain, sizeof(drain)) > 0) {
+            }
+        }
+
+        for (i = 0; i < count; i++) {
+            connection_t *conn = connections[i];
+            bool expired = conn->idle_deadline > 0 && now >= conn->idle_deadline;
+            bool socket_ready = poll_fds[i + 1].revents &
+                                (POLLIN | POLLERR | POLLHUP | POLLNVAL);
+            bool removed = false;
+
+            if (!expired && !socket_ready) {
+                continue;
+            }
+            pthread_mutex_lock(&server->keepalive_lock);
+            removed = remove_waiting_connection(server, conn);
+            pthread_mutex_unlock(&server->keepalive_lock);
+            if (!removed) {
+                continue;
+            }
+
+            if (expired || (poll_fds[i + 1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+                free_connection(conn);
+            } else if (thread_pool_submit(server->pool, connection_work, conn) != 0) {
+                if (!server_tls_active(server)) {
+                    send_error_response(conn->client_fd, NULL, HTTP_SERVICE_UNAVAILABLE,
+                                        "Server Busy");
+                }
+                free_connection(conn);
+            }
+        }
+        free(connections);
+        free(poll_fds);
+    }
+
+    pthread_mutex_lock(&server->keepalive_lock);
+    connection_t *remaining = server->keepalive_head;
+    server->keepalive_head = NULL;
+    pthread_mutex_unlock(&server->keepalive_lock);
+    while (remaining) {
+        connection_t *next = remaining->keepalive_next;
+        remaining->keepalive_next = NULL;
+        free_connection(remaining);
+        remaining = next;
+    }
+    return NULL;
+}
+
+static int start_keepalive_dispatcher(http_server_t *server) {
+    if (pipe(server->keepalive_wake) != 0) {
+        return -1;
+    }
+    if (set_nonblocking(server->keepalive_wake[0]) != 0 ||
+        set_nonblocking(server->keepalive_wake[1]) != 0) {
+        close(server->keepalive_wake[0]);
+        close(server->keepalive_wake[1]);
+        server->keepalive_wake[0] = -1;
+        server->keepalive_wake[1] = -1;
+        return -1;
+    }
+    pthread_mutex_lock(&server->keepalive_lock);
+    server->keepalive_stopping = false;
+    server->keepalive_head = NULL;
+    pthread_mutex_unlock(&server->keepalive_lock);
+    if (pthread_create(&server->keepalive_thread, NULL, keepalive_dispatch, server) != 0) {
+        close(server->keepalive_wake[0]);
+        close(server->keepalive_wake[1]);
+        server->keepalive_wake[0] = -1;
+        server->keepalive_wake[1] = -1;
+        return -1;
+    }
+    server->keepalive_thread_started = true;
+    return 0;
+}
+
+static void stop_keepalive_dispatcher(http_server_t *server) {
+    char wake = 1;
+
+    if (!server->keepalive_thread_started) {
+        return;
+    }
+    pthread_mutex_lock(&server->keepalive_lock);
+    server->keepalive_stopping = true;
+    pthread_mutex_unlock(&server->keepalive_lock);
+    (void)write(server->keepalive_wake[1], &wake, sizeof(wake));
+    pthread_join(server->keepalive_thread, NULL);
+    server->keepalive_thread_started = false;
+    close(server->keepalive_wake[0]);
+    close(server->keepalive_wake[1]);
+    server->keepalive_wake[0] = -1;
+    server->keepalive_wake[1] = -1;
 }
 
 /* Accept connections thread */
@@ -889,20 +1130,15 @@ static void *handle_connection(void *arg) {
     connection_t *conn = (connection_t *)arg;
     int client_fd = conn->client_fd;
     http_server_t *server = conn->server;
-    bool parser_initialized = false;
     bool connection_open = true;
+    bool should_rearm = false;
     char read_buf[READ_BUFFER_SIZE];
 
 #ifdef WEBLIB_TLS
-    if (server->tls_enabled) {
+    if (server->tls_enabled && conn->tls == NULL) {
         conn->tls = tls_do_handshake(server, client_fd);
         if (conn->tls == NULL) {
-            /* Handshake failed; drop the connection (mirror the normal teardown). */
-            close(client_fd);
-            pthread_mutex_lock(&server->conn_lock);
-            server->active_connections--;
-            pthread_mutex_unlock(&server->conn_lock);
-            free(conn);
+            free_connection(conn);
             return NULL;
         }
     }
@@ -923,9 +1159,9 @@ static void *handle_connection(void *arg) {
         /* Populate socket fd for WebSocket upgrades */
         conn->request->socket_fd = client_fd;
 
-        if (!parser_initialized) {
+        if (!conn->parser_initialized) {
             http_parser_init(&conn->parser, conn->request);
-            parser_initialized = true;
+            conn->parser_initialized = true;
             if (conn->parser.state == PARSE_STATE_ERROR) {
                 send_error_response(client_fd, CONN_TLS(conn), conn->parser.error_status, conn->parser.error_message);
                 connection_open = false;
@@ -1053,26 +1289,25 @@ static void *handle_connection(void *arg) {
         if (!connection_open) {
             break;
         }
+        should_rearm = true;
+        break;
     }
 
-    if (parser_initialized) {
-        http_parser_destroy(&conn->parser);
-    }
+    if (should_rearm) {
+        bool buffered = conn->parser.buffer_len > 0;
 #ifdef WEBLIB_TLS
-    if (conn->tls != NULL) {
-        tls_transport_close(conn->tls);   /* close_notify (best effort) + wipe keys */
-        free(conn->tls);
-        conn->tls = NULL;
-    }
+        buffered = buffered ||
+                   (conn->tls != NULL && conn->tls->app_off < conn->tls->app_len);
 #endif
-    close(client_fd);
-
-    /* BUG-6 fix: Decrement active connection count */
-    pthread_mutex_lock(&server->conn_lock);
-    server->active_connections--;
-    pthread_mutex_unlock(&server->conn_lock);
-
-    free(conn);
+        if (buffered && server->running &&
+            thread_pool_submit(server->pool, connection_work, conn) == 0) {
+            return NULL;
+        }
+        if (!buffered && rearm_keepalive(conn)) {
+            return NULL;
+        }
+    }
+    free_connection(conn);
     return NULL;
 }
 
