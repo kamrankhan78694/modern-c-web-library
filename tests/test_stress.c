@@ -626,9 +626,11 @@ void test_stress_rapid_connections(void) {
     http_server_set_router(server, router);
 
     /* Start server (non-blocking) */
-    uint16_t port = 19000;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     int result = http_server_listen(server, port);
     ASSERT(result == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
 
     /* Give server time to start */
     usleep(200000);  /* 200ms */
@@ -673,9 +675,11 @@ void test_stress_concurrent_connections(void) {
     http_server_set_router(server, router);
 
     /* Start server (non-blocking) */
-    uint16_t port = 19001;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     int result = http_server_listen(server, port);
     ASSERT(result == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
 
     /* Give server time to start */
     usleep(200000);  /* 200ms */
@@ -724,9 +728,11 @@ void test_stress_large_body(void) {
     http_server_set_router(server, router);
 
     /* Start server (non-blocking) */
-    uint16_t port = 19002;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     int result = http_server_listen(server, port);
     ASSERT(result == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
 
     /* Give server time to start */
     usleep(200000);  /* 200ms */
@@ -786,9 +792,11 @@ void test_stress_oversized_request(void) {
     http_server_set_router(server, router);
 
     /* Start server (non-blocking) */
-    uint16_t port = 19003;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     int result = http_server_listen(server, port);
     ASSERT(result == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
 
     /* Give server time to start */
     usleep(100000);  /* 100ms */
@@ -884,8 +892,10 @@ void test_stress_transfer_encoding_smuggling(void) {
     router_add_route(router, HTTP_POST, "/upload", _te_echo_body_handler);
     http_server_set_router(server, router);
 
-    uint16_t port = 19010;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     ASSERT(http_server_listen(server, port) == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
     usleep(200000);
 
     char response[4096];
@@ -1052,8 +1062,10 @@ void test_stress_request_target_control_bytes(void) {
     router_add_route(router, HTTP_GET, "/ab", dummy_handler);
     http_server_set_router(server, router);
 
-    uint16_t port = 19011;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     ASSERT(http_server_listen(server, port) == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
     usleep(200000);
 
     char response[4096];
@@ -1100,8 +1112,10 @@ void test_stress_host_header_enforcement(void) {
     router_add_route(router, HTTP_GET, "/test", dummy_handler);
     http_server_set_router(server, router);
 
-    uint16_t port = 19012;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     ASSERT(http_server_listen(server, port) == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
     usleep(200000);
 
     char response[4096];
@@ -1165,8 +1179,10 @@ void test_stress_path_normalization(void) {
     router_add_route(router, HTTP_GET, "/", _echo_path_handler);       /* root    */
     http_server_set_router(server, router);
 
-    uint16_t port = 19013;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     ASSERT(http_server_listen(server, port) == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
     usleep(200000);
 
     char response[4096];
@@ -1250,11 +1266,13 @@ void test_stress_async_idle_reaper(void) {
     ASSERT(http_server_set_async(server, true) == 0);
     http_server_set_request_timeout(server, 1);   /* 1s request deadline */
 
-    uint16_t port = 19014;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     _async_srv_arg_t arg = { server, port };
     pthread_t th;
     ASSERT(pthread_create(&th, NULL, _async_server_run, &arg) == 0);
     usleep(400000);   /* let the async server start listening */
+    port = http_server_port(server);
+    ASSERT(port != 0);
 
     /* Connect and send a partial request that is never completed. */
     int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -1307,11 +1325,13 @@ void test_stress_async_head_has_no_body(void) {
     http_server_set_router(server, router);
     ASSERT(http_server_set_async(server, true) == 0);
 
-    uint16_t port = 19016;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     _async_srv_arg_t arg = { server, port };
     pthread_t th;
     ASSERT(pthread_create(&th, NULL, _async_server_run, &arg) == 0);
     usleep(400000);
+    port = http_server_port(server);
+    ASSERT(port != 0);
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     ASSERT(sock >= 0);
@@ -1403,18 +1423,22 @@ void test_stress_async_server_restart(void) {
     http_server_set_router(server, router);
     ASSERT(http_server_set_async(server, true) == 0);
 
-    uint16_t port = 19015;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     _async_srv_arg_t arg = { server, port };
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
     addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
     for (int cycle = 0; cycle < 2; cycle++) {
         pthread_t th;
         ASSERT(pthread_create(&th, NULL, _async_server_run, &arg) == 0);
         usleep(400000);
+
+        /* Each (re)listen binds a fresh ephemeral port. */
+        port = http_server_port(server);
+        ASSERT(port != 0);
+        addr.sin_port = htons(port);
 
         /* A normal request must be served on each (re)listen — proving the second
          * listen actually succeeded rather than failing on a stale handler. */
@@ -1455,9 +1479,11 @@ void test_stress_many_headers(void) {
     http_server_set_router(server, router);
 
     /* Start server (non-blocking) */
-    uint16_t port = 19004;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     int result = http_server_listen(server, port);
     ASSERT(result == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
 
     /* Give server time to start */
     usleep(100000);  /* 100ms */
@@ -1505,9 +1531,11 @@ void test_stress_slow_client(void) {
     http_server_set_router(server, router);
 
     /* Start server (non-blocking) */
-    uint16_t port = 19005;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     int result = http_server_listen(server, port);
     ASSERT(result == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
 
     /* Give server time to start */
     usleep(200000);  /* 200ms */
@@ -1583,8 +1611,10 @@ void test_stress_slowloris_deadline(void) {
     ASSERT(http_server_get_request_timeout(server) == 1);
     http_server_set_timeout(server, 5, 5);
 
-    uint16_t port = 19007;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     ASSERT(http_server_listen(server, port) == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
     usleep(200000);
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -1654,8 +1684,10 @@ void test_stress_request_deadline_silent(void) {
     http_server_set_timeout(server, 0, 0);                    /* read timeout DISABLED */
     ASSERT(http_server_set_request_timeout(server, 1) == 0);  /* 1s total deadline */
 
-    uint16_t port = 19008;
+    uint16_t port = 0;                    /* ephemeral — BUG-14 */
     ASSERT(http_server_listen(server, port) == 0);
+    port = http_server_port(server);
+    ASSERT(port != 0);
     usleep(200000);
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);

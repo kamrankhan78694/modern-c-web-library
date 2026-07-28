@@ -207,6 +207,12 @@ struct http_server {
     volatile sig_atomic_t state;
     pthread_t accept_thread;
     volatile sig_atomic_t accept_thread_started;   /* set only once pthread_create() succeeded — gates every pthread_join() so an uninitialised handle is never joined; sig_atomic_t (like running/state) keeps it safe when stop() is driven from a signal handler */
+    /* Self-pipe that wakes the accept thread out of poll() at shutdown (BUG-13).
+     * The stopper writes a byte and joins; only after the join does anything
+     * close socket_fd, so the accept loop can never pass a recycled descriptor
+     * number to accept(). Closing the fd from another thread was the previous
+     * wake mechanism, and the fd-reuse window it opened is the bug. */
+    int accept_wake[2];
     
     /* Socket timeouts */
     int read_timeout_sec;
@@ -349,6 +355,7 @@ static const char *param_list_get(http_param_node_t *head, const char *key);
 static int param_list_set(http_param_node_t **head_ref, const char *key, const char *value);
 
 static int set_nonblocking(int fd);
+static int set_blocking(int fd);
 static void async_accept_handler(int fd, int events, void *user_data);
 static void async_read_handler(int fd, int events, void *user_data);
 static void async_write_handler(int fd, int events, void *user_data);
@@ -381,6 +388,8 @@ http_server_t *http_server_create(void) {
     server->thread_count = THREAD_POOL_DEFAULT_SIZE;
     server->keepalive_wake[0] = -1;
     server->keepalive_wake[1] = -1;
+    server->accept_wake[0] = -1;
+    server->accept_wake[1] = -1;
     pthread_mutex_init(&server->keepalive_lock, NULL);
     
     /* BUG-6 fix: Initialize connection tracking */
@@ -402,8 +411,20 @@ http_server_t *http_server_create(void) {
  * leak the pool. Rather than patch each caller, we make failed startup leave the
  * server indistinguishable from "never listened": stop()/destroy() early-return
  * on running==false, so the join is unreachable, and the pool is freed here. */
+static void _close_accept_wake(http_server_t *server) {
+    if (server->accept_wake[0] >= 0) {
+        close(server->accept_wake[0]);
+        server->accept_wake[0] = -1;
+    }
+    if (server->accept_wake[1] >= 0) {
+        close(server->accept_wake[1]);
+        server->accept_wake[1] = -1;
+    }
+}
+
 static void _listen_fail_cleanup(http_server_t *server) {
     stop_keepalive_dispatcher(server);
+    _close_accept_wake(server);
     if (server->socket_fd >= 0) {
         close(server->socket_fd);
         server->socket_fd = -1;
@@ -457,6 +478,17 @@ int http_server_listen(http_server_t *server, uint16_t port) {
         return -1;
     }
     
+    /* Port 0 asks the kernel for an ephemeral port; resolve what was actually
+     * assigned so http_server_port() (and the banner below) report something a
+     * client can connect to. Tests bind port 0 precisely to avoid the TIME_WAIT
+     * collisions that fixed port numbers accumulate across rapid reruns. */
+    if (port == 0) {
+        struct sockaddr_in bound;
+        socklen_t blen = sizeof(bound);
+        if (getsockname(server->socket_fd, (struct sockaddr *)&bound, &blen) == 0) {
+            port = ntohs(bound.sin_port);
+        }
+    }
     server->port = port;
     server->running = true;
     server->state = SERVER_RUNNING;
@@ -518,6 +550,27 @@ int http_server_listen(http_server_t *server, uint16_t port) {
 
         printf("HTTP server listening on port %d (threaded mode, pool=%d)\n", port, server->thread_count);
 
+        /* Shutdown wake pipe (BUG-13): the accept thread polls on this alongside
+         * the listen socket, so stopping never requires closing a descriptor
+         * another thread is still using. Both ends non-blocking: the stopper's
+         * write must never block, and the drain read must not either. */
+        if (pipe(server->accept_wake) != 0 ||
+            set_nonblocking(server->accept_wake[0]) != 0 ||
+            set_nonblocking(server->accept_wake[1]) != 0) {
+            perror("accept wake pipe failed");
+            _listen_fail_cleanup(server);
+            return -1;
+        }
+
+        /* Non-blocking listen socket, so a connection that is reset between
+         * poll() reporting it and accept() claiming it yields EAGAIN instead of
+         * blocking the thread somewhere the wake pipe cannot reach. */
+        if (set_nonblocking(server->socket_fd) < 0) {
+            perror("Failed to set listen socket non-blocking");
+            _listen_fail_cleanup(server);
+            return -1;
+        }
+
         /* Start accept thread */
         if (pthread_create(&server->accept_thread, NULL, accept_connections, server) != 0) {
             perror("pthread_create failed");
@@ -547,16 +600,20 @@ void http_server_stop(http_server_t *server) {
             event_loop_stop(server->event_loop);
         }
     } else {
-        /* Close server socket to unblock accept() in the accept thread */
-        if (server->socket_fd >= 0) {
-            shutdown(server->socket_fd, SHUT_RDWR);
-            close(server->socket_fd);
-            server->socket_fd = -1;
+        /* Wake the accept thread through its pipe and JOIN BEFORE closing any
+         * descriptor (BUG-13). Closing socket_fd from this thread while the
+         * accept thread could still pass it to accept() left a window where a
+         * concurrent open() recycles the fd number and accept() runs on an
+         * unrelated file. After the join no other thread can be using it. */
+        if (server->accept_wake[1] >= 0) {
+            char wake = 1;
+            (void)write(server->accept_wake[1], &wake, sizeof(wake));
         }
         if (server->accept_thread_started) {
             pthread_join(server->accept_thread, NULL);
             server->accept_thread_started = false;
         }
+        _close_accept_wake(server);
         stop_keepalive_dispatcher(server);
 
         /* Drain and destroy thread pool */
@@ -565,12 +622,12 @@ void http_server_stop(http_server_t *server) {
             server->pool = NULL;
         }
     }
-    
+
     if (server->socket_fd >= 0) {
         close(server->socket_fd);
         server->socket_fd = -1;
     }
-    
+
     server->state = SERVER_STOPPED;
     printf("HTTP server stopped\n");
 }
@@ -585,14 +642,28 @@ int http_server_shutdown(http_server_t *server, int timeout_sec) {
     }
     
     server->state = SERVER_DRAINING;
-    
-    /* Stop accepting new connections */
+
+    /* Stop accepting new connections. In threaded mode: wake the accept thread
+     * and join it BEFORE closing the listen socket (BUG-13) — after the join no
+     * thread can hand the recycled fd number to accept(). Clients connecting
+     * during the drain are refused by the OS once the close lands, exactly as
+     * before; the join just reorders it after the accept thread has exited. */
+    if (!server->async_mode) {
+        if (server->accept_wake[1] >= 0) {
+            char wake = 1;
+            (void)write(server->accept_wake[1], &wake, sizeof(wake));
+        }
+        if (server->accept_thread_started) {
+            pthread_join(server->accept_thread, NULL);
+            server->accept_thread_started = false;
+        }
+        _close_accept_wake(server);
+    }
     if (server->socket_fd >= 0) {
-        shutdown(server->socket_fd, SHUT_RDWR);
         close(server->socket_fd);
         server->socket_fd = -1;
     }
-    
+
     /* Wait for pending work to drain (up to timeout) */
     if (!server->async_mode && server->pool) {
         time_t start = time(NULL);
@@ -603,19 +674,15 @@ int http_server_shutdown(http_server_t *server, int timeout_sec) {
             usleep(10000); /* 10ms poll interval */
         }
     }
-    
+
     /* Now fully stop */
     server->running = false;
-    
+
     if (server->async_mode) {
         if (server->event_loop) {
             event_loop_stop(server->event_loop);
         }
     } else {
-        if (server->accept_thread_started) {
-            pthread_join(server->accept_thread, NULL);
-            server->accept_thread_started = false;
-        }
         stop_keepalive_dispatcher(server);
         if (server->pool) {
             thread_pool_destroy(server->pool);
@@ -667,6 +734,13 @@ void http_server_set_router(http_server_t *server, router_t *router) {
     if (server) {
         server->router = router;
     }
+}
+
+uint16_t http_server_port(const http_server_t *server) {
+    if (!server || !server->running) {
+        return 0;
+    }
+    return server->port;
 }
 
 /* Set socket timeouts on accepted client fd */
@@ -919,17 +993,64 @@ static void *accept_connections(void *arg) {
     http_server_t *server = (http_server_t *)arg;
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
-    
+
+    /* Read once: this thread is the only user of these descriptors until it
+     * exits, and the stopper does not touch them until after the join (BUG-13).
+     * The old protocol — stop() closes socket_fd out from under a blocked
+     * accept() — left a window where another thread's open() could recycle the
+     * fd number and accept() would run on an unrelated file. */
+    const int listen_fd = server->socket_fd;
+    const int wake_fd = server->accept_wake[0];
+
     while (server->running) {
-        int client_fd = accept(server->socket_fd, (struct sockaddr *)&client_addr, &client_len);
-        
+        struct pollfd pfds[2];
+        pfds[0].fd = listen_fd;
+        pfds[0].events = POLLIN;
+        pfds[0].revents = 0;
+        pfds[1].fd = wake_fd;
+        pfds[1].events = POLLIN;
+        pfds[1].revents = 0;
+
+        int pr = poll(pfds, 2, -1);
+        if (pr < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            perror("accept poll failed");
+            break;
+        }
+        if (pfds[1].revents & (POLLIN | POLLERR | POLLHUP)) {
+            break;   /* stop requested */
+        }
+        if (!(pfds[0].revents & POLLIN)) {
+            continue;
+        }
+
+        int client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
+
         if (client_fd < 0) {
+            /* EAGAIN: the pending connection was reset between poll() and
+             * accept() — the listen socket is non-blocking precisely so this
+             * returns here instead of blocking where the wake pipe can't reach. */
+            if (errno == EAGAIN || errno == EWOULDBLOCK ||
+                errno == EINTR || errno == ECONNABORTED) {
+                continue;
+            }
             if (server->running) {
                 perror("accept failed");
             }
             continue;
         }
-        
+
+        /* BSD-family kernels hand accepted sockets the listen socket's file
+         * status flags; the threaded request path relies on blocking sockets
+         * bounded by SO_RCVTIMEO/SO_SNDTIMEO. Linux never inherits, and
+         * clearing O_NONBLOCK is a no-op there. */
+        if (set_blocking(client_fd) < 0) {
+            close(client_fd);
+            continue;
+        }
+
         /* Reject new connections when draining */
         if (server->state == SERVER_DRAINING) {
             close(client_fd);
@@ -1765,7 +1886,23 @@ void http_response_send_text(http_response_t *res, http_status_t status, const c
     res->body_length = strlen(text);
     res->status = status;
     header_list_add((http_header_node_t **)&res->headers, "content-type", "Content-Type",
-                    "text/plain; charset=utf-8", false);
+                    "text/plain; charset=utf-8", true);
+}
+
+void http_response_send_html(http_response_t *res, http_status_t status, const char *html) {
+    if (!res || !html) {
+        return;
+    }
+    char *copy = strdup(html);
+    if (!copy) {
+        return;
+    }
+    free(res->body);
+    res->body = copy;
+    res->body_length = strlen(html);
+    res->status = status;
+    header_list_add((http_header_node_t **)&res->headers, "content-type", "Content-Type",
+                    "text/html; charset=utf-8", true);
 }
 
 void http_response_set_header(http_response_t *res, const char *key, const char *value) {
@@ -1800,6 +1937,12 @@ int http_request_set_param(http_request_t *req, const char *key, const char *val
         return -1;
     }
     return param_list_set((http_param_node_t **)&req->params, key, value);
+}
+
+void http_request_clear_params(http_request_t *req) {
+    if (!req) return;
+    param_list_free((http_param_node_t *)req->params);
+    req->params = NULL;
 }
 
 static void parser_set_error(http_parser_t *parser, http_status_t status, const char *message) {
@@ -2916,6 +3059,14 @@ static int set_nonblocking(int fd) {
         return -1;
     }
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static int set_blocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return -1;
+    }
+    return fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
 }
 
 /* Deadline for a new request on an async connection (in monotonic seconds), or 0

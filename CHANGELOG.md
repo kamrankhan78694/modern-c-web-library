@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`http_response_send_html()`** — sends with `Content-Type: text/html;
+  charset=utf-8`. Serving HTML previously meant `send_text` followed by
+  correcting the header, which was exactly the sequence that triggered BUG-11
+  (see Fixed). `http_response_send_template()` now sends `text/html` too —
+  rendered templates are HTML, and callers had to correct that header as well.
+- **`http_request_clear_params()`** — frees a request's route parameters
+  (BUG-12). The HTTP server does this as part of the request lifecycle; code
+  driving `router_route()` directly — a Cloudflare Worker handler, an embedder,
+  a test — leaked three allocations per parameterised request with no public
+  way to free them. The unit tests deleted their private mirror of the internal
+  param-node layout and call the real API.
+- **`http_server_port()`, and `http_server_listen(server, 0)` binds an
+  ephemeral port** — the kernel picks a free port and the accessor reports it.
+  Exists for BUG-14 (see Fixed), and for any embedder that wants
+  parallel-safe listening.
+
 - **`router_add_response_hook()` — a post-handler phase for the router.**
   Middleware runs *before* the handler, so nothing in the request pipeline could
   observe the status code. Anything needing the outcome of a request — status
@@ -69,6 +85,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`http_response_send_text()` appended `Content-Type` instead of replacing it
+  (BUG-11).** A handler that sent text and then set its own content type
+  emitted two `Content-Type` headers — invalid per RFC 9110, and resolved by
+  browsers as plain text. It now replaces. The demo app dropped its
+  set-header-after-send workaround; `src/health_check.c` keeps the same
+  ordering with a comment that now describes why it is merely conventional
+  rather than load-bearing. The regression test asserts exactly one
+  `Content-Type` and fails against the appending behaviour.
+- **`http_response_send_compressed()`'s uncompressed path ignored the caller's
+  `content_type`.** The compressed path set it; the fallback sent everything
+  as `text/plain` — so whether a response was labelled `text/html` depended on
+  whether it happened to compress. Found while fixing BUG-11: same header, same
+  function family, one path honouring the argument and one not. Both fallback
+  sites now set it.
+- **The accept thread could run `accept()` on a recycled descriptor during
+  shutdown (BUG-13).** `http_server_stop()` closed `socket_fd` from the
+  caller's thread to unblock `accept()`; between that `close()` and the accept
+  loop's next iteration, another thread's `open()` could be handed the same fd
+  number, and `accept()` would run on an unrelated file. The accept thread now
+  polls the listen socket alongside a wake pipe (the pattern the keep-alive
+  dispatcher already used): the stopper writes a byte and joins **before**
+  anything is closed. The listen socket is non-blocking so a connection reset
+  between `poll()` and `accept()` cannot strand the thread where the pipe
+  never reaches; accepted sockets are restored to blocking, because BSD-family
+  kernels inherit the flag and the threaded request path relies on
+  `SO_RCVTIMEO`. `http_server_shutdown()` had the same race and got the same
+  reordering — which also ends its habit of spinning `perror("accept failed")`
+  in a tight loop for the whole drain window.
+- **The stress suite failed ~1 run in 3 when re-run back to back (BUG-14).**
+  Fifteen hardcoded ports (19000–19016) accumulated `TIME_WAIT` sockets across
+  runs until a bind failed, reporting a product failure for an environment
+  condition. Every site now binds port 0 and reads the assigned port back via
+  `http_server_port()` — no shared namespace, no collision to make rarer.
+  Verified with three consecutive full-suite runs.
 - **`/healthz` reported time since the first probe, not uptime.** Its start
   time was initialised by `pthread_once` on the first handler call, so a server
   up for an hour but never probed answered `0`, then counted from that probe.
