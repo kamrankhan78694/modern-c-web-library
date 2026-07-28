@@ -32,6 +32,16 @@ set -u
 
 SERVER="${1:?usage: benchmark_tls.sh <tls_server binary> [handshake-count]}"
 COUNT="${2:-50}"
+
+# Validate COUNT before anything else. Without this, a non-integer makes
+# `seq 1 "$COUNT"` expand to nothing: the loop runs zero times, fails stays 0,
+# and the script prints PASS having performed no handshakes at all - a gate that
+# passes without testing anything, which is precisely the defect PR #131 fixed
+# in the Valgrind step. Refuse rather than silently measure nothing.
+case "$COUNT" in
+    ''|*[!0-9]*) echo "FAIL: handshake-count must be a positive integer, got '$COUNT'" >&2; exit 1 ;;
+esac
+[ "$COUNT" -ge 1 ] 2>/dev/null || { echo "FAIL: handshake-count must be >= 1, got '$COUNT'" >&2; exit 1; }
 SRV_PID=""
 TMP=""
 
@@ -121,5 +131,7 @@ echo "Mean per handshake:   $(( ELAPSED_MS / (ok > 0 ? ok : 1) )) ms (incl. proc
 
 # Any failed handshake means the numbers describe a partly-broken run.
 [ "$fails" -eq 0 ] || fail "$fails of $COUNT handshakes did not return HTTP 200"
+# ...and a run that performed no handshakes is not a pass, whatever the counters say.
+[ "$ok" -ge 1 ] || fail "no handshakes were performed - nothing was measured"
 echo
 echo "PASS"

@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define DEFAULT_PORT      18080
 #define DEFAULT_REQUESTS  2000
@@ -59,6 +60,33 @@ static void handle_json(http_request_t *req, http_response_t *res) {
     json_object_set(json, "version", json_string_create(WEBLIB_VERSION));
     http_response_send_json(res, HTTP_OK, json);
     json_value_free(json);
+}
+
+/* ---------- Argument parsing ---------- */
+
+/*
+ * atoi() cannot fail: it returns 0 for "abc" and silently wraps on overflow, so
+ * `--port -1` would become 65535 and `--port abc` would become 0. Parse strictly
+ * instead - reject anything that is not a complete, in-range decimal number.
+ */
+static bool parse_ull(const char *s, unsigned long long lo,
+                      unsigned long long hi, unsigned long long *out) {
+    char *end = NULL;
+    unsigned long long v;
+
+    if (!s || *s == '\0' || *s == '-') {   /* strtoull silently accepts "-1" */
+        return false;
+    }
+    errno = 0;
+    v = strtoull(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0') {
+        return false;
+    }
+    if (v < lo || v > hi) {
+        return false;
+    }
+    *out = v;
+    return true;
 }
 
 /* ---------- Runner ---------- */
@@ -116,18 +144,28 @@ int main(int argc, char **argv) {
     uint64_t requests = DEFAULT_REQUESTS;
 
     for (int i = 1; i < argc; i++) {
+        unsigned long long v;
         if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
-            port = (uint16_t)atoi(argv[++i]);
+            /* 1-65535: port 0 asks the OS to pick, which this runner cannot then connect to. */
+            if (!parse_ull(argv[++i], 1, 65535, &v)) {
+                fprintf(stderr, "invalid --port '%s' (expected 1-65535)\n\n", argv[i]);
+                usage(argv[0]);
+                return 1;
+            }
+            port = (uint16_t)v;
         } else if (strcmp(argv[i], "--requests") == 0 && i + 1 < argc) {
-            requests = strtoull(argv[++i], NULL, 10);
+            /* Upper bound is arbitrary but keeps the run finite and the latency
+             * sample array a sane size. */
+            if (!parse_ull(argv[++i], 1, 10000000ULL, &v)) {
+                fprintf(stderr, "invalid --requests '%s' (expected 1-10000000)\n\n", argv[i]);
+                usage(argv[0]);
+                return 1;
+            }
+            requests = v;
         } else {
             usage(argv[0]);
             return 1;
         }
-    }
-    if (port == 0 || requests == 0) {
-        usage(argv[0]);
-        return 1;
     }
 
     router_t *router = router_create();
