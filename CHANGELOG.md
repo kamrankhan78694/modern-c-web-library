@@ -102,6 +102,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not, and no test spanning the gap. The new integration test drives a real
   route through `router_route()` and asserts the counter moved — verified to
   fail when the hook registration is removed.
+- **`/metrics` no longer contradicts itself.** `total_requests` and the
+  per-method counts were incremented on the way in, the status classes on the
+  way out, so the two halves of every scrape described different sets of
+  requests: `2xx + 3xx + 4xx + 5xx` never equalled `total_requests`, and the gap
+  was permanent rather than transient because the `/metrics` request itself was
+  counted in the total before its own status could be recorded. All counting now
+  happens once per completed request, under one lock, in the response hook. The
+  new test asserts the identity `total_requests == 2xx + 3xx + 4xx + 5xx` and
+  fails against the previous code.
+- **`metrics_register()` works on its own.** The counter state was allocated
+  only by `metrics_middleware_create()`, so registering the endpoint without
+  also installing the middleware served a `/metrics` full of zeroes. It now
+  allocates the state if nothing else has. `metrics_middleware_destroy()`
+  releases it either way, and the middleware itself is now a pass-through kept
+  for compatibility.
+- **The stress suite reported phantom failures on macOS.** Its malformed-request
+  probes ran `timeout 3 nc`, but `timeout` is GNU coreutils and is absent from a
+  stock macOS runner — so the command was never found, the reply was empty, and
+  three checks failed against a server that was in fact answering `400`
+  correctly. The deadline now rides on `nc -w`, which both BSD and GNU `nc`
+  support, and a missing `nc` announces itself as a skip instead of silently
+  contributing zero checks. Verified by running the suite with `timeout` removed
+  from `PATH`: 35/35.
+
+### Changed
+
+- **`tools/dev-server.sh` builds into `build-devserver/`, not `build/`.** It
+  configures with its own build type and flags, so sharing the conventional
+  directory meant either adopting a contributor's cache and silently ignoring
+  those settings, or creating one they did not ask for. Starting the preview can
+  no longer disturb an existing build tree.
 
 ## [2.0.1] - 2026-07-28
 

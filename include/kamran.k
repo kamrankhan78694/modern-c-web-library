@@ -1699,14 +1699,31 @@ size_t cache_count(cache_t *cache);
 /* ===== Metrics Middleware API (Observability) ===== */
 
 /**
- * Create a metrics collection middleware.
- * Tracks total requests, per-method counts, and status code ranges.
- * @return Middleware function or NULL on failure
+ * Create a metrics collection middleware and initialise the counter state.
+ *
+ * The returned middleware does not itself count anything: all counting happens
+ * once per completed request, in the response hook that metrics_register()
+ * installs, so that total_requests always equals the sum of the status classes.
+ * Installing this middleware is therefore optional — metrics_register() alone is
+ * enough to both serve GET /metrics and populate it. It remains available so
+ * existing wiring keeps working, and to allocate the state without a router.
+ *
+ * Not thread-safe with respect to metrics_middleware_destroy(); call both during
+ * setup and teardown, not while requests are in flight.
+ *
+ * @return Middleware function, or NULL on allocation failure OR if the metrics
+ *         state already exists (created by an earlier call, or by
+ *         metrics_register()). A NULL return is therefore not necessarily an
+ *         error — check whether metrics were already initialised.
  */
 middleware_fn_t metrics_middleware_create(void);
 
 /**
- * Destroy metrics middleware and free resources
+ * Destroy metrics middleware and free resources.
+ * Safe to call more than once, and safe when metrics were never initialised.
+ * Releases the state allocated by either metrics_middleware_create() or
+ * metrics_register(), so a program that calls only the latter must still call
+ * this to avoid leaking the counters.
  */
 void metrics_middleware_destroy(void);
 
@@ -1726,8 +1743,17 @@ void metrics_record_status(int status_code);
 void metrics_handler(http_request_t *req, http_response_t *res);
 
 /**
- * Register the metrics endpoint on an existing router.
- * Adds GET /metrics → metrics_handler.
+ * Register the metrics endpoint and collection on an existing router.
+ *
+ * Adds GET /metrics → metrics_handler, and installs the router response hook
+ * that records every completed request. This is the complete wiring: it
+ * allocates the counter state if no one has yet, so it needs no accompanying
+ * call to metrics_middleware_create(). Pair it with metrics_middleware_destroy()
+ * at shutdown to release that state.
+ *
+ * Requests that never reach the router — a malformed request rejected by the
+ * parser, for instance — are not counted.
+ *
  * @param router Router instance
  * @return 0 on success, -1 on failure
  */

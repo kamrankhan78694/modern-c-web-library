@@ -155,15 +155,19 @@ int router_add_response_hook(router_t *router, response_hook_fn_t hook,
  * Run the post-response hooks. Called at every router_route() exit that
  * produced a response, and nowhere else.
  *
- * The status guard matters: a middleware may stop the chain without sending
- * anything, leaving status at its zero-initialised value. Reporting that as a
- * real status would put garbage in whatever the hook feeds.
+ * There is deliberately no "was a response produced" guard here. An earlier
+ * version skipped hooks when res->status was 0, on the theory that a middleware
+ * could stop the chain without sending anything and leave the status at a
+ * zero-initialised value. That state does not exist: http_response_create()
+ * sets status to HTTP_OK before any handler sees the response, so the test was
+ * dead code resting on a false premise. What res holds at this point is exactly
+ * what the server serialises onto the wire — both router_route() call sites
+ * send it unconditionally — so reporting it is not a guess about the outcome,
+ * it IS the outcome. A middleware that stops the chain silently really does
+ * yield a 200 to the client, and metrics that hid it would be lying.
  */
 static void run_response_hooks(router_t *router, http_request_t *req,
                                http_response_t *res) {
-    if (res->status == 0) {
-        return;
-    }
     for (size_t i = 0; i < router->response_hook_count; i++) {
         router->response_hooks[i](req, res, router->response_hook_data[i]);
     }

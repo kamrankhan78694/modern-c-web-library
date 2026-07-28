@@ -3731,12 +3731,18 @@ void test_metrics_register(void) {
     ASSERT(metrics_register(router) == 0);
 
     router_destroy(router);
+    /* metrics_register() allocates the counter state when the middleware has
+     * not already done so, which is what lets it be used on its own. That makes
+     * releasing it this test's job — otherwise it leaks, and the next test to
+     * call metrics_middleware_create() gets NULL for "already initialized". */
+    metrics_middleware_destroy();
     PASS();
 }
 
 void test_metrics_record_status(void) {
     TEST("metrics (record_status)");
 
+    metrics_middleware_destroy();          /* start from a known state */
     middleware_fn_t mw = metrics_middleware_create();
     ASSERT(mw != NULL);
 
@@ -4300,6 +4306,75 @@ void test_metrics_status_counted_through_router(void) {
 
     _test_free_header_list(res404.headers);
     free(res404.body);
+    router_destroy(router);
+    metrics_middleware_destroy();
+    PASS();
+}
+
+/* Read a top-level numeric field from /metrics. Returns -1 if unreadable. */
+static double _metrics_top_number(const char *field) {
+    http_request_t req = {0};
+    http_response_t res = {0};
+    double out = -1;
+    req.method = HTTP_GET;
+    req.path = "/metrics";
+    metrics_handler(&req, &res);
+    if (res.body) {
+        json_value_t *m = json_parse(res.body);
+        if (m) {
+            json_value_t *v = json_object_get(m, field);
+            if (v && v->type == JSON_NUMBER) {
+                out = v->data.number_val;
+            }
+            json_value_free(m);
+        }
+    }
+    free(res.body);
+    _test_free_header_list(res.headers);
+    return out;
+}
+
+/*
+ * /metrics must agree with itself: every request counted in total_requests is
+ * also counted in exactly one status class.
+ *
+ * This failed before the counters were consolidated. total_requests moved in
+ * the middleware (before the handler) while the status classes moved in the
+ * response hook (after it), so the sum always trailed the total. It is also the
+ * reason this test does NOT install the middleware: metrics_register() alone
+ * has to produce a complete, self-consistent document.
+ */
+void test_metrics_totals_match_status_classes(void) {
+    TEST("metrics (total_requests == sum of status classes)");
+
+    metrics_middleware_destroy();          /* start from a known state */
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    /* No metrics_middleware_create() here — deliberately. */
+    ASSERT(metrics_register(router) == 0);
+    router_add_route(router, HTTP_GET, "/ok", _ok_handler);
+
+    /* Three 200s and two 404s: five requests, five recorded outcomes. */
+    for (int i = 0; i < 5; i++) {
+        http_request_t req = {0};
+        http_response_t res = {0};
+        req.method = HTTP_GET;
+        req.path = (i < 3) ? "/ok" : "/does-not-exist";
+        router_route(router, &req, &res);
+        _test_free_header_list(res.headers);
+        free(res.body);
+    }
+
+    double total = _metrics_top_number("total_requests");
+    double sum   = _metrics_status_count("2xx") + _metrics_status_count("3xx")
+                 + _metrics_status_count("4xx") + _metrics_status_count("5xx");
+
+    ASSERT(total == 5);
+    ASSERT(_metrics_status_count("2xx") == 3);
+    ASSERT(_metrics_status_count("4xx") == 2);
+    ASSERT(total == sum);
+
     router_destroy(router);
     metrics_middleware_destroy();
     PASS();
@@ -5296,6 +5371,7 @@ int main(void) {
     test_metrics_register();
     test_metrics_record_status();
     test_metrics_status_counted_through_router();
+    test_metrics_totals_match_status_classes();
     test_metrics_endpoint();
 
     /* Phase 9: Compression tests */

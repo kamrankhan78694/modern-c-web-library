@@ -31,24 +31,100 @@ typedef struct metrics_data {
 /* File-level static metrics instance */
 static metrics_data_t *_metrics = NULL;
 
-/* Internal middleware function implementation */
-static bool _metrics_middleware(http_request_t *req, http_response_t *res, void *user_data) {
-    (void)res;
-    (void)user_data;
+/*
+ * Allocate and initialise the metrics state. Idempotent: a no-op returning
+ * success when the state already exists, so the two public entry points
+ * (metrics_middleware_create and metrics_register) can each call it without
+ * having to know which of them ran first.
+ * Returns: 0 on success, -1 on failure.
+ */
+static int _metrics_init(void) {
+    if (_metrics != NULL) {
+        return 0;
+    }
+
+    _metrics = (metrics_data_t *)calloc(1, sizeof(metrics_data_t));
+    if (!_metrics) {
+        return -1;
+    }
+
+    /* Initialize fields (calloc zeroes them, but be explicit for clarity) */
+    _metrics->total_requests = 0;
+    _metrics->status_2xx = 0;
+    _metrics->status_3xx = 0;
+    _metrics->status_4xx = 0;
+    _metrics->status_5xx = 0;
+    _metrics->start_time = time(NULL);
+
+    /* Zero out method counts */
+    for (int i = 0; i < 7; i++) {
+        _metrics->method_counts[i] = 0;
+    }
+
+    /* Initialize mutex */
+    if (pthread_mutex_init(&_metrics->lock, NULL) != 0) {
+        free(_metrics);
+        _metrics = NULL;
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * Record one completed request: totals, method, and status class, all under a
+ * single lock acquisition.
+ *
+ * Counting every field at the same instant is what keeps /metrics internally
+ * consistent. When the totals were incremented before the handler and the
+ * status class after it, a scrape of /metrics always disagreed with itself by
+ * at least one: the /metrics request had already bumped total_requests, but
+ * its own status was not recorded until after the JSON had been rendered, so
+ * the document it returned could never satisfy
+ * status_2xx + status_3xx + status_4xx + status_5xx == total_requests.
+ * Counting once, at completion, makes that identity hold.
+ */
+static void _metrics_record(const http_request_t *req, int status) {
     metrics_data_t *m = _metrics;
     if (!m)
-        return true;
-    
+        return;
+
     pthread_mutex_lock(&m->lock);
     m->total_requests++;
-    
+
     /* Increment method count (method is an enum 0-6) */
-    int method_idx = (int)req->method;
-    if (method_idx >= 0 && method_idx < 7)
-        m->method_counts[method_idx]++;
-    
+    if (req) {
+        int method_idx = (int)req->method;
+        if (method_idx >= 0 && method_idx < 7)
+            m->method_counts[method_idx]++;
+    }
+
+    if (status >= 200 && status < 300)
+        m->status_2xx++;
+    else if (status >= 300 && status < 400)
+        m->status_3xx++;
+    else if (status >= 400 && status < 500)
+        m->status_4xx++;
+    else if (status >= 500 && status < 600)
+        m->status_5xx++;
+
     pthread_mutex_unlock(&m->lock);
-    
+}
+
+/*
+ * Internal middleware function implementation.
+ *
+ * This deliberately counts nothing. Middleware runs BEFORE the handler, so the
+ * only fields it could record are the ones knowable at entry — and recording
+ * those here while the status class is recorded at exit is precisely what made
+ * the two halves of /metrics disagree. All counting now happens once, in the
+ * response hook installed by metrics_register(). The middleware is retained so
+ * existing wiring keeps compiling and running.
+ */
+static bool _metrics_middleware(http_request_t *req, http_response_t *res, void *user_data) {
+    (void)req;
+    (void)res;
+    (void)user_data;
     return true;  /* always continue to next middleware/handler */
 }
 
@@ -61,33 +137,11 @@ middleware_fn_t metrics_middleware_create(void) {
     if (_metrics != NULL) {
         return NULL;
     }
-    
-    /* Allocate metrics structure */
-    _metrics = (metrics_data_t *)calloc(1, sizeof(metrics_data_t));
-    if (!_metrics) {
+
+    if (_metrics_init() != 0) {
         return NULL;
     }
-    
-    /* Initialize fields (calloc zeroes them, but be explicit for clarity) */
-    _metrics->total_requests = 0;
-    _metrics->status_2xx = 0;
-    _metrics->status_3xx = 0;
-    _metrics->status_4xx = 0;
-    _metrics->status_5xx = 0;
-    _metrics->start_time = time(NULL);
-    
-    /* Zero out method counts */
-    for (int i = 0; i < 7; i++) {
-        _metrics->method_counts[i] = 0;
-    }
-    
-    /* Initialize mutex */
-    if (pthread_mutex_init(&_metrics->lock, NULL) != 0) {
-        free(_metrics);
-        _metrics = NULL;
-        return NULL;
-    }
-    
+
     /* Return the middleware function pointer */
     return _metrics_middleware;
 }
@@ -217,10 +271,9 @@ void metrics_handler(http_request_t *req, http_response_t *res) {
  */
 static void _metrics_response_hook(http_request_t *req, http_response_t *res,
                                    void *user_data) {
-    (void)req;
     (void)user_data;
     if (res) {
-        metrics_record_status((int)res->status);
+        _metrics_record(req, (int)res->status);
     }
 }
 
@@ -228,7 +281,16 @@ int metrics_register(router_t *router) {
     if (!router) {
         return -1;
     }
-    
+
+    /* Stand on our own feet: the counters live behind _metrics, which used to
+     * be allocated only by metrics_middleware_create(). Callers who registered
+     * the endpoint without also installing the middleware got a /metrics that
+     * served nothing but zeroes. Initialising here makes metrics_register()
+     * alone sufficient, and it is a no-op when the middleware already ran. */
+    if (_metrics == NULL && _metrics_init() != 0) {
+        return -1;
+    }
+
     /* Register GET /metrics route */
     if (router_add_route(router, HTTP_GET, "/metrics", metrics_handler) != 0) {
         return -1;

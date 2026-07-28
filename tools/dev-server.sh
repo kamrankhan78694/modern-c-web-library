@@ -16,7 +16,13 @@ PORT="${1:-8080}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-BUILD_DIR="build"
+# A dedicated tree, not the conventional build/. This script configures with its
+# own CMAKE_BUILD_TYPE and flags, so pointing it at build/ would either adopt a
+# contributor's existing cache (and silently ignore the settings below) or
+# create one they did not ask for and then keep building into it. Isolating it
+# means running the preview can never disturb a working build. Override with
+# DEV_SERVER_BUILD_DIR if you want it somewhere else.
+BUILD_DIR="${DEV_SERVER_BUILD_DIR:-build-devserver}"
 
 if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
     echo "[dev-server] configuring ($BUILD_DIR)..." >&2
