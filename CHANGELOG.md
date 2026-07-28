@@ -14,8 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left the same claim wrong elsewhere — and twice the defect was introduced *by
   the change that was fixing an earlier instance of it*. The checks derive truth
   from the build files rather than from prose, so the class cannot recur
-  silently: version declarations must agree across all six places one is
-  declared, `src/` and `examples/` must contain no hardcoded `x.y.z` literal
+  silently: version declarations must agree across `CMakeLists.txt`,
+  `include/kamran.k`, `Dockerfile.release` and `publish-package.sh` (every
+  macro and every LABEL, not just the first of each), `src/` and `examples/`
+  must contain no hardcoded `x.y.z` literal
   (`examples/simple_server.c` reported "1.0.0" for two major versions, and it is
   the release image's entrypoint), documented ctest suite counts must match
   `tests/CMakeLists.txt`, and the Valgrind step must still accumulate per-binary

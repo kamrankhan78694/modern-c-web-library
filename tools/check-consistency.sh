@@ -111,20 +111,37 @@ echo
 # ---------------------------------------------------------------------------
 echo "[3] documented suite counts match tests/CMakeLists.txt"
 
-# Count registrations by the flag that gates them, tracking nesting.
+# Count registrations by the flag that gates them.
+#
+# Real nesting matters: the TLS section contains nested if() blocks
+# (WEBLIB_TLS_TEST_HOOKS, and TARGET tls_server AND BASH_EXECUTABLE). A parser
+# that treats any endif() as closing the TLS block drops out of TLS context at
+# the first nested endif and miscounts everything after it as a default suite.
+# The first version of this script did exactly that; it produced correct numbers
+# only because TlsInteropOpenssl happens to be the last registration in the
+# block. Track depth properly, and remember the depth each guard opened at.
 DEFAULT_N=0; TLS_N=0; HOOKS_N=0
-depth_tls=0; depth_hooks=0
+depth=0; tls_at=-1; hooks_at=-1
 while IFS= read -r line; do
+    line="${line%%#*}"                       # ignore comments
     case "$line" in
-        *"if(WEBLIB_TLS_TEST_HOOKS)"*) depth_hooks=1 ;;
-        *"if(WEBLIB_ENABLE_TLS)"*)     depth_tls=1 ;;
-        *"endif()"*)
-            if [ "$depth_hooks" = 1 ]; then depth_hooks=0
-            elif [ "$depth_tls" = 1 ]; then depth_tls=0; fi ;;
-        *"add_test(NAME"*)
-            if   [ "$depth_hooks" = 1 ]; then HOOKS_N=$((HOOKS_N + 1))
-            elif [ "$depth_tls" = 1 ];   then TLS_N=$((TLS_N + 1))
-            else DEFAULT_N=$((DEFAULT_N + 1)); fi ;;
+        *endif\(\)*)
+            [ "$hooks_at" -eq "$depth" ] && hooks_at=-1
+            [ "$tls_at"   -eq "$depth" ] && tls_at=-1
+            depth=$((depth - 1))
+            ;;
+        *if\(*)
+            depth=$((depth + 1))
+            case "$line" in
+                *WEBLIB_TLS_TEST_HOOKS*) hooks_at=$depth ;;
+                *WEBLIB_ENABLE_TLS*)     tls_at=$depth ;;
+            esac
+            ;;
+        *add_test\(NAME*)
+            if   [ "$hooks_at" -ge 0 ]; then HOOKS_N=$((HOOKS_N + 1))
+            elif [ "$tls_at"   -ge 0 ]; then TLS_N=$((TLS_N + 1))
+            else                             DEFAULT_N=$((DEFAULT_N + 1)); fi
+            ;;
     esac
 done < tests/CMakeLists.txt
 

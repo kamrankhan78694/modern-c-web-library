@@ -81,12 +81,13 @@ jobs:
             exit $rc
           '
 
-  # Mechanical consistency checks. Cheap (no build), so it runs first and in
-  # parallel with everything else. Guards the specific claim-drift that has
-  # shipped before: version declarations disagreeing across the six places that
-  # declare one, hardcoded version literals in examples, documented ctest suite
-  # counts that match no real configuration, and the Valgrind step silently
-  # losing its ability to gate.
+  # Mechanical consistency checks. Cheap (no build), so it runs in parallel
+  # with everything else. Guards the specific claim-drift that has shipped
+  # before: version declarations disagreeing across CMakeLists.txt,
+  # include/kamran.k, Dockerfile.release and publish-package.sh; hardcoded
+  # version literals in src/ or examples/; documented ctest suite counts that
+  # match no real configuration; and the Valgrind step silently losing its
+  # ability to gate. The script is the authority on what it checks.
   consistency:
     name: Consistency Checks
     runs-on: ubuntu-latest
