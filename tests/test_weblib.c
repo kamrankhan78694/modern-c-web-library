@@ -4367,13 +4367,103 @@ void test_metrics_totals_match_status_classes(void) {
     }
 
     double total = _metrics_top_number("total_requests");
-    double sum   = _metrics_status_count("2xx") + _metrics_status_count("3xx")
-                 + _metrics_status_count("4xx") + _metrics_status_count("5xx");
+    double sum   = _metrics_status_count("1xx") + _metrics_status_count("2xx")
+                 + _metrics_status_count("3xx") + _metrics_status_count("4xx")
+                 + _metrics_status_count("5xx") + _metrics_status_count("other");
 
     ASSERT(total == 5);
     ASSERT(_metrics_status_count("2xx") == 3);
     ASSERT(_metrics_status_count("4xx") == 2);
     ASSERT(total == sum);
+
+    router_destroy(router);
+    metrics_middleware_destroy();
+    PASS();
+}
+
+static void _upgrade_handler(http_request_t *req, http_response_t *res) {
+    (void)req;
+    res->status = HTTP_SWITCHING_PROTOCOLS;   /* what a WebSocket upgrade sets */
+}
+
+/*
+ * A 101 must not break the identity.
+ *
+ * total_requests counted every request while only 2xx-5xx had a bucket, so the
+ * first WebSocket upgrade put the two halves permanently out of step and the
+ * gap then grew for the life of the process — on a WebSocket-heavy server,
+ * without bound. Every status now lands in a class.
+ */
+void test_metrics_identity_holds_for_1xx(void) {
+    TEST("metrics (101 upgrade keeps total == sum of classes)");
+
+    metrics_middleware_destroy();
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    ASSERT(metrics_register(router) == 0);
+    router_add_route(router, HTTP_GET, "/ok", _ok_handler);
+    router_add_route(router, HTTP_GET, "/ws", _upgrade_handler);
+
+    char *paths[] = { "/ok", "/ws", "/ws" };   /* req.path is char *, not const */
+    for (int i = 0; i < 3; i++) {
+        http_request_t req = {0};
+        http_response_t res = {0};
+        req.method = HTTP_GET;
+        req.path = paths[i];
+        router_route(router, &req, &res);
+        _test_free_header_list(res.headers);
+        free(res.body);
+    }
+
+    double total = _metrics_top_number("total_requests");
+    double sum   = _metrics_status_count("1xx") + _metrics_status_count("2xx")
+                 + _metrics_status_count("3xx") + _metrics_status_count("4xx")
+                 + _metrics_status_count("5xx") + _metrics_status_count("other");
+
+    ASSERT(total == 3);
+    ASSERT(_metrics_status_count("1xx") == 2);   /* was unbucketed before */
+    ASSERT(_metrics_status_count("2xx") == 1);
+    ASSERT(total == sum);
+
+    router_destroy(router);
+    metrics_middleware_destroy();
+    PASS();
+}
+
+/*
+ * Middleware-only wiring must keep counting.
+ *
+ * Consolidating all counting into the response hook emptied the middleware, so
+ * an application that installs the middleware WITHOUT calling metrics_register()
+ * — a supported, documented setup — silently served an all-zero /metrics while
+ * the header still promised existing wiring kept working. The middleware now
+ * counts request entry whenever no hook is installed.
+ */
+void test_metrics_middleware_only_still_counts(void) {
+    TEST("metrics (middleware without metrics_register still counts)");
+
+    metrics_middleware_destroy();
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    middleware_fn_t mw = metrics_middleware_create();
+    ASSERT(mw != NULL);
+    ASSERT(router_use_middleware(router, mw) == 0);
+    /* Deliberately NO metrics_register(): the endpoint is mounted by hand, the
+     * way docs/api/README.md describes serving metrics_handler on your own path. */
+    router_add_route(router, HTTP_GET, "/ok", _ok_handler);
+
+    for (int i = 0; i < 3; i++) {
+        http_request_t req = {0};
+        http_response_t res = {0};
+        req.method = HTTP_GET;
+        req.path = "/ok";
+        router_route(router, &req, &res);
+        _test_free_header_list(res.headers);
+        free(res.body);
+    }
+
+    ASSERT(_metrics_top_number("total_requests") == 3);
 
     router_destroy(router);
     metrics_middleware_destroy();
@@ -5372,6 +5462,8 @@ int main(void) {
     test_metrics_record_status();
     test_metrics_status_counted_through_router();
     test_metrics_totals_match_status_classes();
+    test_metrics_identity_holds_for_1xx();
+    test_metrics_middleware_only_still_counts();
     test_metrics_endpoint();
 
     /* Phase 9: Compression tests */

@@ -1705,8 +1705,13 @@ size_t cache_count(cache_t *cache);
  * once per completed request, in the response hook that metrics_register()
  * installs, so that total_requests always equals the sum of the status classes.
  * Installing this middleware is therefore optional — metrics_register() alone is
- * enough to both serve GET /metrics and populate it. It remains available so
- * existing wiring keeps working, and to allocate the state without a router.
+ * enough to both serve GET /metrics and populate it.
+ *
+ * When NO response hook is installed, this middleware falls back to counting
+ * request entry (total_requests and the per-method counts) exactly as it always
+ * did, so middleware-only wiring keeps working. Status classes do not move in
+ * that mode — they never did, which is issue #136 and the reason the hook
+ * exists. Use metrics_register() to get status counts.
  *
  * Not thread-safe with respect to metrics_middleware_destroy(); call both during
  * setup and teardown, not while requests are in flight.
@@ -1729,7 +1734,12 @@ void metrics_middleware_destroy(void);
 
 /**
  * Record a response status code in metrics.
- * Call after sending a response to track 2xx/3xx/4xx/5xx counts.
+ *
+ * Only needed for responses served OUTSIDE the router. When metrics_register()
+ * has installed the response hook, every routed response is already recorded and
+ * this call deliberately does nothing — calling it as well would double the
+ * class counts and break the documented identity against total_requests.
+ *
  * @param status_code HTTP status code
  */
 void metrics_record_status(int status_code);

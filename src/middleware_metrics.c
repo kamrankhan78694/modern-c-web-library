@@ -20,11 +20,23 @@
 typedef struct metrics_data {
     unsigned long total_requests;
     unsigned long method_counts[7];    /* Indexed by http_method_t */
+    unsigned long status_1xx;
     unsigned long status_2xx;
     unsigned long status_3xx;
     unsigned long status_4xx;
     unsigned long status_5xx;
+    /* Anything outside 100-599. Without it the advertised identity
+     * total_requests == sum(classes) silently fails on the very first
+     * WebSocket upgrade, because total counts every request but only
+     * 2xx-5xx had a bucket to land in. Every request lands somewhere now. */
+    unsigned long status_other;
     time_t start_time;                 /* Server start time for uptime */
+    /* Set by metrics_register(). The middleware counts request entry ONLY when
+     * this is false: with the hook installed, counting happens once at
+     * completion (so the classes and the total always agree), and without it
+     * the middleware keeps behaving exactly as it did before the hook existed,
+     * which is what makes middleware-only wiring still work. */
+    bool hook_installed;
     pthread_mutex_t lock;
 } metrics_data_t;
 
@@ -50,10 +62,13 @@ static int _metrics_init(void) {
 
     /* Initialize fields (calloc zeroes them, but be explicit for clarity) */
     _metrics->total_requests = 0;
+    _metrics->status_1xx = 0;
     _metrics->status_2xx = 0;
     _metrics->status_3xx = 0;
     _metrics->status_4xx = 0;
     _metrics->status_5xx = 0;
+    _metrics->status_other = 0;
+    _metrics->hook_installed = false;
     _metrics->start_time = time(NULL);
 
     /* Zero out method counts */
@@ -99,7 +114,9 @@ static void _metrics_record(const http_request_t *req, int status) {
             m->method_counts[method_idx]++;
     }
 
-    if (status >= 200 && status < 300)
+    if (status >= 100 && status < 200)
+        m->status_1xx++;
+    else if (status >= 200 && status < 300)
         m->status_2xx++;
     else if (status >= 300 && status < 400)
         m->status_3xx++;
@@ -107,6 +124,8 @@ static void _metrics_record(const http_request_t *req, int status) {
         m->status_4xx++;
     else if (status >= 500 && status < 600)
         m->status_5xx++;
+    else
+        m->status_other++;
 
     pthread_mutex_unlock(&m->lock);
 }
@@ -114,17 +133,38 @@ static void _metrics_record(const http_request_t *req, int status) {
 /*
  * Internal middleware function implementation.
  *
- * This deliberately counts nothing. Middleware runs BEFORE the handler, so the
- * only fields it could record are the ones knowable at entry — and recording
- * those here while the status class is recorded at exit is precisely what made
- * the two halves of /metrics disagree. All counting now happens once, in the
- * response hook installed by metrics_register(). The middleware is retained so
- * existing wiring keeps compiling and running.
+ * Counts request entry ONLY when no response hook is installed.
+ *
+ * With the hook (the metrics_register() wiring), counting here as well would
+ * double the totals, and counting entry here while the status class is counted
+ * at exit is exactly what made the two halves of /metrics disagree. So the hook
+ * owns all counting and this becomes a pass-through.
+ *
+ * Without the hook, this is the only counter there is. An earlier revision made
+ * this function unconditionally empty, which silently reduced middleware-only
+ * wiring — a supported, documented setup — to an all-zero /metrics while the
+ * header still promised that existing wiring kept working. Falling back here
+ * keeps that promise true. Status classes still do not move in that mode; they
+ * never did, which is the whole of issue #136 and the reason the hook exists.
  */
 static bool _metrics_middleware(http_request_t *req, http_response_t *res, void *user_data) {
-    (void)req;
     (void)res;
     (void)user_data;
+    metrics_data_t *m = _metrics;
+    if (!m)
+        return true;
+
+    pthread_mutex_lock(&m->lock);
+    if (!m->hook_installed) {
+        m->total_requests++;
+        if (req) {
+            int method_idx = (int)req->method;
+            if (method_idx >= 0 && method_idx < 7)
+                m->method_counts[method_idx]++;
+        }
+    }
+    pthread_mutex_unlock(&m->lock);
+
     return true;  /* always continue to next middleware/handler */
 }
 
@@ -158,15 +198,29 @@ void metrics_middleware_destroy(void) {
 }
 
 /*
- * Records response status code in metrics
+ * Records response status code in metrics.
+ *
+ * Manual recording for applications that serve responses outside the router.
+ * When metrics_register() has installed the response hook this is NOT needed —
+ * calling it as well double-counts the class and breaks the documented identity
+ * against total_requests — so it stands down in that case rather than quietly
+ * corrupting the numbers of anyone still following the older documented advice
+ * to "call after sending a response".
  */
 void metrics_record_status(int status_code) {
     if (!_metrics)
         return;
-    
+
     pthread_mutex_lock(&_metrics->lock);
-    
-    if (status_code >= 200 && status_code < 300)
+
+    if (_metrics->hook_installed) {
+        pthread_mutex_unlock(&_metrics->lock);
+        return;
+    }
+
+    if (status_code >= 100 && status_code < 200)
+        _metrics->status_1xx++;
+    else if (status_code >= 200 && status_code < 300)
         _metrics->status_2xx++;
     else if (status_code >= 300 && status_code < 400)
         _metrics->status_3xx++;
@@ -174,7 +228,9 @@ void metrics_record_status(int status_code) {
         _metrics->status_4xx++;
     else if (status_code >= 500 && status_code < 600)
         _metrics->status_5xx++;
-    
+    else
+        _metrics->status_other++;
+
     pthread_mutex_unlock(&_metrics->lock);
 }
 
@@ -225,15 +281,23 @@ void metrics_handler(http_request_t *req, http_response_t *res) {
     /* Create status object */
     json_value_t *status_obj = json_object_create();
     if (status_obj) {
+        /* 1xx and other exist so that the classes account for every request
+         * counted in total_requests. A WebSocket upgrade answers 101; without
+         * a bucket for it the documented identity broke on the first upgrade
+         * and the gap then grew for the life of the process. */
+        json_value_t *s1xx = json_number_create((double)_metrics->status_1xx);
         json_value_t *s2xx = json_number_create((double)_metrics->status_2xx);
         json_value_t *s3xx = json_number_create((double)_metrics->status_3xx);
         json_value_t *s4xx = json_number_create((double)_metrics->status_4xx);
         json_value_t *s5xx = json_number_create((double)_metrics->status_5xx);
-        
+        json_value_t *soth = json_number_create((double)_metrics->status_other);
+
+        if (s1xx) json_object_set(status_obj, "1xx", s1xx);
         if (s2xx) json_object_set(status_obj, "2xx", s2xx);
         if (s3xx) json_object_set(status_obj, "3xx", s3xx);
         if (s4xx) json_object_set(status_obj, "4xx", s4xx);
         if (s5xx) json_object_set(status_obj, "5xx", s5xx);
+        if (soth) json_object_set(status_obj, "other", soth);
         
         json_object_set(root, "status", status_obj);
     }
@@ -302,6 +366,13 @@ int metrics_register(router_t *router) {
     if (router_add_response_hook(router, _metrics_response_hook, NULL) != 0) {
         return -1;
     }
-    
+
+    /* Only after the hook is actually installed: this is what stands the
+     * middleware down from counting entry, so setting it on a path where
+     * registration failed would leave nothing counting at all. */
+    pthread_mutex_lock(&_metrics->lock);
+    _metrics->hook_installed = true;
+    pthread_mutex_unlock(&_metrics->lock);
+
     return 0;
 }

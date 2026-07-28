@@ -1398,7 +1398,8 @@ void metrics_handler(http_request_t *req, http_response_t *res);
 // The handler itself, if you would rather register it on your own path
 
 void metrics_record_status(int status_code);
-// Call after sending a response to fold it into the 2xx/3xx/4xx/5xx counters
+// Only for responses served outside the router: metrics_register() already
+// records routed responses, and this is a no-op once its hook is installed.
 ```
 
 `GET /metrics` returns JSON: total request count, a per-method breakdown, status code
