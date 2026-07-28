@@ -109,14 +109,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was permanent rather than transient because the `/metrics` request itself was
   counted in the total before its own status could be recorded. All counting now
   happens once per completed request, under one lock, in the response hook. The
-  new test asserts the identity `total_requests == 2xx + 3xx + 4xx + 5xx` and
-  fails against the previous code.
+  new test asserts that identity — see the `1xx`/`other` entry below for its
+  final form — and fails against the previous code.
 - **`metrics_register()` works on its own.** The counter state was allocated
   only by `metrics_middleware_create()`, so registering the endpoint without
   also installing the middleware served a `/metrics` full of zeroes. It now
   allocates the state if nothing else has. `metrics_middleware_destroy()`
-  releases it either way, and the middleware itself is now a pass-through kept
-  for compatibility.
+  releases it either way.
 - **The stress suite reported phantom failures on macOS.** Its malformed-request
   probes ran `timeout 3 nc`, but `timeout` is GNU coreutils and is absent from a
   stock macOS runner — so the command was never found, the reply was empty, and
@@ -125,6 +124,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   support, and a missing `nc` announces itself as a skip instead of silently
   contributing zero checks. Verified by running the suite with `timeout` removed
   from `PATH`: 35/35.
+
+- **`HEAD` sent a body in async mode.** The RFC 9110 §9.3.2 fix landed only in
+  the threaded `send_response()`; the event-loop writer has its own send loop and
+  kept putting `Content-Length` bytes on the wire after a HEAD response's headers.
+  The bug arrived *with* the fix — before the GET fallback existed, `HEAD` simply
+  404'd — and it is worse than cosmetic: on a keep-alive connection the client
+  reads those bytes as the start of the next response, which is a response-queue
+  desync. Reproduced against the shipped `async_server` example, and the
+  regression test pipelines `HEAD` then `GET` on one connection and asserts two
+  cleanly framed responses.
+- **`/metrics` broke its own identity on the first WebSocket upgrade.**
+  `total_requests` counted every request while only `2xx`–`5xx` had a bucket, so
+  a `101` was counted once and classified nowhere; the gap then grew for the life
+  of the process. Added `1xx` and `other` classes so every request lands
+  somewhere, making the identity exact:
+  `total_requests == 1xx + 2xx + 3xx + 4xx + 5xx + other`.
+- **Middleware-only metrics wiring reported all zeroes.** Consolidating the
+  counting into the response hook emptied the middleware, which silently broke
+  applications that install it without calling `metrics_register()` — while the
+  header still promised existing wiring kept working. The middleware now counts
+  request entry whenever no hook is installed, so that promise is true again.
+- **`metrics_record_status()` documented a contract that now double-counts.**
+  The header and API reference still said "call after sending a response", which
+  with the hook installed added a second increment to every status class. It is
+  now a no-op once the hook is registered, and documented as being for responses
+  served outside the router.
+- **The `StressDemoApp` suite reported a pass when it asserted nothing.** `skip()`
+  exited 0, so a missing prerequisite — `curl` absent from the CI image, the
+  binary not where CMake said, `mktemp` failing — turned the repo's only
+  end-to-end suite into a green tick. It now exits 77 with `SKIP_RETURN_CODE`
+  set, and ctest reports `Skipped`.
+- **The `#138` keep-alive gate could not fail.** It asserted only that `ab`
+  exited, but `ab` exits 0 even when every response failed — measured here:
+  40 requests, `Non-2xx responses: 40`, exit status 0. It now asserts the
+  completed count, zero failed requests and zero non-2xx, and reports
+  throughput without asserting on it.
 
 ### Changed
 

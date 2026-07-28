@@ -45,7 +45,14 @@ TMP=""
 fails=0
 checks=0
 
-skip() { echo "SKIP: $*"; exit 0; }
+# Exit 77, not 0. tests/CMakeLists.txt sets SKIP_RETURN_CODE 77 so ctest reports
+# this suite as "Skipped" rather than "Passed". Exiting 0 meant that losing a
+# prerequisite — curl missing from the CI image, the binary not where CMake
+# said, mktemp failing — turned the repo's only end-to-end suite into a green
+# tick that asserted nothing, silently, for as long as the prerequisite stayed
+# missing. The comment on TlsInteropOpenssl in tests/CMakeLists.txt already
+# warned about exactly this shape; this suite had the same hole.
+skip() { echo "SKIP: $*"; exit 77; }
 cleanup() {
     [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null
     wait "$SRV_PID" 2>/dev/null
@@ -281,8 +288,19 @@ if command -v ab >/dev/null 2>&1; then
     # The decisive check: is the server still answering ANYONE mid-load?
     mid="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$B/api/info" 2>/dev/null)"
     if wait "$AB_PID" 2>/dev/null; then
+        # ab's exit status is NOT a verdict on the responses. Measured on this
+        # tree: `ab -n 40 -c 8 -k` against a 404 path exits 0 while reporting
+        # "Non-2xx responses: 40". Asserting only that ab finished would call a
+        # total keep-alive failure a pass, which is the exact defect #138
+        # describes — so read the counters ab actually reports.
         rps="$(awk '/Requests per second/{print $4}' "$TMP/ka.out")"
-        ok "keep-alive c=$KA_C completed (${rps:-?} req/s)"
+        completed="$(awk '/^Complete requests:/{print $3}' "$TMP/ka.out")"
+        failed="$(awk '/^Failed requests:/{print $3}'   "$TMP/ka.out")"
+        non2xx="$(awk '/^Non-2xx responses:/{print $3}' "$TMP/ka.out")"
+        is "keep-alive c=$KA_C completed all 4000 requests" "${completed:-0}" "4000"
+        is "keep-alive c=$KA_C had zero failed requests"    "${failed:-none}"  "0"
+        is "keep-alive c=$KA_C had zero non-2xx responses"  "${non2xx:-0}"     "0"
+        echo "        (${rps:-?} req/s — reported, not asserted)"
     else
         bad "keep-alive c=$KA_C did not complete — pool saturated (#138 regression)"
     fi

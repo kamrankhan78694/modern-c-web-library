@@ -119,7 +119,12 @@ endif()
 if(TARGET demo_app AND BASH_EXECUTABLE)
     add_test(NAME StressDemoApp
              COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/stress_demo_app.sh $<TARGET_FILE:demo_app>)
-    set_tests_properties(StressDemoApp PROPERTIES TIMEOUT 180)
+    # SKIP_RETURN_CODE matters as much as the timeout here. The script exits 77
+    # when a prerequisite is missing; without this property ctest reads that as
+    # a plain failure, and with the script's original exit 0 it read it as a
+    # PASS — a suite that asserted nothing reporting green. Skips are now
+    # visible as skips.
+    set_tests_properties(StressDemoApp PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
 endif()
 
 # WASM capability test (runs on both native and WASM builds)
