@@ -4222,6 +4222,89 @@ void test_middleware_user_data(void) {
     PASS();
 }
 
+/*
+ * Integration test for issue #136: serving a request through the router must
+ * move the metrics status counters.
+ *
+ * test_metrics_record_status() above calls metrics_record_status() directly and
+ * passes even when nothing in the library ever calls it — which is exactly how
+ * the bug shipped: /metrics reported 2xx/3xx/4xx/5xx as zero forever while the
+ * unit test stayed green. This test spans the gap the unit test cannot.
+ */
+/* Read one status-class counter the way a client would: through the /metrics
+ * handler, parsed as JSON. Returns -1 if the field cannot be read. */
+static double _metrics_status_count(const char *cls) {
+    http_request_t req = {0};
+    http_response_t res = {0};
+    double out = -1;
+    req.method = HTTP_GET;
+    req.path = "/metrics";
+    metrics_handler(&req, &res);
+    if (res.body) {
+        json_value_t *m = json_parse(res.body);
+        if (m) {
+            json_value_t *st = json_object_get(m, "status");
+            if (st) {
+                json_value_t *v = json_object_get(st, cls);
+                if (v && v->type == JSON_NUMBER) {
+                    out = v->data.number_val;
+                }
+            }
+            json_value_free(m);
+        }
+    }
+    free(res.body);
+    _test_free_header_list(res.headers);
+    return out;
+}
+
+static void _ok_handler(http_request_t *req, http_response_t *res) {
+    (void)req;
+    http_response_send_text(res, HTTP_OK, "ok");
+}
+
+void test_metrics_status_counted_through_router(void) {
+    TEST("metrics (status recorded by the router response hook)");
+
+    metrics_middleware_destroy();          /* start from a known state */
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+
+    middleware_fn_t mw = metrics_middleware_create();
+    ASSERT(mw != NULL);
+    ASSERT(router_use_middleware(router, mw) == 0);
+    ASSERT(metrics_register(router) == 0);  /* installs the response hook */
+    router_add_route(router, HTTP_GET, "/ok", _ok_handler);
+
+    /* A 200 through a real route. */
+    http_request_t req = {0};
+    req.method = HTTP_GET;
+    req.path = "/ok";
+    http_response_t res = {0};
+    ASSERT(router_route(router, &req, &res) == 0);
+    ASSERT(res.status == HTTP_OK);
+
+    ASSERT(_metrics_status_count("2xx") == 1);   /* was 0 before the hook existed */
+
+    _test_free_header_list(res.headers);
+    free(res.body);
+
+    /* An unmatched path must count as 4xx — the built-in 404 also runs hooks. */
+    http_request_t req404 = {0};
+    req404.method = HTTP_GET;
+    req404.path = "/does-not-exist";
+    http_response_t res404 = {0};
+    ASSERT(router_route(router, &req404, &res404) == 1);
+
+    ASSERT(_metrics_status_count("4xx") == 1);
+
+    _test_free_header_list(res404.headers);
+    free(res404.body);
+    router_destroy(router);
+    metrics_middleware_destroy();
+    PASS();
+}
+
 void test_middleware_null_user_data(void) {
     TEST("BUG-4: middleware NULL user_data (backward compat)");
 
@@ -5212,6 +5295,7 @@ int main(void) {
     test_metrics_create_destroy();
     test_metrics_register();
     test_metrics_record_status();
+    test_metrics_status_counted_through_router();
     test_metrics_endpoint();
 
     /* Phase 9: Compression tests */

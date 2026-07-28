@@ -5,6 +5,7 @@
 
 #define MAX_ROUTES 256
 #define MAX_MIDDLEWARES 32
+#define MAX_RESPONSE_HOOKS 8
 
 /* Route structure */
 struct route {
@@ -21,10 +22,14 @@ struct router {
     middleware_fn_t middlewares[MAX_MIDDLEWARES];
     void *middleware_data[MAX_MIDDLEWARES];
     size_t middleware_count;
+    response_hook_fn_t response_hooks[MAX_RESPONSE_HOOKS];
+    void *response_hook_data[MAX_RESPONSE_HOOKS];
+    size_t response_hook_count;
 };
 
 /* Internal functions */
 static bool match_route(const char *pattern, const char *path);
+static void run_response_hooks(router_t *router, http_request_t *req, http_response_t *res);
 static void extract_params(http_request_t *req, const char *pattern, const char *path);
 
 /* Create router */
@@ -91,6 +96,38 @@ int router_use_middleware_with_data(router_t *router, middleware_fn_t middleware
 
 /* Route request.
  * Returns: 0 = routed, 1 = no route found (404 already sent), -1 = invalid input */
+int router_add_response_hook(router_t *router, response_hook_fn_t hook,
+                             void *user_data) {
+    if (!router || !hook) {
+        return -1;
+    }
+    if (router->response_hook_count >= MAX_RESPONSE_HOOKS) {
+        return -1;
+    }
+    router->response_hooks[router->response_hook_count] = hook;
+    router->response_hook_data[router->response_hook_count] = user_data;
+    router->response_hook_count++;
+    return 0;
+}
+
+/*
+ * Run the post-response hooks. Called at every router_route() exit that
+ * produced a response, and nowhere else.
+ *
+ * The status guard matters: a middleware may stop the chain without sending
+ * anything, leaving status at its zero-initialised value. Reporting that as a
+ * real status would put garbage in whatever the hook feeds.
+ */
+static void run_response_hooks(router_t *router, http_request_t *req,
+                               http_response_t *res) {
+    if (res->status == 0) {
+        return;
+    }
+    for (size_t i = 0; i < router->response_hook_count; i++) {
+        router->response_hooks[i](req, res, router->response_hook_data[i]);
+    }
+}
+
 int router_route(router_t *router, http_request_t *req, http_response_t *res) {
     if (!router || !req || !res || !req->path) {
         return -1;
@@ -99,11 +136,15 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res) {
     /* Execute middlewares */
     for (size_t i = 0; i < router->middleware_count; i++) {
         if (!router->middlewares[i](req, res, router->middleware_data[i])) {
-            /* Middleware stopped the chain */
+            /* Middleware stopped the chain — it may have sent a response
+             * (a 429 from the rate limiter, a 403 from auth), so the hooks
+             * still need to see the outcome. */
+            run_response_hooks(router, req, res);
             return 0;
         }
         /* If middleware already sent a response, stop */
         if (res->sent) {
+            run_response_hooks(router, req, res);
             return 0;
         }
     }
@@ -122,11 +163,13 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res) {
             if (match_route(route->path, req->path)) {
                 extract_params(req, route->path, req->path);
                 route->handler(req, res);
+                run_response_hooks(router, req, res);
                 return 0;
             }
         } else {
             if (strcmp(route->path, req->path) == 0) {
                 route->handler(req, res);
+                run_response_hooks(router, req, res);
                 return 0;
             }
         }
@@ -134,6 +177,7 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res) {
     
     /* No route found */
     http_response_send_text(res, HTTP_NOT_FOUND, "Not Found");
+    run_response_hooks(router, req, res);
     return 1; /* Distinct from -1 (invalid input) */
 }
 

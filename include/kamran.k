@@ -309,6 +309,34 @@ int router_add_route(router_t *router, http_method_t method, const char *path, r
  */
 int router_use_middleware(router_t *router, middleware_fn_t middleware);
 
+/* Response hook callback - runs AFTER the handler has produced a response.
+ *
+ * Middleware runs *before* the handler, so it cannot observe the status code.
+ * Anything that needs the outcome of a request - status-class metrics, access
+ * logs carrying the status, request timing, tracing spans - needs this hook
+ * instead. The metrics module was shipped without it, which is why its
+ * status-class counters read zero regardless of traffic (issue #136).
+ *
+ * Hooks run in registration order, after the handler or after the built-in 404,
+ * and also when a middleware short-circuits the chain having sent a response.
+ * They do NOT run when router_route() rejects its arguments, because no
+ * response exists to describe.
+ *
+ * A hook must not send a response; the response is already complete.
+ */
+typedef void (*response_hook_fn_t)(http_request_t *req, http_response_t *res,
+                                   void *user_data);
+
+/**
+ * Register a callback to run after each request has been handled.
+ * @param router    Router instance
+ * @param hook      Callback; must not be NULL
+ * @param user_data Passed back to the callback; may be NULL
+ * @return 0 on success, -1 on invalid arguments or when the hook table is full
+ */
+int router_add_response_hook(router_t *router, response_hook_fn_t hook,
+                             void *user_data);
+
 /**
  * Add middleware with per-instance user data to the router.
  * This enables multiple instances of the same middleware type with

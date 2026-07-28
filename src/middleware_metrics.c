@@ -206,6 +206,24 @@ void metrics_handler(http_request_t *req, http_response_t *res) {
  * Registers the metrics endpoint on the router
  * Returns: 0 on success, -1 on failure
  */
+/*
+ * Post-response hook: record the status class once the handler has run.
+ *
+ * This cannot be done from the metrics middleware itself. Middleware runs
+ * BEFORE the handler, so res->status is not yet set — which is why the
+ * status-class counters read zero no matter how much traffic was served
+ * (issue #136). The router's response hook is the first point at which the
+ * outcome of a request is known.
+ */
+static void _metrics_response_hook(http_request_t *req, http_response_t *res,
+                                   void *user_data) {
+    (void)req;
+    (void)user_data;
+    if (res) {
+        metrics_record_status((int)res->status);
+    }
+}
+
 int metrics_register(router_t *router) {
     if (!router) {
         return -1;
@@ -213,6 +231,13 @@ int metrics_register(router_t *router) {
     
     /* Register GET /metrics route */
     if (router_add_route(router, HTTP_GET, "/metrics", metrics_handler) != 0) {
+        return -1;
+    }
+
+    /* Record status classes automatically. Without this the counters only move
+     * if the application calls metrics_record_status() by hand after every
+     * response, which nothing documented and no example did. */
+    if (router_add_response_hook(router, _metrics_response_hook, NULL) != 0) {
         return -1;
     }
     

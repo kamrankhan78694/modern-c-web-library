@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`router_add_response_hook()` — a post-handler phase for the router.**
+  Middleware runs *before* the handler, so nothing in the request pipeline could
+  observe the status code. Anything needing the outcome of a request — status
+  metrics, access logs carrying the status, timing, tracing — had nowhere to
+  live. Hooks run after the handler, after the built-in 404, and when a
+  middleware short-circuits having sent a response; they do not run when
+  `router_route()` rejects its arguments, because no response exists to describe.
+- **`examples/demo_app` + `tools/dev-server.sh` + `.claude/launch.json`** — a
+  minimal dev server whose page drives its own API from the browser, so opening
+  it exercises HTML out, JSON out and JSON in against the real request path.
+  Two library bugs surfaced within minutes of running it; see below.
+
+### Fixed
+
 - **`tools/check-consistency.sh`, run in CI as the `consistency` job.** Three
   times in one release cycle a fix corrected the instance a reviewer named and
   left the same claim wrong elsewhere — and twice the defect was introduced *by
@@ -40,6 +54,19 @@ A maintenance release. No library API change — the fixes are in CI, the test
 suite and the examples. Notably, this is the first release in which the Valgrind
 leak gate actually gates.
 ### Added
+
+- **`/metrics` status-class counters were always zero (#136).** `2xx`/`3xx`/
+  `4xx`/`5xx` reported 0 no matter how much traffic was served, because
+  `metrics_record_status()` — public, and unit-tested in isolation — was never
+  called by anything in the library. The metrics middleware could not call it:
+  middleware runs before the handler and never sees the status. `metrics_register()`
+  now installs a response hook, so the counters work with no application changes.
+
+  The existing unit test called `metrics_record_status()` directly and passed
+  throughout, which is exactly how this shipped: a unit that works, a wiring that
+  does not, and no test spanning the gap. The new integration test drives a real
+  route through `router_route()` and asserts the counter moved — verified to
+  fail when the hook registration is removed.
 
 - **The benchmarking suite now produces numbers.** `src/benchmark.c` has shipped
   since v0.9.0 with nothing calling it — no example, no test, no CI job — so the
