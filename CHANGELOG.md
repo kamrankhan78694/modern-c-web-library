@@ -20,9 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minimal dev server whose page drives its own API from the browser, so opening
   it exercises HTML out, JSON out and JSON in against the real request path.
   Two library bugs surfaced within minutes of running it; see below.
-
-### Fixed
-
 - **`tools/check-consistency.sh`, run in CI as the `consistency` job.** Three
   times in one release cycle a fix corrected the instance a reviewer named and
   left the same claim wrong elsewhere — and twice the defect was introduced *by
@@ -48,12 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   testing anything) with the concrete cases, so the lesson reaches the next
   agent rather than living in one session's memory.
 
-## [2.0.1] - 2026-07-28
-
-A maintenance release. No library API change — the fixes are in CI, the test
-suite and the examples. Notably, this is the first release in which the Valgrind
-leak gate actually gates.
-### Added
+### Fixed
 
 - **`/metrics` status-class counters were always zero (#136).** `2xx`/`3xx`/
   `4xx`/`5xx` reported 0 no matter how much traffic was served, because
@@ -67,6 +59,14 @@ leak gate actually gates.
   does not, and no test spanning the gap. The new integration test drives a real
   route through `router_route()` and asserts the counter moved — verified to
   fail when the hook registration is removed.
+
+## [2.0.1] - 2026-07-28
+
+A maintenance release. No library API change — the fixes are in CI, the test
+suite and the examples. Notably, this is the first release in which the Valgrind
+leak gate actually gates.
+
+### Added
 
 - **The benchmarking suite now produces numbers.** `src/benchmark.c` has shipped
   since v0.9.0 with nothing calling it — no example, no test, no CI job — so the
