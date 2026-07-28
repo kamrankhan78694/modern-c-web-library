@@ -1284,6 +1284,89 @@ void test_stress_async_idle_reaper(void) {
     PASS();
 }
 
+/*
+ * Regression: HEAD must not put a body on the wire in ASYNC mode.
+ *
+ * The HEAD-as-GET fallback (RFC 9110 §9.3.2) was implemented only in the
+ * threaded send_response(). The async writer has its own send loop, so HEAD
+ * kept emitting Content-Length bytes after the headers. That is worse than a
+ * cosmetic break: before the fallback existed HEAD simply 404'd, so the bug
+ * arrived WITH the fix. On a keep-alive connection the client reads those bytes
+ * as the beginning of the next response — a response-queue desync, which is the
+ * request-smuggling family. This test asserts both halves: no body, and two
+ * cleanly framed responses when HEAD and GET are pipelined on one connection.
+ */
+void test_stress_async_head_has_no_body(void) {
+    TEST("async HEAD sends headers only (no body, no keep-alive desync)");
+
+    http_server_t *server = http_server_create();
+    ASSERT(server != NULL);
+    router_t *router = router_create();
+    ASSERT(router != NULL);
+    router_add_route(router, HTTP_GET, "/test", dummy_handler);
+    http_server_set_router(server, router);
+    ASSERT(http_server_set_async(server, true) == 0);
+
+    uint16_t port = 19016;
+    _async_srv_arg_t arg = { server, port };
+    pthread_t th;
+    ASSERT(pthread_create(&th, NULL, _async_server_run, &arg) == 0);
+    usleep(400000);
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT(sock >= 0);
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    ASSERT(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+
+    /* Pipeline HEAD then GET: the GET both proves the connection survived and
+     * catches a desync, because a leaked HEAD body would shift the second
+     * response's framing. */
+    const char *reqs =
+        "HEAD /test HTTP/1.1\r\nHost: x\r\n\r\n"
+        "GET /test HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+    ASSERT(send(sock, reqs, strlen(reqs), 0) == (ssize_t)strlen(reqs));
+
+    struct timeval tv = { 4, 0 };
+    ASSERT(setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0);
+
+    char buf[4096];
+    size_t total = 0;
+    ssize_t n;
+    while (total < sizeof(buf) - 1 &&
+           (n = recv(sock, buf + total, sizeof(buf) - 1 - total, 0)) > 0) {
+        total += (size_t)n;
+    }
+    buf[total] = '\0';
+    close(sock);
+
+    /* Exactly two responses, and the HEAD one must be header-only. */
+    int status_lines = 0;
+    for (const char *p = buf; (p = strstr(p, "HTTP/1.1 200")) != NULL; p++) {
+        status_lines++;
+    }
+    ASSERT(status_lines == 2);
+
+    /* The HEAD response ends at the first header terminator; the next byte must
+     * begin the second response, not dummy_handler's "OK" body. */
+    const char *first_end = strstr(buf, "\r\n\r\n");
+    ASSERT(first_end != NULL);
+    ASSERT(strncmp(first_end + 4, "HTTP/1.1 200", 12) == 0);
+
+    /* Content-Length is still reported: HEAD describes the resource GET would
+     * return, it does not claim the body is empty. */
+    ASSERT(strstr(buf, "Content-Length: 2") != NULL);
+
+    http_server_stop(server);
+    pthread_join(th, NULL);
+    router_destroy(router);
+    http_server_destroy(server);
+    PASS();
+}
+
 /* Regression (adversarial review of #2): after stop, reap_all_async_connections
  * + the server-socket handler removal must leave the (server-owned) event loop
  * clean, so the server can be listened on again. Without that cleanup the reused
@@ -1849,6 +1932,7 @@ int main(void) {
         test_stress_host_header_enforcement();
         test_stress_path_normalization();
         test_stress_async_idle_reaper();
+        test_stress_async_head_has_no_body();
         test_stress_async_server_restart();
     }
 

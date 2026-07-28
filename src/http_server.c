@@ -271,6 +271,13 @@ typedef struct async_connection {
     size_t header_len;
     size_t header_sent;
     size_t body_sent;
+    /* RFC 9110 §9.3.2: a HEAD response carries the headers GET would send,
+     * including Content-Length, but no body. The threaded path suppresses the
+     * body inside send_response(); the async writer has its own send loop and
+     * needs its own flag. Without it a HEAD response puts Content-Length bytes
+     * on the wire after the headers, and on a keep-alive connection the client
+     * reads them as the start of the next response — a response-queue desync. */
+    bool suppress_body;
     bool parser_initialized;
     bool response_ready;
     bool keep_alive;
@@ -3169,6 +3176,10 @@ static bool async_on_parser_result(async_connection_t *conn, int fd, parser_resu
     conn->header_len = 0;
     conn->header_sent = 0;
     conn->body_sent = 0;
+    /* Decided here, per request, rather than read off conn->request at write
+     * time: the write handler can run after a keep-alive reset has moved the
+     * parser on, and a stale method there would suppress the wrong response. */
+    conn->suppress_body = (conn->request && conn->request->method == HTTP_HEAD);
 
     if (serialize_response(conn->response, keep_alive, &conn->header_buf, &conn->header_len) < 0) {
         event_loop_remove_fd(server->event_loop, fd);
@@ -3293,12 +3304,17 @@ static void async_write_handler(int fd, int events, void *user_data) {
             conn->header_sent += (size_t)sent;
         }
 
-        while (conn->body_sent < conn->response->body_length) {
-            if (!conn->response->body || conn->response->body_length == 0) {
-                conn->body_sent = conn->response->body_length;
+        /* Recomputed each iteration, not hoisted out of the for(;;): the loop
+         * continues on to the next pipelined response, which may have a
+         * different method and length. */
+        const size_t body_target = conn->suppress_body ? 0 : conn->response->body_length;
+
+        while (conn->body_sent < body_target) {
+            if (!conn->response->body || body_target == 0) {
+                conn->body_sent = body_target;
                 break;
             }
-            size_t remaining = conn->response->body_length - conn->body_sent;
+            size_t remaining = body_target - conn->body_sent;
             ssize_t sent = send(fd, conn->response->body + conn->body_sent, remaining, SEND_FLAGS);
             if (sent < 0) {
                 if (errno == EINTR) {
@@ -3323,7 +3339,7 @@ static void async_write_handler(int fd, int events, void *user_data) {
             }
         }
 
-        if (conn->header_sent < conn->header_len || conn->body_sent < conn->response->body_length) {
+        if (conn->header_sent < conn->header_len || conn->body_sent < body_target) {
             return;
         }
 
