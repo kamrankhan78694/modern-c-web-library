@@ -110,6 +110,18 @@ is "greet 65 chars (boundary, rejected)" "$(code "$B/api/greet/$(printf 'a%.0s' 
 is "echo with no body        -> 400"     "$(code -X POST "$B/api/echo")" "400"
 is "echo with malformed JSON -> 400"     "$(code -X POST -d 'not-json' "$B/api/echo")" "400"
 is "unknown path             -> 404"     "$(code "$B/no-such-route")" "404"
+# RFC 9110 §9.3.2: HEAD behaves as GET without a body. Was 404 before the router
+# learned to fall back to the GET route.
+is "HEAD /                  -> 200"     "$(curl -s -m5 -I -o /dev/null -w '%{http_code}' "$B/")" "200"
+is "HEAD / sends no body"                "$(curl -s -m5 -I "$B/" | awk 'f{c+=length($0)} /^\r?$/{f=1} END{print c+0}')" "0"
+is "HEAD / keeps Content-Length"         "$(curl -s -m5 -I "$B/" | grep -ci '^content-length:' | tr -d ' ')" "1"
+is "HEAD /nope stays        -> 404"     "$(curl -s -m5 -I -o /dev/null -w '%{http_code}' "$B/nope")" "404"
+# Path params are percent-decoded before the handler sees them.
+is "path param percent-decoded" \
+   "$(curl -s -m5 "$B/api/greet/hello%20world")" '{"name":"hello world","greeting":"hello"}'
+# An encoded NUL would truncate the C string after validation ran on the full
+# length, so it is refused rather than decoded.
+is "encoded NUL refused    -> 400"      "$(code "$B/api/greet/a%00b")" "400"
 echo
 
 echo "[3] adversarial input"
@@ -207,13 +219,10 @@ echo
 # on every run so they cannot be quietly forgotten. Turn each into a real `is`
 # check in the block above as its fix lands, and delete it from here.
 # ---------------------------------------------------------------------------
-echo "[known defects — reported, not failing]"
-# The /healthz uptime defect can only be observed on a server whose FIRST
-# /healthz probe happens well after boot — the main server above was probed in
-# section [1], so by now both clocks read nearly the same and a naive comparison
-# would wrongly report the bug as fixed. Use a throwaway server: let it run,
-# then probe /healthz for the very first time and compare against /api/info,
-# which measures true uptime.
+# The /healthz uptime defect needed a throwaway server to observe: probing the
+# main server early masks it. Now that health_check_register() stamps the start
+# time at wiring time, the same probe asserts the fix instead of reporting it.
+echo "[6] /healthz reports real uptime, not time-since-first-probe"
 HZPORT=$((PORT + 500))
 "$BIN" "$HZPORT" >"$TMP/hz.log" 2>&1 &
 HZ_PID=$!
@@ -226,21 +235,13 @@ sleep 3                                   # accrue real uptime, /healthz untouch
 hz="$(curl -s -m5 "http://127.0.0.1:$HZPORT/healthz" | sed -n 's/.*"uptime_seconds":\([0-9][0-9]*\).*/\1/p')"
 inf="$(curl -s -m5 "http://127.0.0.1:$HZPORT/api/info" | sed -n 's/.*"uptime_seconds":\([0-9][0-9]*\).*/\1/p')"
 kill "$HZ_PID" 2>/dev/null; wait "$HZ_PID" 2>/dev/null
-if [ -n "$hz" ] && [ -n "$inf" ] && [ "$inf" -ge $(( hz + 2 )) ] 2>/dev/null; then
-    echo "  KNOWN  /healthz uptime=${hz}s vs real ${inf}s — counts from first probe (pthread_once)"
-elif [ -n "$hz" ] && [ -n "$inf" ]; then
-    echo "  note   /healthz uptime=${hz}s matches real ${inf}s — FIXED, promote to an assertion"
+if [ -z "$hz" ] || [ -z "$inf" ]; then
+    bad "could not read uptime from the throwaway server"
+elif [ "$hz" -ge $(( inf - 1 )) ] 2>/dev/null; then
+    ok "/healthz uptime=${hz}s tracks real uptime=${inf}s"
 else
-    echo "  ????   could not read uptime from the throwaway server"
+    bad "/healthz uptime=${hz}s but real uptime=${inf}s — counting from first probe again"
 fi
-dec="$(curl -s -m5 "$B/api/greet/hello%20world")"
-case "$dec" in
-    *'hello%20world'*) echo "  KNOWN  path params are not percent-decoded" ;;
-    *'hello world'*)   echo "  note   path params now decoded — promote this to an assertion" ;;
-esac
-hd="$(curl -s -m5 -I -o /dev/null -w '%{http_code}' "$B/")"
-[ "$hd" = "200" ] && echo "  note   HEAD / now 200 — promote this to an assertion" \
-                  || echo "  KNOWN  HEAD / -> $hd; RFC 9110 requires it to behave as GET"
 echo
 
 echo "=== $((checks - fails))/$checks checks passed ==="

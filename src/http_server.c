@@ -280,7 +280,8 @@ static void *accept_connections(void *arg);
 static void *handle_connection(void *arg);
 static void handle_websocket_connection(int client_fd, http_request_t *req);
 static bool response_forces_close(http_response_t *res);
-static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive);
+static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive,
+                          bool suppress_body);
 static void send_error_response(int client_fd, void *tls, http_status_t status, const char *message);
 static int send_all(int fd, void *tls, const char *buf, size_t len);
 
@@ -1024,7 +1025,8 @@ static void *handle_connection(void *arg) {
             }
 #endif
             /* Send the upgrade response */
-            send_response(client_fd, CONN_TLS(conn), conn->response, false);
+            send_response(client_fd, CONN_TLS(conn), conn->response, false,
+                          conn->request && conn->request->method == HTTP_HEAD);
 
             /* Enter WebSocket mode - this function won't return until WS closes */
             handle_websocket_connection(client_fd, conn->request);
@@ -1035,7 +1037,8 @@ static void *handle_connection(void *arg) {
         }
 
         keep_alive = conn->parser.keep_alive && !response_forces_close(conn->response);
-        send_response(client_fd, CONN_TLS(conn), conn->response, keep_alive);
+        send_response(client_fd, CONN_TLS(conn), conn->response, keep_alive,
+                      conn->request && conn->request->method == HTTP_HEAD);
 
         if (!keep_alive) {
             connection_open = false;
@@ -1469,7 +1472,13 @@ static bool response_forces_close(http_response_t *res) {
     return false;
 }
 
-static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive) {
+/*
+ * suppress_body: true for a HEAD request. RFC 9110 §9.3.2 — the response must
+ * carry the same headers GET would, including Content-Length, but no body. The
+ * handler already produced the body; we simply do not put it on the wire.
+ */
+static void send_response(int client_fd, void *tls, http_response_t *res, bool keep_alive,
+                          bool suppress_body) {
     if (!res || res->sent) {
         return;
     }
@@ -1481,7 +1490,7 @@ static void send_response(int client_fd, void *tls, http_response_t *res, bool k
     }
 
     if (send_all(client_fd, tls, header_buf, header_len) == 0) {
-        if (res->body && res->body_length > 0) {
+        if (!suppress_body && res->body && res->body_length > 0) {
             send_all(client_fd, tls, res->body, res->body_length);
         }
     }
@@ -1497,7 +1506,7 @@ static void send_error_response(int client_fd, void *tls, http_status_t status, 
     }
     const char *body = message ? message : "";
     http_response_send_text(res, status, body);
-    send_response(client_fd, tls, res, false);
+    send_response(client_fd, tls, res, false, false);
     http_response_destroy(res);
 }
 

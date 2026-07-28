@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <stdbool.h>
 
 #define MAX_ROUTES 256
 #define MAX_MIDDLEWARES 32
@@ -30,6 +32,45 @@ struct router {
 /* Internal functions */
 static bool match_route(const char *pattern, const char *path);
 static void run_response_hooks(router_t *router, http_request_t *req, http_response_t *res);
+/*
+ * Percent-decode a path segment in place.
+ *
+ * Path parameters used to be handed to handlers raw, so /api/greet/hello%20world
+ * yielded "hello%20world". Every handler had to decode by hand, and most would
+ * not — which is also a validation hazard, since length and charset checks then
+ * run against the encoded form.
+ *
+ * Decoding happens AFTER route matching, on the extracted value only. Matching
+ * still runs on the raw path, so this cannot re-open path traversal: a %2F in a
+ * segment never becomes a separator the router acted on.
+ *
+ * Output is never longer than input, so in-place is safe. A malformed escape
+ * ("%zz", a truncated "%4") is left verbatim rather than guessed at. "+" is left
+ * alone: it means space in a query string, not in a path (RFC 3986).
+ *
+ * An encoded NUL (%00) is REFUSED — decoding it would truncate the C string and
+ * silently shorten a value that validation had already accepted at full length.
+ * Returns false in that case and the caller stores nothing.
+ */
+static bool percent_decode_inplace(char *s) {
+    char *out = s;
+    for (const char *in = s; *in; ) {
+        if (in[0] == '%' && isxdigit((unsigned char)in[1]) && isxdigit((unsigned char)in[2])) {
+            char hex[3] = { in[1], in[2], '\0' };
+            long v = strtol(hex, NULL, 16);
+            if (v == 0) {
+                return false;                  /* embedded NUL — refuse */
+            }
+            *out++ = (char)v;
+            in += 3;
+        } else {
+            *out++ = *in++;
+        }
+    }
+    *out = '\0';
+    return true;
+}
+
 static void extract_params(http_request_t *req, const char *pattern, const char *path);
 
 /* Create router */
@@ -149,12 +190,23 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res) {
         }
     }
     
-    /* Find matching route */
+    /*
+     * Find matching route.
+     *
+     * RFC 9110 §9.3.2: HEAD is identical to GET except that the server must not
+     * send a body. A HEAD request therefore matches a GET route when no explicit
+     * HEAD route exists — previously HEAD / returned 404 on a path where GET /
+     * returned 200. The handler runs normally and produces a body; the server
+     * drops it at send time while keeping Content-Length, so the response
+     * describes the resource exactly as GET would.
+     */
+    http_method_t match_method = req->method;
+    for (int pass = 0; pass < 2; pass++) {
     for (size_t i = 0; i < router->route_count; i++) {
         route_t *route = &router->routes[i];
         
         /* Check method */
-        if (route->method != req->method) {
+        if (route->method != match_method) {
             continue;
         }
         
@@ -172,6 +224,13 @@ int router_route(router_t *router, http_request_t *req, http_response_t *res) {
                 run_response_hooks(router, req, res);
                 return 0;
             }
+        }
+    }
+        /* Nothing matched as HEAD — retry the search as GET, once. */
+        if (pass == 0 && req->method == HTTP_HEAD) {
+            match_method = HTTP_GET;
+        } else {
+            break;
         }
     }
     
@@ -265,8 +324,11 @@ static void extract_params(http_request_t *req, const char *pattern, const char 
     while (p_tok && s_tok) {
         if (p_tok[0] == ':' && p_tok[1] != '\0') {
             const char *key = p_tok + 1;
-            /* Store raw segment value (no decoding here) */
-            http_request_set_param(req, key, s_tok);
+            /* Decode the segment before handing it to the handler. s_tok points
+             * into path_copy, which we own, so decoding in place is safe. */
+            if (percent_decode_inplace(s_tok)) {
+                http_request_set_param(req, key, s_tok);
+            }
         }
         p_tok = strtok_r(NULL, "/", &pattern_save);
         s_tok = strtok_r(NULL, "/", &path_save);

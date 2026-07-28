@@ -69,6 +69,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`/healthz` reported time since the first probe, not uptime.** Its start
+  time was initialised by `pthread_once` on the first handler call, so a server
+  up for an hour but never probed answered `0`, then counted from that probe.
+  For an endpoint whose stated purpose is load-balancer and Kubernetes probes
+  this is worse than an obvious break: once probes arrive on a schedule the
+  number grows plausibly, so nothing looks wrong. `health_check_register()` now
+  stamps the start time at wiring time; the `pthread_once` stays as a fallback
+  so calling the handler directly still yields a sane value.
+- **Path parameters are now percent-decoded.** `/api/greet/hello%20world` gave
+  handlers `hello%20world`. Every handler had to decode by hand, and length and
+  charset validation ran against the encoded form. Decoding happens *after*
+  route matching, on the extracted value only, so a `%2F` can never become a
+  separator the router already acted on. Malformed escapes are left verbatim
+  rather than guessed at, `+` stays literal (it means space in a query string,
+  not a path), and an encoded NUL is **refused** rather than decoded — it would
+  truncate the C string after validation had accepted the full length.
+- **`HEAD` now behaves as `GET` without a body** (RFC 9110 §9.3.2). `HEAD /`
+  returned 404 on a path where `GET /` returned 200. The router falls back to
+  the GET route when no explicit HEAD route exists, and the send path drops the
+  body while keeping `Content-Length`, so the response describes the resource
+  exactly as GET would.
 - **`/metrics` status-class counters were always zero (#136).** `2xx`/`3xx`/
   `4xx`/`5xx` reported 0 no matter how much traffic was served, because
   `metrics_record_status()` — public, and unit-tested in isolation — was never
