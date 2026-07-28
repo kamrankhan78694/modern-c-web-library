@@ -39,7 +39,9 @@ if(NOT EMSCRIPTEN)
 
     # Experimental TLS scaffold smoke test -- only when TLS is enabled. Verifies the
     # option -> -DWEBLIB_TLS -> compiled native source -> linkable symbol wiring.
-    if(WEBLIB_ENABLE_TLS)
+    find_program(BASH_EXECUTABLE bash)
+
+if(WEBLIB_ENABLE_TLS)
         add_executable(test_tls test_tls.c)
         target_include_directories(test_tls PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/tls)
         target_compile_definitions(test_tls PRIVATE WEBLIB_TLS)
@@ -107,6 +109,17 @@ if(NOT EMSCRIPTEN)
                      COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/interop_openssl.sh $<TARGET_FILE:tls_server>)
         endif()
     endif()
+endif()
+
+# End-to-end stress against a real running server (starts examples/demo_app and
+# talks HTTP to it). This is the only suite that exercises the ASSEMBLED system;
+# every other one tests units in-process, which is how three wiring defects
+# shipped. Registered only when demo_app is built and a bash exists, so a
+# minimal environment skips rather than hard-failing.
+if(TARGET demo_app AND BASH_EXECUTABLE)
+    add_test(NAME StressDemoApp
+             COMMAND ${BASH_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/stress_demo_app.sh $<TARGET_FILE:demo_app>)
+    set_tests_properties(StressDemoApp PROPERTIES TIMEOUT 180)
 endif()
 
 # WASM capability test (runs on both native and WASM builds)

@@ -85,8 +85,8 @@ Zero compiler warnings under `-Wall -Wextra -pedantic`.
 | Phase 11 | v2.0.0 | ✅ Delivered (narrowed) | TLS crypto primitives with RFC known-answer tests — EXPERIMENTAL · UNAUDITED |
 | Phase 12 | v2.0.0 | ✅ Delivered (narrowed) | TLS 1.3 server handshake + HTTPS integration — EXPERIMENTAL · UNAUDITED |
 
-**Current state** (main, v2.0.0): default build — 6 ctest suites green · 36 source modules · 5 example servers.
-With `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` — 13 ctest suites green · 56 source modules ·
+**Current state** (main, v2.0.1+): default build — 7 ctest suites green · 36 source modules · 7 example servers.
+With `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` — 14 ctest suites green · 56 source modules ·
 6 example servers. Zero compiler warnings under `-Wall -Wextra -pedantic`.
 
 > The `src/tls/` pure-C TLS 1.3 server (5,481 lines) is **EXPERIMENTAL and UNAUDITED** — see
@@ -873,7 +873,7 @@ SEQUENTIAL (W42–W46, Phase 19):
 |-----|--------------|
 | `primary-checks` | GCC build inside the dev Docker image, the full `ctest` run, and a Valgrind memory check |
 | `clang-check` | Clang build and full `ctest` run |
-| `tls-check` | RelWithDebInfo build with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` running all 13 suites, then a separate ASan/UBSan build running the 7 TLS suites |
+| `tls-check` | RelWithDebInfo build with `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` running all 14 suites, then a separate ASan/UBSan build running the 7 TLS suites |
 | `macos-check` | macOS build and test — pull requests only |
 | `docker-image-check` | Builds the production Docker image |
 

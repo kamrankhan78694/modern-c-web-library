@@ -154,7 +154,7 @@ cmake --build build --parallel
 cd build && ctest --output-on-failure
 ```
 
-Add `-DWEBLIB_TLS_TEST_HOOKS=ON` as well to get `TlsHttpTests` — without it that suite is not built at all, and you see 12 suites rather than 13.
+Add `-DWEBLIB_TLS_TEST_HOOKS=ON` as well to get `TlsHttpTests` — without it that suite is not built at all, and you see 13 suites rather than 14.
 
 To reproduce the CI sanitizer leg, use a **second** build directory (the sanitizer flags must not leak into your normal build) and repeat both TLS options there:
 

@@ -16,6 +16,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   live. Hooks run after the handler, after the built-in 404, and when a
   middleware short-circuits having sent a response; they do not run when
   `router_route()` rejects its arguments, because no response exists to describe.
+- **`tests/stress_demo_app.sh`, registered as the `StressDemoApp` ctest suite** —
+  the first suite that exercises the *assembled* system. It starts the real
+  server binary and talks HTTP to it over a socket: every endpoint, validation
+  boundaries, adversarial input (CRLF injection, traversal, oversized URL and
+  body, malformed request lines), a concurrency phase asserting **zero lost
+  requests**, and FD/RSS growth checks. It asserts correctness, never
+  throughput — a perf number that fails on a slow runner gets muted, and then
+  protects nothing.
+
+  This exists because a browser session found three defects in ten minutes that
+  166 unit tests, 37 stress tests, Valgrind and ASan had all missed. Every one
+  was a wiring defect: the unit worked, the assembly did not, and nothing
+  spanned the gap. Verified it catches regressions by reintroducing the
+  duplicate-`Content-Type` bug — the suite reports `got '2', expected '1'` and
+  fails.
+
+  Known defects it finds are printed as `KNOWN` lines rather than failing the
+  build, so the suite stays green on bugs already filed while making them
+  impossible to forget. The `/healthz` check spins up a throwaway server to
+  observe the bug deterministically, because probing the main server early would
+  mask it and wrongly report it as fixed.
+
 - **`examples/demo_app` + `tools/dev-server.sh` + `.claude/launch.json`** — a
   minimal dev server whose page drives its own API from the browser, so opening
   it exercises HTML out, JSON out and JSON in against the real request path.

@@ -693,7 +693,7 @@ To also run the end-to-end HTTPS test, add the test-only RNG hook:
 cmake -S . -B build-tls -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON
 cmake --build build-tls --parallel
-cd build-tls && ctest --output-on-failure   # 13 suites, incl. 7 TLS suites
+cd build-tls && ctest --output-on-failure   # 14 suites, incl. 7 TLS suites
 ```
 
 > `WEBLIB_TLS_TEST_HOOKS` exposes a deterministic RNG so handshakes are reproducible in tests.
@@ -1104,8 +1104,9 @@ make test          # or: ctest --output-on-failure
 ./tests/test_weblib
 ```
 
-A default build registers **6 ctest suites**: `WebLibTests`, `KamranHeaderTests`,
-`AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`. Building with
+A default build registers **7 ctest suites**: `WebLibTests`, `KamranHeaderTests`,
+`AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`, `StressDemoApp`
+(end-to-end against a real running server). Building with
 `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON` adds 7 more —
 `TlsTests`, `TlsCryptoTests`, `TlsParseTests`, `TlsTransportTests`, `TlsFuzzTests`,
 `TlsHttpTests`, and `TlsInteropOpenssl` (a real `openssl s_client` handshake, skipped
@@ -1188,7 +1189,7 @@ For a list of planned features and enhancements, check out [TODO.md](TODO.md).
 **Current Status**: v2.0.0 — the HTTP/WebSocket/middleware core is stable and every test suite
 passes; the TLS 1.3 layer added in 2.0.0 is experimental and unaudited.
 
-- **Tests**: 100% pass rate — 6/6 ctest suites in the default build, 13/13 with
+- **Tests**: 100% pass rate — 7/7 ctest suites in the default build, 14/14 with
   `-DWEBLIB_ENABLE_TLS=ON -DWEBLIB_TLS_TEST_HOOKS=ON`. `WebLibTests` alone reports 166 unit tests.
 - **Code Quality**: Zero compiler warnings under `-Wall -Wextra -pedantic`
 - **Security**: All buffer operations bounds-checked, HMAC-SHA256 with constant-time comparison

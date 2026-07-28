@@ -19,7 +19,7 @@ cd modern-c-web-library
 ./docker-run.sh test
 ```
 
-That's it! Docker will handle all dependencies, build the library, and run the default test suite (6 ctest suites). The experimental TLS 1.3 layer is **off** by default and is not built or tested by this command — see [Testing the Experimental TLS Layer](#testing-the-experimental-tls-layer).
+That's it! Docker will handle all dependencies, build the library, and run the default test suite (7 ctest suites). The experimental TLS 1.3 layer is **off** by default and is not built or tested by this command — see [Testing the Experimental TLS Layer](#testing-the-experimental-tls-layer).
 
 ## Docker Images
 
@@ -52,7 +52,7 @@ That's it! Docker will handle all dependencies, build the library, and run the d
 This will:
 1. Build the development Docker image
 2. Compile the library inside the container
-3. Run the default test suite (6 ctest suites)
+3. Run the default test suite (7 ctest suites)
 4. Display test results
 
 > **This is the default build only.** `Dockerfile.dev` configures with a bare `cmake ..`, so `WEBLIB_ENABLE_TLS` stays OFF (its default in `CMakeLists.txt`) and none of `src/tls/` is compiled. The 7 TLS suites are all inside `if(WEBLIB_ENABLE_TLS)` in `tests/CMakeLists.txt`, so a change under `src/tls/` is **not** covered by `./docker-run.sh test`. See [Testing the Experimental TLS Layer](#testing-the-experimental-tls-layer).
@@ -164,7 +164,7 @@ docker run -p 8080:8080 modern-c-weblib:latest
 ./docker-run.sh test
 ```
 
-This runs `ctest` (6 suites: `WebLibTests`, `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`) and then `./tests/test_weblib` directly. The tail of the `test_weblib` output looks like:
+This runs `ctest` (7 suites: `WebLibTests`, `KamranHeaderTests`, `AsyncWebSocketTests`, `StressTests`, `WorkerTests`, `WasmTests`, `StressDemoApp`) and then `./tests/test_weblib` directly. The tail of the `test_weblib` output looks like:
 
 ```
 Testing router_create... PASSED
@@ -184,7 +184,7 @@ Tests failed: 0
 
 The pure-C TLS 1.3 layer is **EXPERIMENTAL and UNAUDITED** — it has had no external cryptographic audit, and it is not for production use. See [`src/tls/README.md`](src/tls/README.md).
 
-It is also off by default, which means `./docker-run.sh test` never compiles or exercises it. To build it and run all 13 suites:
+It is also off by default, which means `./docker-run.sh test` never compiles or exercises it. To build it and run all 14 suites:
 
 ```bash
 docker build -f Dockerfile.dev -t modern-c-weblib:dev .
@@ -249,7 +249,7 @@ make
 make test
 ```
 
-If you changed anything under `src/tls/`, also run the TLS build — see [Testing the Experimental TLS Layer](#testing-the-experimental-tls-layer). `make test` here runs 6 suites; the TLS build runs 13.
+If you changed anything under `src/tls/`, also run the TLS build — see [Testing the Experimental TLS Layer](#testing-the-experimental-tls-layer). `make test` here runs 7 suites; the TLS build runs 14.
 
 ### Step 5: Verify No Warnings
 ```bash
@@ -389,7 +389,7 @@ The `docker-run.sh` script provides convenient shortcuts:
 - `threaded` - Run threaded server
 - `dev` - Start development container with shell
 - `build` - Build Docker images only
-- `test` - Build and run the default test suite (6 ctest suites; TLS off)
+- `test` - Build and run the default test suite (7 ctest suites; TLS off)
 - `help` - Show usage information
 
 **Examples:**
